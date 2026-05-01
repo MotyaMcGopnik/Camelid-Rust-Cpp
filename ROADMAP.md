@@ -10,7 +10,7 @@ Executive summary: Camelid already has one supported release gate. The roadmap e
 
 ## Program objective
 
-Camelid is not pursuing breadth for its own sake. The roadmap widens capability only when the product can widen claims just as responsibly and defend them with row-specific evidence.
+Camelid is not pursuing breadth for its own sake. The roadmap exists to expand capability only when the product can expand claims just as responsibly and defend them with row-specific evidence.
 
 Current program posture:
 
@@ -18,6 +18,7 @@ Current program posture:
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 has narrow parity evidence and remains below supported generation.
 - **Acceptance target:** Llama 3.2 3B Instruct Q8_0 is the exact next WebUI real-chat target. The exact GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, but the guarded first-chat retry still stops before any generated token under host free-page pressure, so the row remains blocked until bounded prompt-token, generation, and memory evidence exist.
 - **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 has tokenizer/config/Q8 groundwork only. It is not a supported generation row until lazy or on-demand Q8 execution exists and bounded parity and memory evidence are captured.
+- **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
 Nothing inherits support from a nearby size, quantization, family, tokenizer lane, API surface, or UI state.
 
@@ -40,9 +41,9 @@ Recent work improved the engineering seam without moving the release ledger. Tha
 
 Near-term objective: preserve the supported TinyLlama lane, finish the lazy-Q8 execution seam for larger LLaMA-family rows, and publish no broader support claim until row-specific evidence is in hand.
 
-## Now / Next / Later
+## Delivery sequence: now, next, later
 
-This section is the highest-level delivery sequence. "Now" protects the current gate and clears the next blocker. "Next" is what Camelid may promote once bounded evidence exists. "Later" stays intentionally downstream of correctness and support-honesty work.
+This is the highest-level execution order. **Now** protects the current gate and clears the next blocker. **Next** is what Camelid may promote once bounded evidence exists. **Later** stays intentionally downstream of correctness and support-discipline work.
 
 ### Now
 

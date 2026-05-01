@@ -14,6 +14,7 @@ Camelid follows the same four-lane release ledger across the README, compatibili
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 remains narrow evidence only.
 - **Acceptance target:** Llama 3.2 3B Instruct Q8_0 remains the exact WebUI target. The exact GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, but the guarded first-chat retry is still blocked before the first generated token under host free-page pressure.
 - **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 remains below supported generation until lazy or on-demand Q8 execution and bounded parity and memory evidence exist.
+- **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
 Two standing rules apply to every row:
 

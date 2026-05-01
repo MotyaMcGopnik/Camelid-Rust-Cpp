@@ -4,22 +4,23 @@
 
 ![Camelid banner](assets/camelid-banner.png)
 
-Camelid is a Rust-native local inference backend for GGUF language models. It is being built for teams that want local-model evaluation with standard engineering discipline: explicit support boundaries, reproducible validation artifacts, and release language that stays inside the evidence.
+Camelid is a Rust-native local inference backend for GGUF language models. It is being built for teams that want a local-model stack with explicit support boundaries, reproducible validation artifacts, and release language that stays inside the evidence.
 
-The project is intentionally conservative about support claims. A row is not "supported" because it parses, tokenizes, loads metadata, or partially runs. Camelid promotes a row only when runtime behavior, API capability reporting, frontend readiness, documentation, and artifact-backed validation all agree for that exact model, tokenizer path, and quantization.
+Most local-inference READMEs optimize for breadth. Camelid optimizes for auditability. A row is not "supported" because it parses metadata, tokenizes a prompt, or partially runs once. Camelid promotes a row only when runtime behavior, API capability reporting, frontend readiness, documentation, and artifact-backed validation all agree for the exact model, tokenizer path, and quantization being claimed.
 
 Camelid is also in a naming transition. **Camelid** is the product name; the repository, crate, binary, some API diagnostics, and several scripts still use `backendinference`. Keep current commands, package identifiers, and tests on those names until a separate rename plan is validated.
 
 Camelid is original Rust code, and it keeps visible credit for the reference tooling behind tokenizer checks, compatibility baselines, and parity evidence. In particular, llama.cpp / ggml remains explicitly acknowledged here and in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) because Camelid still relies on it as a MIT-licensed inspiration, tokenizer reference, compatibility baseline, and parity benchmark.
 
-## Executive support snapshot
+## Front-door release posture
 
-Camelid's current public posture is intentionally narrow, evidence-backed, and easy to audit:
+If you are evaluating Camelid quickly, this is the current public boundary:
 
-- **Supported generation gate:** TinyLlama 1.1B Chat Q8_0.
-- **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0.
-- **Acceptance target:** Llama 3.2 3B Instruct Q8_0. The exact tracked GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, but the guarded first chat still stops before any generated token under host free-page pressure.
-- **Groundwork-only lane:** Llama 3 8B Instruct Q8_0. Tokenizer/config/Q8 groundwork exists, but generation remains unsupported until lazy or on-demand Q8 execution and bounded parity and memory evidence land.
+- **Supported generation today:** TinyLlama 1.1B Chat Q8_0.
+- **Useful evidence, not support:** Llama 3.2 1B Instruct Q8_0 has one compact-header `hello` prompt that matches llama.cpp for five deterministic generated tokens.
+- **Next acceptance target:** Llama 3.2 3B Instruct Q8_0. The exact tracked GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, but the guarded first chat still stops before any generated token under host free-page pressure.
+- **Groundwork only:** Llama 3 8B Instruct Q8_0 has tokenizer/config/Q8 groundwork, but generation remains unsupported until lazy or on-demand Q8 execution and bounded parity and memory evidence land.
+- **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
 Nothing adjacent inherits support. Model family, quantization, tokenizer path, API surface, and frontend state are all row-specific.
 
@@ -27,12 +28,21 @@ Nothing adjacent inherits support. Model family, quantization, tokenizer path, A
 
 This same four-row ledger is reflected in [`COMPATIBILITY.md`](COMPATIBILITY.md), [`STATUS.md`](STATUS.md), `/api/capabilities`, and frontend readiness copy. If another surface sounds broader, treat it as stale and bring it back to this matrix.
 
-| Exact lane | Release posture | Evidence in hand | What Camelid does **not** yet claim |
+| Exact lane | Release posture | Evidence Camelid has today | What Camelid does **not** yet claim |
 | --- | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 | Supported current gate | Five 50-token prompt audits match known-good llama-server prompt token IDs, generated token arrays, and generated text. | No implied support for adjacent TinyLlama quantizations or other model families. |
 | Llama 3.2 1B Instruct Q8_0 | Evidence only | One compact-header `hello` prompt matches llama.cpp for five deterministic generated tokens. | No broader Llama 3 support claim, no longer-prompt claim, and no neighboring 3B or 8B promotion. |
 | Llama 3.2 3B Instruct Q8_0 | Acceptance target / blocked before first token | The exact tracked GGUF is present locally; `/api/models/load` succeeds with low backend RSS after streaming metadata parsing; file-backed lazy-Q8 materially reduced the earlier eager dense-load spike. | No 3B prompt-token, generation, parity, API, or WebUI readiness claim until bounded evidence exists. |
 | Llama 3 8B Instruct Q8_0 | Groundwork only / generation blocked | Metadata, tokenizer/config fixtures, independent tokenizer references, and Q8_0 retained-block loading plus serial row/all-row lazy-execution groundwork exist. | No supported generation, parity, frontend readiness, or portable-packaging claim until lazy or on-demand Q8 execution and bounded memory/parity evidence exist. |
+
+## How to read this repository
+
+For most readers, the fastest path is:
+
+1. [`COMPATIBILITY.md`](COMPATIBILITY.md) — the authoritative support ledger.
+2. [`STATUS.md`](STATUS.md) — the current evidence boundary, blocker state, and artifact references.
+3. [`ROADMAP.md`](ROADMAP.md) — the ordered path to the next support expansion.
+4. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — the reference-tool and MIT-license notices behind Camelid's public evidence trail.
 
 ## Release discipline
 
@@ -45,15 +55,6 @@ Three rules govern implementation work and public communication:
 - **Visible reference credit.** When Camelid cites parity, tokenizer references, or compatibility baselines, llama.cpp / ggml stays visibly credited.
 
 For the governing support ledger, see [`COMPATIBILITY.md`](COMPATIBILITY.md). For the current evidence snapshot and blockers, see [`STATUS.md`](STATUS.md). For milestone sequencing, see [`ROADMAP.md`](ROADMAP.md).
-
-## Recommended reading order
-
-For most readers, the fastest path through the repository is:
-
-1. [`COMPATIBILITY.md`](COMPATIBILITY.md) — the authoritative support ledger.
-2. [`STATUS.md`](STATUS.md) — the current evidence boundary, blocker state, and artifact references.
-3. [`ROADMAP.md`](ROADMAP.md) — the ordered path to the next support expansion.
-4. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — the reference-tool and MIT-license notices behind Camelid's public evidence trail.
 
 ## What Camelid can prove today
 
