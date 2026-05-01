@@ -25,7 +25,7 @@ Current local rows of interest:
 | TinyLlama 1.1B Chat | Q8_0 | Supported gate evidence is green | PASS | PASS | PASS | Matches known-good llama-server on the active TinyLlama gate. |
 | Llama 3.2 1B Instruct | Q8_0 | Narrow evidence row only | PASS for compact-header prompt | PASS | PASS for one 5-token prompt | Useful evidence only; no broader support promotion. |
 | Llama 3.2 3B Instruct | Q8_0 | Acceptance target / first-token evidence only | NOT YET | NOT YET | NOT YET | Exact GGUF load succeeds with low backend RSS, and one healthy Ubuntu backend-only first-token artifact exists, but prompt-token parity, first-token parity, short-generation parity, API, and WebUI evidence are still not green. |
-| Llama 3 8B Instruct | Q8_0 | Groundwork only | Tokenizer/reference evidence only | NOT RUN | NOT RUN | Keep generation blocked until lazy or mmap or on-demand Q8 execution plus bounded evidence exist. |
+| Llama 3 8B Instruct | Q8_0 | Groundwork-only / first-token evidence only | Tokenizer/reference evidence plus one backend-only first-token artifact | NOT RUN | NOT RUN | Keep generation below support until repeat bounded first-token success, short-generation evidence, and API/frontend readiness exist. |
 
 ## Current evidence summary
 

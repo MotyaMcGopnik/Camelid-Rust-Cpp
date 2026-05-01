@@ -10,6 +10,9 @@ boundaries, and reproducible validation over optimistic claims.
 - Keep the support contract honest.
 - Do not broaden support claims without fresh evidence.
 - TinyLlama 1.1B Chat Q8_0 is the only supported end-to-end generation lane today.
+- Llama 3.2 1B Instruct Q8_0 is evidence-only.
+- Llama 3.2 3B Instruct Q8_0 is acceptance target / first-token evidence only.
+- Llama 3 8B Instruct Q8_0 is groundwork-only / first-token evidence only.
 - Llama 3.2 3B / 8B and other model families stay blocked until bounded generation, memory, and
   parity evidence exists.
 - Do not let UI copy, README language, API capability surfaces, or status docs drift out of sync.

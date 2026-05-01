@@ -588,7 +588,7 @@ export default function ModelsView({
               <p className="panel-kicker">Acceptance target</p>
               <h3>Llama 3.2 3B Instruct Q8_0</h3>
             </div>
-            <p className="model-summary">The exact 3B WebUI acceptance target stays visible even before the GGUF is present. This is a path/readiness card, not a support claim: chat remains blocked until Camelid reports loaded_now=true, generation_ready=true, stays inside the CPU materialization budget guard, and /api/capabilities exposes an exact supported 3B Q8_0 compatibility row.</p>
+            <p className="model-summary">This exact 3B row is the current acceptance target. It now has backend-only first-token evidence, but chat must stay blocked until Camelid reports loaded_now=true, generation_ready=true, stays inside the CPU materialization budget guard, and /api/capabilities exposes an exact supported 3B Q8_0 compatibility row.</p>
           </div>
 
           <div className="models-card-grid">
