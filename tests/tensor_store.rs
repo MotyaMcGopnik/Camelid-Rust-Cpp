@@ -75,11 +75,55 @@ fn loads_q8_0_tensor_payload_as_f32() {
     assert_eq!(tensor.data.len(), 32);
     assert_eq!(tensor.data[0], 0.0);
     assert_eq!(tensor.data[31], 31.0);
-    let blocks = tensor.q8_0_blocks.as_ref().unwrap();
-    assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].scale, 1.0);
-    assert_eq!(blocks[0].quants[0], 0);
-    assert_eq!(blocks[0].quants[31], 31);
+    assert!(tensor.q8_0_blocks.is_none());
+}
+
+#[test]
+fn loads_q8_0_file_backed_linear_without_f32_materialization() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tensor.gguf");
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&0x3c00u16.to_le_bytes()); // scale 1.0
+    payload.extend((0..32).map(|v| v as i8 as u8));
+    payload.extend_from_slice(&0x4000u16.to_le_bytes()); // scale 2.0
+    payload.extend((0..32).map(|v| (v as i8 - 16) as u8));
+    write_tensor_gguf_with_dims(&path, 8, &[32, 2], &payload);
+
+    let gguf = read_metadata(&path).unwrap();
+    let store = TensorStore::open(&path, &gguf);
+    let tensor = store.load_q8_0_file_backed_linear("test.weight").unwrap();
+
+    assert_eq!(tensor.name, "test.weight");
+    assert_eq!(tensor.shape.dims, vec![32, 2]);
+    assert_eq!(tensor.source_type, Some(GgufTensorType::Q8_0));
+    assert!(tensor.data.is_empty());
+    assert!(tensor.q8_0_blocks.is_none());
+    let backing = tensor.q8_0_file_backing.unwrap();
+    assert_eq!(backing.path, path);
+    assert_eq!(backing.num_blocks, 2);
+}
+
+#[test]
+fn q8_0_file_backed_embedding_lookup_reads_only_requested_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tensor.gguf");
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&0x3c00u16.to_le_bytes()); // row 0 scale 1.0
+    payload.extend((0..32).map(|v| v as i8 as u8));
+    payload.extend_from_slice(&0x4000u16.to_le_bytes()); // row 1 scale 2.0
+    payload.extend((0..32).map(|v| (v as i8 - 16) as u8));
+    write_tensor_gguf_with_dims(&path, 8, &[32, 2], &payload);
+
+    let gguf = read_metadata(&path).unwrap();
+    let store = TensorStore::open(&path, &gguf);
+    let mut tensor = store.load_q8_0_file_backed_linear("test.weight").unwrap();
+    tensor.shape.dims = vec![2, 32];
+
+    let actual = tensor.embedding_lookup(&[1], "embedding").unwrap();
+
+    assert_eq!(actual.shape.dims, vec![1, 32]);
+    assert_eq!(actual.data[0], -32.0);
+    assert_eq!(actual.data[31], 30.0);
 }
 
 #[test]

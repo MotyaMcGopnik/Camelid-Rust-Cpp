@@ -1,4 +1,13 @@
-use std::{collections::HashMap, env, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io::{Error as IoError, ErrorKind, Result as IoResult},
+    os::unix::fs::FileExt,
+    process::Command,
+    sync::Arc,
+    time::Instant,
+};
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -6,7 +15,10 @@ use serde::Serialize;
 use crate::{
     gguf::GgufTensorType,
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
-    tensor::{should_parallelize_linear_output, CpuTensor, Q8_0Block, TensorStore},
+    tensor::{
+        disable_file_cache_best_effort, should_parallelize_linear_output, CpuTensor, Q8_0Block,
+        Q8_0FileBacking, TensorStore,
+    },
     BackendError, Result,
 };
 
@@ -90,6 +102,80 @@ impl LlamaKvCache {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct InferenceWorkspace {
+    pub scratch_f32: Vec<f32>,
+    pub activation_f32: Vec<f32>,
+}
+
+impl InferenceWorkspace {
+    pub fn new(max_capacity: usize) -> Self {
+        Self {
+            scratch_f32: vec![0.0; max_capacity],
+            activation_f32: vec![0.0; max_capacity],
+        }
+    }
+
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.scratch_f32.fill(0.0);
+        self.activation_f32.fill(0.0);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Q8BlockReader {
+    offset: u64,
+    num_blocks: usize,
+}
+
+impl Q8BlockReader {
+    pub const BLOCK_SIZE_BYTES: usize = 34;
+    pub const WEIGHTS_PER_BLOCK: usize = 32;
+
+    pub fn new(offset: u64, num_blocks: usize) -> Self {
+        Self { offset, num_blocks }
+    }
+
+    pub fn dequantize_block_to_slice(
+        &self,
+        file: &File,
+        block_idx: usize,
+        dest: &mut [f32],
+    ) -> IoResult<()> {
+        if block_idx >= self.num_blocks {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "block index out of bounds",
+            ));
+        }
+
+        let dest_offset = block_idx
+            .checked_mul(Self::WEIGHTS_PER_BLOCK)
+            .ok_or_else(|| IoError::new(ErrorKind::InvalidInput, "destination offset overflow"))?;
+        if dest_offset + Self::WEIGHTS_PER_BLOCK > dest.len() {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "destination buffer too small",
+            ));
+        }
+
+        let block_offset = self
+            .offset
+            .checked_add((block_idx * Self::BLOCK_SIZE_BYTES) as u64)
+            .ok_or_else(|| IoError::new(ErrorKind::InvalidInput, "block offset overflow"))?;
+        let mut block_data = [0u8; Self::BLOCK_SIZE_BYTES];
+        file.read_exact_at(&mut block_data, block_offset)?;
+
+        let scale_bits = u16::from_le_bytes(block_data[0..2].try_into().expect("2-byte scale"));
+        let scale = f16_bits_to_f32(scale_bits);
+        for i in 0..Self::WEIGHTS_PER_BLOCK {
+            dest[dest_offset + i] = f32::from(block_data[2 + i] as i8) * scale;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LlamaLayerWeights {
     pub attention_norm: CpuTensor,
     pub attention_q: CpuTensor,
@@ -106,7 +192,7 @@ pub struct LlamaLayerWeights {
 pub struct LlamaLoadedWeights {
     pub token_embedding: CpuTensor,
     pub output_norm: CpuTensor,
-    pub output: CpuTensor,
+    pub output: Option<CpuTensor>,
     pub layers: Vec<LlamaLayerWeights>,
 }
 
@@ -551,29 +637,40 @@ pub fn diagnostic_rms_norm_epsilon(config_epsilon: f32) -> Result<f32> {
 }
 
 impl LlamaLoadedWeights {
+    pub fn output_projection(&self) -> &CpuTensor {
+        self.output.as_ref().unwrap_or(&self.token_embedding)
+    }
+
     pub fn load(store: &TensorStore, binding: &LlamaTensorBinding) -> Result<Self> {
+        let load_linear = |name: &str| {
+            if lazy_q8_0_linear_enabled() {
+                store.load_q8_0_file_backed_linear(name)
+            } else {
+                store.load_cpu_f32(name)
+            }
+        };
         let token_embedding = normalize_token_embedding_shape(
-            store.load_cpu_f32(&binding.token_embedding.name)?,
+            load_linear(&binding.token_embedding.name)?,
             &binding.token_embedding.name,
         )?;
         let output_norm = store.load_cpu_f32(&binding.output_norm.name)?;
         let output = if binding.output_is_tied_embedding {
-            token_embedding.clone()
+            None
         } else {
-            store.load_cpu_f32(&binding.output.name)?
+            Some(load_linear(&binding.output.name)?)
         };
         let mut layers = Vec::with_capacity(binding.layers.len());
         for layer in &binding.layers {
             layers.push(LlamaLayerWeights {
                 attention_norm: store.load_cpu_f32(&layer.attention_norm.name)?,
-                attention_q: store.load_cpu_f32(&layer.attention_q.name)?,
-                attention_k: store.load_cpu_f32(&layer.attention_k.name)?,
-                attention_v: store.load_cpu_f32(&layer.attention_v.name)?,
-                attention_output: store.load_cpu_f32(&layer.attention_output.name)?,
+                attention_q: load_linear(&layer.attention_q.name)?,
+                attention_k: load_linear(&layer.attention_k.name)?,
+                attention_v: load_linear(&layer.attention_v.name)?,
+                attention_output: load_linear(&layer.attention_output.name)?,
                 ffn_norm: store.load_cpu_f32(&layer.ffn_norm.name)?,
-                ffn_gate: store.load_cpu_f32(&layer.ffn_gate.name)?,
-                ffn_up: store.load_cpu_f32(&layer.ffn_up.name)?,
-                ffn_down: store.load_cpu_f32(&layer.ffn_down.name)?,
+                ffn_gate: load_linear(&layer.ffn_gate.name)?,
+                ffn_up: load_linear(&layer.ffn_up.name)?,
+                ffn_down: load_linear(&layer.ffn_down.name)?,
             });
         }
         Ok(Self {
@@ -593,7 +690,7 @@ impl LlamaLoadedWeights {
         )?;
         require_tensor_shape(&self.output_norm, &[dims.embedding_length], "output norm")?;
         require_matrix_shape(
-            &self.output,
+            self.output_projection(),
             dims.embedding_length,
             dims.vocab_size,
             "output projection",
@@ -1078,7 +1175,7 @@ impl LlamaInferenceSession {
     }
 
     pub fn forward_single_token_timed(&mut self, token_id: u32) -> Result<LlamaTimedForwardOutput> {
-        let timed = self.forward_single_token_timed_internal(token_id, true)?;
+        let timed = self.forward_single_token_timed_internal(token_id, true, true)?;
         Ok(LlamaTimedForwardOutput {
             output: timed.output,
             timings: timed.timings,
@@ -1089,13 +1186,14 @@ impl LlamaInferenceSession {
     }
 
     fn forward_single_token_timed_fast(&mut self, token_id: u32) -> Result<LlamaFastForwardOutput> {
-        self.forward_single_token_timed_internal(token_id, false)
+        self.forward_single_token_timed_internal(token_id, false, true)
     }
 
     fn forward_single_token_timed_internal(
         &mut self,
         token_id: u32,
         collect_diagnostics: bool,
+        compute_logits: bool,
     ) -> Result<LlamaFastForwardOutput> {
         if !self.kv_cache.can_append() {
             return Err(BackendError::RuntimeShapeMismatch(format!(
@@ -1105,11 +1203,13 @@ impl LlamaInferenceSession {
         }
 
         let total_started = Instant::now();
+        trace_forward_memory("forward_start");
         let embedding_started = Instant::now();
         let mut hidden = self
             .weights
             .token_embedding
             .embedding_lookup(&[token_id], "token_embedding")?;
+        trace_forward_memory("embedding_done");
         let embedding_stats = collect_diagnostics
             .then(|| LlamaTensorStats::from_tensor(&hidden))
             .transpose()?;
@@ -1122,6 +1222,7 @@ impl LlamaInferenceSession {
         let layers_started = Instant::now();
         let rms_norm_epsilon = diagnostic_rms_norm_epsilon(self.config.rms_norm_epsilon)?;
         for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
+            trace_forward_memory(&format!("layer_{layer_idx}_start"));
             let timed = forward_layer_timed(
                 &hidden,
                 layer,
@@ -1132,6 +1233,7 @@ impl LlamaInferenceSession {
                 collect_diagnostics,
             )?;
             hidden = timed.output;
+            trace_forward_memory(&format!("layer_{layer_idx}_done"));
             timings.layers.push(timed.timings);
             if let (Some(layer_diagnostics), Some(diagnostics)) =
                 (&mut layer_diagnostics, timed.diagnostics)
@@ -1143,24 +1245,55 @@ impl LlamaInferenceSession {
         let final_hidden_stats = collect_diagnostics
             .then(|| LlamaTensorStats::from_tensor(&hidden))
             .transpose()?;
-        let final_norm_started = Instant::now();
-        let norm = hidden.rms_norm(&self.weights.output_norm, rms_norm_epsilon, "output_norm")?;
-        let final_norm_diagnostic = collect_diagnostics
-            .then(|| {
-                final_norm_diagnostics(&hidden, &self.weights.output_norm, &norm, rms_norm_epsilon)
-            })
-            .transpose()?;
-        let output_norm_stats = collect_diagnostics
-            .then(|| LlamaTensorStats::from_tensor(&norm))
-            .transpose()?;
-        timings.final_norm = final_norm_started.elapsed().as_micros();
-        let logits_started = Instant::now();
-        let logits =
-            output_projection_runtime(&norm, &self.weights.output, "logits", collect_diagnostics)?;
-        let logits_stats = collect_diagnostics
-            .then(|| LlamaTensorStats::from_tensor(&logits))
-            .transpose()?;
-        timings.logits = logits_started.elapsed().as_micros();
+        let (norm, logits, final_norm_diagnostic, output_norm_stats, logits_stats) =
+            if compute_logits {
+                let final_norm_started = Instant::now();
+                let norm =
+                    hidden.rms_norm(&self.weights.output_norm, rms_norm_epsilon, "output_norm")?;
+                trace_forward_memory("output_norm_done");
+                let final_norm_diagnostic = collect_diagnostics
+                    .then(|| {
+                        final_norm_diagnostics(
+                            &hidden,
+                            &self.weights.output_norm,
+                            &norm,
+                            rms_norm_epsilon,
+                        )
+                    })
+                    .transpose()?;
+                let output_norm_stats = collect_diagnostics
+                    .then(|| LlamaTensorStats::from_tensor(&norm))
+                    .transpose()?;
+                timings.final_norm = final_norm_started.elapsed().as_micros();
+                let logits_started = Instant::now();
+                let logits = output_projection_runtime(
+                    &norm,
+                    self.weights.output_projection(),
+                    "logits",
+                    collect_diagnostics,
+                )?;
+                trace_forward_memory("logits_done");
+                let logits_stats = collect_diagnostics
+                    .then(|| LlamaTensorStats::from_tensor(&logits))
+                    .transpose()?;
+                timings.logits = logits_started.elapsed().as_micros();
+                (
+                    norm,
+                    logits,
+                    final_norm_diagnostic,
+                    output_norm_stats,
+                    logits_stats,
+                )
+            } else {
+                trace_forward_memory("logits_skipped");
+                (
+                    CpuTensor::from_f32("output_norm_skipped", vec![1, 0], Vec::new())?,
+                    CpuTensor::from_f32("logits_skipped", vec![1, 0], Vec::new())?,
+                    None,
+                    None,
+                    None,
+                )
+            };
         self.kv_cache.position += 1;
         timings.total = total_started.elapsed().as_micros();
         let diagnostics = if collect_diagnostics {
@@ -1231,8 +1364,12 @@ impl LlamaInferenceSession {
         let mut timings = LlamaForwardTimings::default();
         for (idx, token_id) in token_ids.iter().enumerate() {
             let collect_step_diagnostics = collect_diagnostics && idx + 1 == token_ids.len();
-            let timed =
-                self.forward_single_token_timed_internal(*token_id, collect_step_diagnostics)?;
+            let compute_logits = idx + 1 == token_ids.len();
+            let timed = self.forward_single_token_timed_internal(
+                *token_id,
+                collect_step_diagnostics,
+                compute_logits,
+            )?;
             timings.add_assign(&timed.timings);
             output = Some(timed.output);
             if let Some(step_diagnostics) = timed.diagnostics {
@@ -1258,6 +1395,104 @@ impl LlamaInferenceSession {
             diagnostics,
         })
     }
+}
+
+fn forward_memory_trace_enabled() -> bool {
+    matches!(
+        env::var("BACKENDINFERENCE_FORWARD_MEMORY_TRACE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
+
+fn trace_forward_memory(phase: &str) {
+    if !forward_memory_trace_enabled() {
+        return;
+    }
+
+    let rss_kib = current_process_rss_kib()
+        .map(|rss| rss.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let vm = macos_vm_stat_snapshot();
+    let (free_like_pages, free_like_mib, throttled_pages) = vm
+        .map(|snapshot| {
+            let free_like_pages =
+                snapshot.free_pages + snapshot.speculative_pages + snapshot.purgeable_pages;
+            let free_like_mib = (free_like_pages as f64 * 16.0) / 1024.0;
+            (
+                free_like_pages.to_string(),
+                format!("{free_like_mib:.1}"),
+                snapshot.throttled_pages.to_string(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                "unknown".to_string(),
+                "unknown".to_string(),
+                "unknown".to_string(),
+            )
+        });
+
+    eprintln!(
+        "backendinference_forward_memory_trace phase={phase} rss_kib={rss_kib} free_like_pages={free_like_pages} free_like_mib={free_like_mib} throttled_pages={throttled_pages}"
+    );
+}
+
+fn trace_forward_layer_memory(layer_idx: usize, phase: &str) {
+    if forward_memory_trace_enabled() {
+        trace_forward_memory(&format!("layer_{layer_idx}_{phase}"));
+    }
+}
+
+fn current_process_rss_kib() -> Option<u64> {
+    let output = Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+        .ok()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VmStatSnapshot {
+    free_pages: u64,
+    speculative_pages: u64,
+    purgeable_pages: u64,
+    throttled_pages: u64,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_vm_stat_snapshot() -> Option<VmStatSnapshot> {
+    let output = Command::new("vm_stat").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(VmStatSnapshot {
+        free_pages: parse_vm_stat_pages(&text, "Pages free")?,
+        speculative_pages: parse_vm_stat_pages(&text, "Pages speculative")?,
+        purgeable_pages: parse_vm_stat_pages(&text, "Pages purgeable")?,
+        throttled_pages: parse_vm_stat_pages(&text, "Pages throttled")?,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_vm_stat_snapshot() -> Option<VmStatSnapshot> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn parse_vm_stat_pages(text: &str, key: &str) -> Option<u64> {
+    let line = text.lines().find(|line| line.starts_with(key))?;
+    let digits = line
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse::<u64>().ok()
 }
 
 impl LlamaForwardTimings {
@@ -1570,6 +1805,7 @@ fn forward_layer_timed(
         .then(|| rms_norm_diagnostics(hidden, &layer.attention_norm, &attn_norm, rms_norm_epsilon))
         .transpose()?;
     timings.attention_norm = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_norm_done");
 
     let started = Instant::now();
     let q = linear_runtime(
@@ -1585,6 +1821,7 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_q, &q, "linear"))
         .transpose()?;
     timings.attention_q = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_q_done");
 
     let started = Instant::now();
     let k = linear_for_role_runtime(
@@ -1601,6 +1838,7 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_k, &k, "attention_k"))
         .transpose()?;
     timings.attention_k = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_k_done");
 
     let started = Instant::now();
     let q_before_rope = q;
@@ -1650,6 +1888,7 @@ fn forward_layer_timed(
         })
         .transpose()?;
     timings.attention_rope = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_rope_done");
 
     let started = Instant::now();
     let v = linear_for_role_runtime(
@@ -1666,10 +1905,12 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_v, &v, "attention_v"))
         .transpose()?;
     timings.attention_v = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_v_done");
 
     let started = Instant::now();
     write_kv_cache(kv_cache, layer_idx, &k, &v)?;
     timings.kv_cache_write = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "kv_cache_write_done");
 
     let started = Instant::now();
     let attention_context = causal_attention_context(
@@ -1687,6 +1928,7 @@ fn forward_layer_timed(
         .then(|| LlamaTensorStats::from_tensor(&context))
         .transpose()?;
     timings.attention_context = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_context_done");
 
     let started = Instant::now();
     let mut attn_out = linear_runtime(
@@ -1710,6 +1952,7 @@ fn forward_layer_timed(
         })
         .transpose()?;
     timings.attention_output = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_output_done");
 
     let started = Instant::now();
     let residual = hidden.add(&attn_out, format!("layer_{layer_idx}_attention_residual"))?;
@@ -1723,6 +1966,7 @@ fn forward_layer_timed(
         .then(|| residual_reconstruction_diagnostic(hidden, &attn_out, &residual))
         .transpose()?;
     timings.attention_residual = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "attention_residual_done");
 
     let started = Instant::now();
     let ffn_norm = residual.rms_norm(
@@ -1737,6 +1981,7 @@ fn forward_layer_timed(
         .then(|| rms_norm_diagnostics(&residual, &layer.ffn_norm, &ffn_norm, rms_norm_epsilon))
         .transpose()?;
     timings.ffn_norm = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "ffn_norm_done");
 
     let activated = gated_ffn_activation(
         &ffn_norm,
@@ -1757,6 +2002,7 @@ fn forward_layer_timed(
     let ffn_activation_stats = collect_diagnostics
         .then(|| LlamaTensorStats::from_tensor(&activated))
         .transpose()?;
+    trace_forward_layer_memory(layer_idx, "ffn_gate_up_activation_done");
 
     let started = Instant::now();
     let mut ffn_out = linear_for_role_runtime(
@@ -1776,6 +2022,7 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&activated, &layer.ffn_down, &ffn_out, "ffn_down"))
         .transpose()?;
     timings.ffn_down = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "ffn_down_done");
 
     let started = Instant::now();
     let output = residual.add(&ffn_out, format!("layer_{layer_idx}_ffn_residual"))?;
@@ -1789,6 +2036,7 @@ fn forward_layer_timed(
         .then(|| residual_reconstruction_diagnostic(&residual, &ffn_out, &output))
         .transpose()?;
     timings.ffn_residual = started.elapsed().as_micros();
+    trace_forward_layer_memory(layer_idx, "ffn_residual_done");
     timings.total = total_started.elapsed().as_micros();
     let diagnostics = if collect_diagnostics {
         Some(LlamaLayerDiagnostics {
@@ -2615,6 +2863,7 @@ struct BorrowedLinearWeight<'a> {
     data: &'a [f32],
     source_type: Option<GgufTensorType>,
     q8_0_blocks: Option<&'a [Q8_0Block]>,
+    q8_0_file_backing: Option<&'a Q8_0FileBacking>,
 }
 
 impl<'a> BorrowedLinearWeight<'a> {
@@ -2631,6 +2880,7 @@ impl<'a> BorrowedLinearWeight<'a> {
             data: &weight.data,
             source_type: weight.source_type,
             q8_0_blocks: weight.q8_0_blocks.as_deref(),
+            q8_0_file_backing: weight.q8_0_file_backing.as_ref(),
         })
     }
 
@@ -2765,8 +3015,25 @@ fn matmul_rhs_transposed_with_precision(
     weight: &CpuTensor,
     name: impl Into<String>,
 ) -> Result<CpuTensor> {
-    if should_use_q8_0_block_dot(weight, input.dim(1)?) {
+    let input_width = input.dim(1)?;
+    if should_use_q8_0_block_dot(weight, input_width) {
         return matmul_rhs_transposed_q8_0_block_dot(input, weight, name);
+    }
+    if let Some(backing) = q8_0_reader_backing(weight, input_width)? {
+        let file = File::open(&backing.path).map_err(|source| BackendError::Io {
+            path: backing.path.clone(),
+            source,
+        })?;
+        disable_file_cache_best_effort(&file);
+        let mut workspace = InferenceWorkspace::new(input_width);
+        return matmul_rhs_transposed_q8_0_block_reader(
+            input,
+            &file,
+            Q8BlockReader::new(backing.absolute_offset, backing.num_blocks),
+            weight.dim(0)?,
+            name,
+            &mut workspace,
+        );
     }
     match diagnostic_linear_accumulation_precision()? {
         LinearAccumulationPrecision::F32 => input.matmul_rhs_transposed(weight, name),
@@ -3405,12 +3672,12 @@ fn accumulate_linear_row(
                 output,
                 precision,
             ),
-            SquareLinearLayout::Transposed => accumulate_transposed_linear_row_with_precision(
+            SquareLinearLayout::Transposed => accumulate_transposed_linear_row_runtime(
                 input_row,
                 BorrowedLinearWeight::from_tensor(weight)?,
                 output,
                 precision,
-            ),
+            )?,
         }
     } else {
         let rectangular_layout = if collect_diagnostics {
@@ -3430,29 +3697,29 @@ fn accumulate_linear_row(
             }
             RectangularLinearLayout::Transposed => {
                 let transposed_weight = borrowed_linear_weight_as_transposed(weight, input_width)?;
-                accumulate_transposed_linear_row_with_precision(
+                accumulate_transposed_linear_row_runtime(
                     input_row,
                     transposed_weight,
                     output,
                     precision,
-                );
+                )?;
             }
             RectangularLinearLayout::Auto if rows == input_width => {
                 let transposed_weight = borrowed_linear_weight_as_transposed(weight, input_width)?;
-                accumulate_transposed_linear_row_with_precision(
+                accumulate_transposed_linear_row_runtime(
                     input_row,
                     transposed_weight,
                     output,
                     precision,
-                );
+                )?;
             }
             RectangularLinearLayout::Auto if cols == input_width => {
-                accumulate_transposed_linear_row_with_precision(
+                accumulate_transposed_linear_row_runtime(
                     input_row,
                     BorrowedLinearWeight::from_tensor(weight)?,
                     output,
                     precision,
-                );
+                )?;
             }
             RectangularLinearLayout::Auto => {
                 return Err(BackendError::RuntimeShapeMismatch(format!(
@@ -3494,6 +3761,21 @@ fn q8_0_block_dot_enabled() -> bool {
                 || value.eq_ignore_ascii_case("enabled")
                 || value.eq_ignore_ascii_case("block_dot")
     )
+}
+
+fn lazy_q8_0_linear_enabled() -> bool {
+    match env::var("BACKENDINFERENCE_LAZY_Q8_0_LINEAR") {
+        Ok(value)
+            if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled") =>
+        {
+            false
+        }
+        Ok(_) | Err(env::VarError::NotPresent) => true,
+        Err(_) => true,
+    }
 }
 
 const Q8_0_BLOCK_VALUES: usize = 32;
@@ -3582,6 +3864,103 @@ fn q8_0_dot_rows(weight: &[Q8_0Block], input: &[Q8_0Block]) -> f32 {
             int_sum as f32 * weight_block.scale * input_block.scale
         })
         .sum()
+}
+
+fn q8_0_reader_backing(weight: &CpuTensor, input_width: usize) -> Result<Option<&Q8_0FileBacking>> {
+    if weight.source_type != Some(GgufTensorType::Q8_0) || weight.q8_0_blocks.is_some() {
+        return Ok(None);
+    }
+    let Some(backing) = weight.q8_0_file_backing.as_ref() else {
+        return Ok(None);
+    };
+    if weight.rank() != 2 || weight.dim(1)? != input_width {
+        return Ok(None);
+    }
+    let output_width = weight.dim(0)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+    let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    let expected_blocks = output_width.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("q8_0 reader-backed block count overflow".to_string())
+    })?;
+    if backing.num_blocks != expected_blocks {
+        return Ok(None);
+    }
+    Ok(Some(backing))
+}
+
+fn matmul_rhs_transposed_q8_0_block_reader(
+    input: &CpuTensor,
+    file: &File,
+    reader: Q8BlockReader,
+    output_width: usize,
+    name: impl Into<String>,
+    _workspace: &mut InferenceWorkspace,
+) -> Result<CpuTensor> {
+    let rows = input.dim(0)?;
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "q8_0 block-reader input width {input_width} is not a multiple of {Q8_0_BLOCK_VALUES}"
+        )));
+    }
+    let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    let expected_blocks = output_width.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("q8_0 block-reader block count overflow".to_string())
+    })?;
+    if reader.num_blocks != expected_blocks {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "q8_0 block-reader expected {expected_blocks} blocks, got {}",
+            reader.num_blocks
+        )));
+    }
+    let row_bytes_len = blocks_per_row
+        .checked_mul(Q8BlockReader::BLOCK_SIZE_BYTES)
+        .ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "q8_0 block-reader row byte count overflow".to_string(),
+            )
+        })?;
+    let mut row_bytes = vec![0_u8; row_bytes_len];
+    let mut output = vec![0.0_f32; rows * output_width];
+    for row in 0..rows {
+        let input_start = row * input_width;
+        let input_row = &input.data[input_start..input_start + input_width];
+        let out_start = row * output_width;
+        for output_idx in 0..output_width {
+            let block_start = output_idx * blocks_per_row;
+            let row_offset = reader
+                .offset
+                .checked_add((block_start * Q8BlockReader::BLOCK_SIZE_BYTES) as u64)
+                .ok_or_else(|| {
+                    BackendError::RuntimeShapeMismatch(
+                        "q8_0 block-reader row offset overflow".to_string(),
+                    )
+                })?;
+            file.read_exact_at(&mut row_bytes, row_offset)
+                .map_err(|err| {
+                    BackendError::InvalidTensorData(format!(
+                        "q8_0 block-reader failed to read output row {output_idx}: {err}",
+                    ))
+                })?;
+            output[out_start + output_idx] = dot_q8_0_encoded_row(input_row, &row_bytes);
+        }
+    }
+    CpuTensor::from_f32(name, vec![rows, output_width], output)
+}
+
+fn dot_q8_0_encoded_row(input_row: &[f32], row_bytes: &[u8]) -> f32 {
+    let mut sum = 0.0_f32;
+    let mut input_offset = 0;
+    for block in row_bytes.chunks_exact(Q8BlockReader::BLOCK_SIZE_BYTES) {
+        let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+        for idx in 0..Q8_0_BLOCK_VALUES {
+            sum += f32::from(block[2 + idx] as i8) * scale * input_row[input_offset + idx];
+        }
+        input_offset += Q8_0_BLOCK_VALUES;
+    }
+    sum
 }
 
 fn q8_0_block_int_dot_horizontal_sum(
@@ -3748,6 +4127,124 @@ fn accumulate_descriptor_linear_row(
             *out_value += lhs_value * rhs_value;
         }
     }
+}
+
+fn accumulate_transposed_linear_row_runtime(
+    input_row: &[f32],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+    precision: LinearAccumulationPrecision,
+) -> Result<()> {
+    if let Some(backing) = borrowed_q8_0_reader_backing(weight, input_row.len(), output.len())? {
+        accumulate_transposed_linear_row_q8_0_file_reader(input_row, backing, output)?;
+        return Ok(());
+    }
+    accumulate_transposed_linear_row_with_precision(input_row, weight, output, precision);
+    Ok(())
+}
+
+fn borrowed_q8_0_reader_backing<'a>(
+    weight: BorrowedLinearWeight<'a>,
+    input_width: usize,
+    output_width: usize,
+) -> Result<Option<&'a Q8_0FileBacking>> {
+    if weight.source_type != Some(GgufTensorType::Q8_0) || weight.q8_0_blocks.is_some() {
+        return Ok(None);
+    }
+    let Some(backing) = weight.q8_0_file_backing else {
+        return Ok(None);
+    };
+    if weight.cols != input_width || weight.rows != output_width {
+        return Ok(None);
+    }
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+    let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    let expected_blocks = output_width.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 borrowed reader-backed block count overflow".to_string(),
+        )
+    })?;
+    if backing.num_blocks != expected_blocks {
+        return Ok(None);
+    }
+    Ok(Some(backing))
+}
+
+fn accumulate_transposed_linear_row_q8_0_file_reader(
+    input_row: &[f32],
+    backing: &Q8_0FileBacking,
+    output: &mut [f32],
+) -> Result<()> {
+    let input_width = input_row.len();
+    let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    let file = File::open(&backing.path).map_err(|source| BackendError::Io {
+        path: backing.path.clone(),
+        source,
+    })?;
+    disable_file_cache_best_effort(&file);
+    let row_bytes_len = blocks_per_row
+        .checked_mul(Q8BlockReader::BLOCK_SIZE_BYTES)
+        .ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "q8_0 borrowed block-reader row byte count overflow".to_string(),
+            )
+        })?;
+    let chunk_rows = q8_0_file_reader_chunk_rows(row_bytes_len, output.len())?;
+    let row_chunk_len = row_bytes_len.checked_mul(chunk_rows).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 borrowed block-reader chunk byte count overflow".to_string(),
+        )
+    })?;
+    let mut row_chunk = vec![0_u8; row_chunk_len];
+    let mut output_start = 0usize;
+    while output_start < output.len() {
+        let rows_this_chunk = chunk_rows.min(output.len() - output_start);
+        let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "q8_0 borrowed block-reader chunk byte count overflow".to_string(),
+            )
+        })?;
+        let chunk_offset = backing
+            .absolute_offset
+            .checked_add((output_start * row_bytes_len) as u64)
+            .ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(
+                    "q8_0 borrowed block-reader chunk offset overflow".to_string(),
+                )
+            })?;
+        let chunk = &mut row_chunk[..chunk_bytes_len];
+        file.read_exact_at(chunk, chunk_offset).map_err(|err| {
+            BackendError::InvalidTensorData(format!(
+                "q8_0 borrowed block-reader failed to read output rows {output_start}..{}: {err}",
+                output_start + rows_this_chunk
+            ))
+        })?;
+        for (local_idx, row_bytes) in chunk.chunks_exact(row_bytes_len).enumerate() {
+            output[output_start + local_idx] = dot_q8_0_encoded_row(input_row, row_bytes);
+        }
+        output_start += rows_this_chunk;
+    }
+    Ok(())
+}
+
+fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Result<usize> {
+    const DEFAULT_Q8_0_FILE_READER_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+    if row_bytes_len == 0 {
+        return Err(BackendError::RuntimeShapeMismatch(
+            "q8_0 borrowed block-reader row byte count must be non-zero".to_string(),
+        ));
+    }
+    if output_width == 0 {
+        return Ok(1);
+    }
+    let chunk_bytes = env::var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_Q8_0_FILE_READER_CHUNK_BYTES);
+    Ok((chunk_bytes / row_bytes_len).max(1).min(output_width))
 }
 
 fn accumulate_transposed_linear_row_with_precision(
@@ -4596,6 +5093,7 @@ pub fn tensor_map(tensors: impl IntoIterator<Item = CpuTensor>) -> HashMap<Strin
 mod tests {
     use super::*;
     use crate::test_support::env_lock;
+    use std::io::Write;
 
     fn assert_close(actual: f32, expected: f32) {
         assert!(
@@ -4614,6 +5112,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn q8_0_block_reader_smoke() {
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let scale_bits = 0x3c00u16;
+        let mut block_data = vec![0u8; Q8BlockReader::BLOCK_SIZE_BYTES];
+        block_data[0..2].copy_from_slice(&scale_bits.to_le_bytes());
+        block_data[2] = 10i8 as u8;
+        block_data[3] = 20i8 as u8;
+
+        temp_file.write_all(&block_data).unwrap();
+        temp_file.flush().unwrap();
+
+        let reader = Q8BlockReader::new(0, 1);
+        let file = temp_file.reopen().unwrap();
+        let mut dest = vec![0.0; Q8BlockReader::WEIGHTS_PER_BLOCK];
+        reader
+            .dequantize_block_to_slice(&file, 0, &mut dest)
+            .unwrap();
+
+        assert_eq!(dest[0], 10.0);
+        assert_eq!(dest[1], 20.0);
+        assert!(dest[2..].iter().all(|value| *value == 0.0));
+    }
+
     fn clear_dense_diagnostic_env() {
         for key in [
             "BACKENDINFERENCE_ATTENTION_SCORE_SCALE",
@@ -4624,6 +5146,7 @@ mod tests {
             "BACKENDINFERENCE_PARALLEL_LINEAR",
             "BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS",
             "BACKENDINFERENCE_Q8_0_BLOCK_DOT",
+            "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
             "BACKENDINFERENCE_PARALLEL_LINEAR",
             "BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS",
             "BACKENDINFERENCE_RECTANGULAR_LINEAR_LAYOUT",
@@ -4945,6 +5468,115 @@ mod tests {
 
         assert_eq!(actual.shape.dims, vec![1, 1]);
         assert_close(actual.data[0], 8.0);
+    }
+
+    #[test]
+    fn q8_0_block_reader_linear_matches_existing_q8_path() {
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let row0 = Q8_0Block {
+            scale: 0.5,
+            quants: std::array::from_fn(|idx| idx as i8 - 16),
+        };
+        let row1 = Q8_0Block {
+            scale: 0.25,
+            quants: std::array::from_fn(|idx| if idx.is_multiple_of(2) { 7 } else { -9 }),
+        };
+        for block in [&row0, &row1] {
+            temp_file
+                .write_all(&f32_to_f16_bits(block.scale).to_le_bytes())
+                .unwrap();
+            let bytes = block.quants.iter().map(|q| *q as u8).collect::<Vec<_>>();
+            temp_file.write_all(&bytes).unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let mut input_values = Vec::with_capacity(32);
+        input_values.push(127.0);
+        input_values.extend((1..32).map(|idx| idx as f32 - 17.0));
+        let input = CpuTensor::from_f32("input", vec![1, 32], input_values.clone()).unwrap();
+
+        let mut dequantized_weight = Vec::with_capacity(64);
+        for block in [&row0, &row1] {
+            dequantized_weight.extend(block.quants.iter().map(|q| block.scale * f32::from(*q)));
+        }
+        let weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "weight",
+            vec![2, 32],
+            dequantized_weight,
+            vec![row0.clone(), row1.clone()],
+        )
+        .unwrap();
+
+        let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
+        let file = temp_file.reopen().unwrap();
+        let reader = Q8BlockReader::new(0, 2);
+        let mut workspace = InferenceWorkspace::new(32);
+        let actual = matmul_rhs_transposed_q8_0_block_reader(
+            &input,
+            &file,
+            reader,
+            2,
+            "actual",
+            &mut workspace,
+        )
+        .unwrap();
+
+        assert_eq!(actual.shape.dims, expected.shape.dims);
+        assert_slice_close(&actual.data, &expected.data);
+    }
+
+    #[test]
+    fn q8_0_file_backed_accumulate_matches_dense_linear_across_chunks() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var(
+            "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
+            (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
+        );
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let rows: Vec<Q8_0Block> = (0..4)
+            .map(|row| Q8_0Block {
+                scale: f16_bits_to_f32(f32_to_f16_bits(0.25 + row as f32 * 0.125)),
+                quants: std::array::from_fn(|idx| idx as i8 - 8 + row as i8),
+            })
+            .collect();
+        for block in &rows {
+            temp_file
+                .write_all(&f32_to_f16_bits(block.scale).to_le_bytes())
+                .unwrap();
+            let bytes = block.quants.iter().map(|q| *q as u8).collect::<Vec<_>>();
+            temp_file.write_all(&bytes).unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let input_values = (0..32)
+            .map(|idx| idx as f32 * 0.5 - 3.0)
+            .collect::<Vec<_>>();
+        let input = CpuTensor::from_f32("input", vec![1, 32], input_values.clone()).unwrap();
+        let mut dequantized_weight = Vec::with_capacity(rows.len() * 32);
+        for block in &rows {
+            dequantized_weight.extend(block.quants.iter().map(|q| block.scale * f32::from(*q)));
+        }
+        let weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "weight",
+            vec![rows.len(), 32],
+            dequantized_weight,
+            rows.clone(),
+        )
+        .unwrap();
+        let expected = input.matmul_rhs_transposed(&weight, "expected").unwrap();
+
+        let backing = Q8_0FileBacking {
+            path: temp_file.path().to_path_buf(),
+            absolute_offset: 0,
+            num_blocks: rows.len(),
+        };
+        let mut actual = vec![0.0; rows.len()];
+        accumulate_transposed_linear_row_q8_0_file_reader(&input_values, &backing, &mut actual)
+            .unwrap();
+
+        assert_slice_close(&actual, &expected.data);
     }
 
     #[test]
@@ -6185,15 +6817,17 @@ mod tests {
             .unwrap(),
             output_norm: CpuTensor::from_f32("output_norm.weight", vec![2], vec![1.0, 1.0])
                 .unwrap(),
-            output: CpuTensor::from_f32(
-                "output.weight",
-                vec![2, 3],
-                vec![
-                    1.0, 0.0, -1.0, // hidden dim 0 -> vocab logits
-                    0.0, 1.0, -1.0, // hidden dim 1 -> vocab logits
-                ],
-            )
-            .unwrap(),
+            output: Some(
+                CpuTensor::from_f32(
+                    "output.weight",
+                    vec![2, 3],
+                    vec![
+                        1.0, 0.0, -1.0, // hidden dim 0 -> vocab logits
+                        0.0, 1.0, -1.0, // hidden dim 1 -> vocab logits
+                    ],
+                )
+                .unwrap(),
+            ),
             layers: vec![LlamaLayerWeights {
                 attention_norm: CpuTensor::from_f32(
                     "blk.0.attn_norm.weight",

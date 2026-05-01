@@ -421,11 +421,11 @@ fn tiny_weights() -> LlamaLoadedWeights {
             ],
         ),
         output_norm: ones("output_norm.weight", hidden),
-        output: tensor(
+        output: Some(tensor(
             "output.weight",
             vec![3, hidden],
             vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        ),
+        )),
         layers: vec![LlamaLayerWeights {
             attention_norm: ones("blk.0.attn_norm.weight", hidden),
             attention_q: select_rows("blk.0.attn_q.weight", hidden, hidden, &[0, 1, 2, 3]),

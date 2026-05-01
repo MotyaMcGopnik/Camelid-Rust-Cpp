@@ -6,12 +6,34 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
+
 use rayon::prelude::*;
 
 use crate::{
     gguf::{GgufFile, GgufTensorDescriptor, GgufTensorType},
     BackendError, Result,
 };
+
+#[cfg(target_os = "macos")]
+pub(crate) fn disable_file_cache_best_effort(file: &File) {
+    use std::{os::fd::AsRawFd, os::raw::c_int};
+
+    const F_RDAHEAD: c_int = 45;
+    const F_NOCACHE: c_int = 48;
+    unsafe extern "C" {
+        fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
+    }
+
+    // Best-effort only: the lazy Q8 path streams model bytes repeatedly, and on macOS the
+    // default file cache/readahead can consume free pages even when Camelid RSS stays low.
+    // Keep both calls non-fatal: older kernels/filesystems may reject one knob but honor the other.
+    let _ = unsafe { fcntl(file.as_raw_fd(), F_RDAHEAD, 0) };
+    let _ = unsafe { fcntl(file.as_raw_fd(), F_NOCACHE, 1) };
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn disable_file_cache_best_effort(_file: &File) {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorShape {
@@ -51,6 +73,13 @@ pub struct Q8_0Block {
     pub quants: [i8; 32],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Q8_0FileBacking {
+    pub path: PathBuf,
+    pub absolute_offset: u64,
+    pub num_blocks: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CpuTensor {
     pub name: String,
@@ -58,6 +87,7 @@ pub struct CpuTensor {
     pub dtype: RuntimeDType,
     pub source_type: Option<GgufTensorType>,
     pub q8_0_blocks: Option<Vec<Q8_0Block>>,
+    pub q8_0_file_backing: Option<Q8_0FileBacking>,
     pub data: Vec<f32>,
 }
 
@@ -202,6 +232,7 @@ impl Q8_0TensorBlocks {
             dtype: RuntimeDType::F32,
             source_type: None,
             q8_0_blocks: None,
+            q8_0_file_backing: None,
             data,
         })
     }
@@ -262,6 +293,7 @@ impl CpuTensor {
             dtype: RuntimeDType::F32,
             source_type: None,
             q8_0_blocks: None,
+            q8_0_file_backing: None,
             data,
         })
     }
@@ -287,6 +319,27 @@ impl CpuTensor {
         tensor.source_type = Some(GgufTensorType::Q8_0);
         tensor.q8_0_blocks = Some(q8_0_blocks);
         Ok(tensor)
+    }
+
+    pub fn with_q8_0_file_backing(mut self, backing: Q8_0FileBacking) -> Self {
+        self.q8_0_file_backing = Some(backing);
+        self
+    }
+
+    pub fn q8_0_file_backed_linear(
+        name: impl Into<String>,
+        shape: TensorShape,
+        backing: Q8_0FileBacking,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            shape,
+            dtype: RuntimeDType::F32,
+            source_type: Some(GgufTensorType::Q8_0),
+            q8_0_blocks: None,
+            q8_0_file_backing: Some(backing),
+            data: Vec::new(),
+        }
     }
 
     pub fn rank(&self) -> usize {
@@ -515,6 +568,9 @@ impl CpuTensor {
         require_rank(self, 2, "embedding weight")?;
         let vocab = self.dim(0)?;
         let width = self.dim(1)?;
+        if let Some(backing) = self.q8_0_file_backing.as_ref() {
+            return self.embedding_lookup_q8_0_file_backed(token_ids, name, vocab, width, backing);
+        }
         let mut out = Vec::with_capacity(token_ids.len() * width);
         for token_id in token_ids {
             let token_idx = usize::try_from(*token_id).map_err(|_| {
@@ -529,6 +585,77 @@ impl CpuTensor {
             }
             let start = token_idx * width;
             out.extend_from_slice(&self.data[start..start + width]);
+        }
+        Self::from_f32(name, vec![token_ids.len(), width], out)
+    }
+
+    fn embedding_lookup_q8_0_file_backed(
+        &self,
+        token_ids: &[u32],
+        name: impl Into<String>,
+        vocab: usize,
+        width: usize,
+        backing: &Q8_0FileBacking,
+    ) -> Result<Self> {
+        const Q8_0_BLOCK_VALUES: usize = 32;
+        const Q8_0_BLOCK_BYTES: usize = 34;
+        if self.source_type != Some(GgufTensorType::Q8_0) {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "file-backed embedding {} must come from Q8_0 storage",
+                self.name
+            )));
+        }
+        if !width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "file-backed q8_0 embedding width {width} is not divisible by {Q8_0_BLOCK_VALUES}"
+            )));
+        }
+        let blocks_per_row = width / Q8_0_BLOCK_VALUES;
+        let expected_blocks = vocab.checked_mul(blocks_per_row).ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "file-backed q8_0 embedding block count overflow".to_string(),
+            )
+        })?;
+        if backing.num_blocks != expected_blocks {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "file-backed q8_0 embedding block count {} does not match expected {expected_blocks}",
+                backing.num_blocks
+            )));
+        }
+        let mut file = File::open(&backing.path).map_err(|source| BackendError::Io {
+            path: backing.path.clone(),
+            source,
+        })?;
+        disable_file_cache_best_effort(&file);
+        let row_bytes = blocks_per_row * Q8_0_BLOCK_BYTES;
+        let mut row = vec![0_u8; row_bytes];
+        let mut out = Vec::with_capacity(token_ids.len() * width);
+        for token_id in token_ids {
+            let token_idx = usize::try_from(*token_id).map_err(|_| {
+                BackendError::RuntimeShapeMismatch(format!(
+                    "token id {token_id} does not fit usize"
+                ))
+            })?;
+            if token_idx >= vocab {
+                return Err(BackendError::RuntimeShapeMismatch(format!(
+                    "token id {token_id} out of range for vocab size {vocab}"
+                )));
+            }
+            let offset = backing.absolute_offset + (token_idx * row_bytes) as u64;
+            file.seek(SeekFrom::Start(offset))
+                .map_err(|source| BackendError::Io {
+                    path: backing.path.clone(),
+                    source,
+                })?;
+            file.read_exact(&mut row)
+                .map_err(|source| BackendError::Io {
+                    path: backing.path.clone(),
+                    source,
+                })?;
+            for block in row.chunks_exact(Q8_0_BLOCK_BYTES) {
+                let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+                out.extend(block[2..].iter().map(|q| scale * f32::from(*q as i8)));
+            }
         }
         Self::from_f32(name, vec![token_ids.len(), width], out)
     }
@@ -690,19 +817,58 @@ impl TensorStore {
         })
     }
 
+    pub fn load_q8_0_file_backed_linear(&self, name: &str) -> Result<CpuTensor> {
+        let desc = self.descriptor(name)?.clone();
+        if desc.tensor_type != GgufTensorType::Q8_0 {
+            return self.load_cpu_f32(name);
+        }
+        let shape = TensorShape::from_gguf_dims(&desc.dimensions)?;
+        if shape.dims.len() != 2 {
+            return self.load_cpu_f32(name);
+        }
+        let expected_elements = shape.element_count()?;
+        if expected_elements % 32 != 0 {
+            return Err(BackendError::InvalidTensorData(format!(
+                "tensor {name} Q8_0 element count {expected_elements} is not block aligned"
+            )));
+        }
+        Ok(CpuTensor::q8_0_file_backed_linear(
+            name,
+            shape,
+            Q8_0FileBacking {
+                path: self.path.clone(),
+                absolute_offset: desc.absolute_offset,
+                num_blocks: expected_elements / 32,
+            },
+        ))
+    }
+
     pub fn load_cpu_f32(&self, name: &str) -> Result<CpuTensor> {
         let desc = self.descriptor(name)?.clone();
         let bytes = self.tensor_bytes(name)?;
         let shape = TensorShape::from_gguf_dims(&desc.dimensions)?;
         let expected_elements = shape.element_count()?;
+        let retain_q8_0_blocks = matches!(
+            env::var(RETAIN_Q8_BLOCKS_ENV).as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
         let mut q8_0_blocks = None;
+        let mut q8_0_file_backing = None;
         let data = match desc.tensor_type {
             GgufTensorType::F32 => decode_f32_tensor(name, &bytes, expected_elements)?,
             GgufTensorType::F16 => decode_f16_tensor(name, &bytes, expected_elements)?,
             GgufTensorType::BF16 => decode_bf16_tensor(name, &bytes, expected_elements)?,
             GgufTensorType::Q8_0 => {
                 let decoded = decode_q8_0_tensor(name, &bytes, expected_elements)?;
-                q8_0_blocks = Some(decode_q8_0_blocks(name, &bytes, expected_elements)?);
+                if retain_q8_0_blocks {
+                    q8_0_blocks = Some(decode_q8_0_blocks(name, &bytes, expected_elements)?);
+                } else {
+                    q8_0_file_backing = Some(Q8_0FileBacking {
+                        path: self.path.clone(),
+                        absolute_offset: desc.absolute_offset,
+                        num_blocks: expected_elements / 32,
+                    });
+                }
                 decoded
             }
             other => {
@@ -717,6 +883,7 @@ impl TensorStore {
             dtype: RuntimeDType::F32,
             source_type: Some(desc.tensor_type),
             q8_0_blocks,
+            q8_0_file_backing,
             data,
         })
     }

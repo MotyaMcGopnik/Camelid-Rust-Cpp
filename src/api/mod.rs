@@ -37,9 +37,11 @@ use crate::{
     BackendError,
 };
 
-const DEFAULT_CPU_WEIGHT_MATERIALIZATION_LIMIT_BYTES: u64 = 24 * 1024 * 1024 * 1024;
+const DEFAULT_CPU_WEIGHT_MATERIALIZATION_LIMIT_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 const CPU_WEIGHT_MATERIALIZATION_LIMIT_ENV: &str =
     "BACKENDINFERENCE_MAX_CPU_WEIGHT_MATERIALIZATION_BYTES";
+const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
+const LAZY_Q8_LINEAR_ENV: &str = "BACKENDINFERENCE_LAZY_Q8_0_LINEAR";
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -753,17 +755,17 @@ async fn capabilities() -> Json<CapabilitiesResponse> {
                 id: "llama32_3b_instruct_q8_0",
                 family: "llama_bpe_decoder",
                 quantization: "Q8_0",
-                status: "acceptance_target_blocked_before_first_token",
+                status: "acceptance_target_first_token_evidence_only",
                 metadata_parses: "validated",
                 tokenizer_works: "validated_for_load_path",
                 tensors_load: "validated_for_metadata_and_load_only",
-                generation_runs: "blocked_before_first_token_under_memory_pressure",
+                generation_runs: "one_backend_only_first_token_success",
                 parity_audited: "not_started",
-                performance_measured: "memory_blocker_sampled",
+                performance_measured: "one_healthy_ubuntu_bounded_run",
                 frontend_load_path_verified: "not_promoted",
-                tested_context: "api_load_only_guarded_first_chat_retry",
-                evidence: "the exact tracked Llama-3.2-3B-Instruct-Q8_0 GGUF is present locally and `/api/models/load` succeeds with low backend RSS after streaming metadata parsing, but the guarded first chat still stops before any generated token under host free-page pressure",
-                next_step: "capture bounded prompt-token parity, first-token parity, short deterministic generation, API smoke, and WebUI smoke only after the first-token memory blocker is cleared",
+                tested_context: "backend_only_completion_prompt_hello_1_token",
+                evidence: "the exact tracked Llama-3.2-3B-Instruct-Q8_0 GGUF is present locally, `/api/models/load` succeeds with low backend RSS after streaming metadata parsing, and one Ubuntu backend-only `/v1/completions` probe produced a first token with the required forward trace",
+                next_step: "capture a second bounded first-token success, prompt-token parity, first-token parity, short deterministic generation, API smoke, and WebUI smoke before any support promotion",
             },
             ModelCompatibilityTarget {
                 id: "llama3_8b_instruct_gguf",
@@ -1293,8 +1295,34 @@ fn cpu_weight_materialization_limit_bytes() -> std::result::Result<u64, BackendE
     }
 }
 
+fn cpu_weight_materialization_retains_q8_blocks() -> bool {
+    matches!(
+        env::var(RETAIN_Q8_BLOCKS_ENV).as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
+
+fn lazy_q8_linear_materialization_enabled() -> bool {
+    match env::var(LAZY_Q8_LINEAR_ENV) {
+        Ok(value)
+            if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled") =>
+        {
+            false
+        }
+        Ok(_) | Err(env::VarError::NotPresent) => true,
+        Err(_) => true,
+    }
+}
+
 fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> crate::Result<u64> {
-    fn tensor_estimate(desc: &GgufTensorDescriptor) -> crate::Result<u64> {
+    fn tensor_estimate(
+        desc: &GgufTensorDescriptor,
+        retain_q8_blocks: bool,
+        lazy_q8_linear: bool,
+    ) -> crate::Result<u64> {
         let element_count = desc.dimensions.iter().try_fold(1u64, |acc, dim| {
             acc.checked_mul(*dim).ok_or_else(|| {
                 BackendError::InvalidTensorData(format!(
@@ -1303,13 +1331,23 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
                 ))
             })
         })?;
-        let f32_bytes = element_count.checked_mul(4).ok_or_else(|| {
-            BackendError::InvalidTensorData(format!(
-                "tensor {} f32 materialization byte estimate overflow",
-                desc.name
-            ))
-        })?;
-        let retained_source_bytes = if desc.tensor_type == GgufTensorType::Q8_0 {
+        let file_backed_q8_linear = lazy_q8_linear
+            && desc.tensor_type == GgufTensorType::Q8_0
+            && desc.dimensions.len() == 2;
+        let f32_bytes = if file_backed_q8_linear {
+            0
+        } else {
+            element_count.checked_mul(4).ok_or_else(|| {
+                BackendError::InvalidTensorData(format!(
+                    "tensor {} f32 materialization byte estimate overflow",
+                    desc.name
+                ))
+            })?
+        };
+        let retained_source_bytes = if retain_q8_blocks
+            && !file_backed_q8_linear
+            && desc.tensor_type == GgufTensorType::Q8_0
+        {
             let q8_block_count = element_count.checked_add(31).ok_or_else(|| {
                 BackendError::InvalidTensorData(format!(
                     "tensor {} q8 block-count estimate overflow",
@@ -1335,8 +1373,14 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
         })
     }
 
-    let mut total = tensor_estimate(&binding.token_embedding)?
-        .checked_add(tensor_estimate(&binding.output_norm)?)
+    let retain_q8_blocks = cpu_weight_materialization_retains_q8_blocks();
+    let lazy_q8_linear = lazy_q8_linear_materialization_enabled();
+    let mut total = tensor_estimate(&binding.token_embedding, retain_q8_blocks, lazy_q8_linear)?
+        .checked_add(tensor_estimate(
+            &binding.output_norm,
+            retain_q8_blocks,
+            lazy_q8_linear,
+        )?)
         .ok_or_else(|| {
             BackendError::InvalidTensorData(
                 "CPU materialization byte estimate overflow".to_string(),
@@ -1344,7 +1388,11 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
         })?;
     if !binding.output_is_tied_embedding {
         total = total
-            .checked_add(tensor_estimate(&binding.output)?)
+            .checked_add(tensor_estimate(
+                &binding.output,
+                retain_q8_blocks,
+                lazy_q8_linear,
+            )?)
             .ok_or_else(|| {
                 BackendError::InvalidTensorData(
                     "CPU materialization byte estimate overflow".to_string(),
@@ -1363,11 +1411,13 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
             &layer.ffn_up,
             &layer.ffn_down,
         ] {
-            total = total.checked_add(tensor_estimate(desc)?).ok_or_else(|| {
-                BackendError::InvalidTensorData(
-                    "CPU materialization byte estimate overflow".to_string(),
-                )
-            })?;
+            total = total
+                .checked_add(tensor_estimate(desc, retain_q8_blocks, lazy_q8_linear)?)
+                .ok_or_else(|| {
+                    BackendError::InvalidTensorData(
+                        "CPU materialization byte estimate overflow".to_string(),
+                    )
+                })?;
         }
     }
     Ok(total)
@@ -1598,7 +1648,7 @@ fn dense_diagnostic_metadata(
 ) -> DenseDiagnosticMetadata {
     let dims = DenseLlamaDims::from_config(config).expect("validated Camelid dense dimensions");
     let head_dim = dims.head_dim;
-    let output_shape = weights.output.shape.dims.clone();
+    let output_shape = weights.output_projection().shape.dims.clone();
     let output_projection_layout =
         if output_shape.first() == Some(&(config.embedding_length as usize)) {
             "input_output"
@@ -2073,7 +2123,7 @@ fn consume_generation_step(
         if prepared.collect_dense_diagnostics {
             *acc.output_projection = output_projection_diagnostics(
                 &step.output_norm_state,
-                &prepared.session.weights.output,
+                prepared.session.weights.output_projection(),
                 &step.logits,
                 &projection_token_ids,
                 Some(&step.hidden_state),
@@ -2210,7 +2260,7 @@ fn generate_token_ids(
             if prepared.collect_dense_diagnostics {
                 output_projection = output_projection_diagnostics(
                     &step.output_norm_state,
-                    &prepared.session.weights.output,
+                    prepared.session.weights.output_projection(),
                     &step.logits,
                     &projection_token_ids,
                     Some(&step.hidden_state),
@@ -2766,7 +2816,37 @@ mod tests {
     }
 
     #[test]
-    fn cpu_weight_materialization_estimate_counts_q8_f32_and_retained_blocks() {
+    fn cpu_weight_materialization_estimate_defaults_q8_linears_to_file_backed() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
+        let binding = materialization_binding(false, GgufTensorType::Q8_0, vec![32, 2]);
+
+        let estimated = estimate_cpu_weight_materialization_bytes(&binding).unwrap();
+
+        assert_eq!(estimated, 0);
+    }
+
+    #[test]
+    fn cpu_weight_materialization_estimate_can_count_q8_f32_when_lazy_disabled() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::set_var(LAZY_Q8_LINEAR_ENV, "0");
+        let binding = materialization_binding(false, GgufTensorType::Q8_0, vec![32, 2]);
+
+        let estimated = estimate_cpu_weight_materialization_bytes(&binding).unwrap();
+        let expected_per_tensor = 32 * 2 * 4;
+        let expected_tensor_count = 3 + 9;
+
+        assert_eq!(estimated, expected_per_tensor * expected_tensor_count);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
+    }
+
+    #[test]
+    fn cpu_weight_materialization_estimate_counts_opt_in_q8_retained_blocks() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::set_var(LAZY_Q8_LINEAR_ENV, "0");
+        std::env::set_var(RETAIN_Q8_BLOCKS_ENV, "1");
         let binding = materialization_binding(false, GgufTensorType::Q8_0, vec![32, 2]);
 
         let estimated = estimate_cpu_weight_materialization_bytes(&binding).unwrap();
@@ -2774,17 +2854,36 @@ mod tests {
         let expected_tensor_count = 3 + 9;
 
         assert_eq!(estimated, expected_per_tensor * expected_tensor_count);
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
+    }
+
+    #[test]
+    fn cpu_weight_materialization_estimate_counts_lazy_q8_linears_as_file_backed() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::set_var(LAZY_Q8_LINEAR_ENV, "1");
+        let binding = materialization_binding(false, GgufTensorType::Q8_0, vec![32, 2]);
+
+        let estimated = estimate_cpu_weight_materialization_bytes(&binding).unwrap();
+
+        assert_eq!(estimated, 0);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
     }
 
     #[test]
     fn cpu_weight_materialization_estimate_skips_tied_output_tensor() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::set_var(LAZY_Q8_LINEAR_ENV, "0");
         let binding = materialization_binding(true, GgufTensorType::Q8_0, vec![32, 2]);
 
         let estimated = estimate_cpu_weight_materialization_bytes(&binding).unwrap();
-        let expected_per_tensor = (32 * 2 * 4) + (2 * mem::size_of::<Q8_0Block>() as u64);
+        let expected_per_tensor = 32 * 2 * 4;
         let expected_tensor_count = 2 + 9;
 
         assert_eq!(estimated, expected_per_tensor * expected_tensor_count);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
     }
 
     #[test]
@@ -3135,11 +3234,11 @@ mod tests {
                 vec![1.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             ),
             output_norm: ones("output_norm.weight", hidden),
-            output: tensor(
+            output: Some(tensor(
                 "output.weight",
                 vec![3, hidden],
                 vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            ),
+            )),
             layers: vec![LlamaLayerWeights {
                 attention_norm: ones("blk.0.attn_norm.weight", hidden),
                 attention_q: select_rows("blk.0.attn_q.weight", hidden, hidden, &[0, 1, 2, 3]),

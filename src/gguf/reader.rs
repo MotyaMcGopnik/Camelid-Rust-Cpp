@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, File},
+    io::{ErrorKind, Read},
     path::{Path, PathBuf},
 };
 
@@ -252,11 +253,17 @@ impl GgufFile {
 }
 
 pub fn read_metadata(path: &Path) -> Result<GgufFile> {
-    let bytes = fs::read(path).map_err(|source| BackendError::Io {
+    let file = File::open(path).map_err(|source| BackendError::Io {
         path: path.to_path_buf(),
         source,
     })?;
-    let mut cursor = Cursor::new(&bytes);
+    let file_len = fs::metadata(path)
+        .map_err(|source| BackendError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    let mut cursor = Cursor::new(file, path.to_path_buf());
 
     let magic = cursor.read_bytes(4)?;
     if magic != GGUF_MAGIC {
@@ -336,8 +343,7 @@ pub fn read_metadata(path: &Path) -> Result<GgufFile> {
         raw_tensors.push((name, dimensions, tensor_type, relative_offset));
     }
 
-    let data_start_offset = align_to(cursor.position() as u64, alignment)?;
-    let file_len = bytes.len() as u64;
+    let data_start_offset = align_to(cursor.position(), alignment)?;
     if data_start_offset > file_len {
         return Err(BackendError::InvalidGguf(
             "aligned tensor data start is beyond end of file".to_string(),
@@ -398,12 +404,12 @@ pub fn read_metadata(path: &Path) -> Result<GgufFile> {
     })
 }
 
-fn read_value(cursor: &mut Cursor<'_>) -> Result<GgufMetadataValue> {
+fn read_value(cursor: &mut Cursor) -> Result<GgufMetadataValue> {
     let ty = cursor.read_i32()?;
     read_value_of_type(cursor, ty)
 }
 
-fn read_value_of_type(cursor: &mut Cursor<'_>, ty: i32) -> Result<GgufMetadataValue> {
+fn read_value_of_type(cursor: &mut Cursor, ty: i32) -> Result<GgufMetadataValue> {
     Ok(match ty {
         0 => GgufMetadataValue::U8(cursor.read_u8()?),
         1 => GgufMetadataValue::I8(cursor.read_i8()?),
@@ -476,36 +482,52 @@ fn align_to(value: u64, alignment: u64) -> Result<u64> {
         .ok_or_else(|| BackendError::InvalidGguf("alignment overflow".to_string()))
 }
 
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+struct Cursor {
+    reader: File,
+    path: PathBuf,
+    pos: u64,
 }
 
-impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+impl Cursor {
+    fn new(reader: File, path: PathBuf) -> Self {
+        Self {
+            reader,
+            path,
+            pos: 0,
+        }
     }
-    fn position(&self) -> usize {
+    fn position(&self) -> u64 {
         self.pos
     }
 
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self
+    fn read_exact_into(&mut self, out: &mut [u8]) -> Result<()> {
+        self.reader.read_exact(out).map_err(|source| {
+            if source.kind() == ErrorKind::UnexpectedEof {
+                BackendError::InvalidGguf("unexpected end of file".to_string())
+            } else {
+                BackendError::Io {
+                    path: self.path.clone(),
+                    source,
+                }
+            }
+        })?;
+        self.pos = self
             .pos
-            .checked_add(n)
+            .checked_add(out.len() as u64)
             .ok_or_else(|| BackendError::InvalidGguf("cursor overflow".to_string()))?;
-        if end > self.bytes.len() {
-            return Err(BackendError::InvalidGguf(
-                "unexpected end of file".to_string(),
-            ));
-        }
-        let out = &self.bytes[self.pos..end];
-        self.pos = end;
+        Ok(())
+    }
+
+    fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>> {
+        let mut out = vec![0; n];
+        self.read_exact_into(&mut out)?;
         Ok(out)
     }
 
     fn read_u8(&mut self) -> Result<u8> {
-        Ok(self.read_bytes(1)?[0])
+        let mut b = [0; 1];
+        self.read_exact_into(&mut b)?;
+        Ok(b[0])
     }
     fn read_i8(&mut self) -> Result<i8> {
         Ok(self.read_u8()? as i8)
@@ -515,22 +537,22 @@ impl<'a> Cursor<'a> {
     }
     fn read_u16(&mut self) -> Result<u16> {
         let mut b = [0; 2];
-        b.copy_from_slice(self.read_bytes(2)?);
+        self.read_exact_into(&mut b)?;
         Ok(u16::from_le_bytes(b))
     }
     fn read_i16(&mut self) -> Result<i16> {
         let mut b = [0; 2];
-        b.copy_from_slice(self.read_bytes(2)?);
+        self.read_exact_into(&mut b)?;
         Ok(i16::from_le_bytes(b))
     }
     fn read_u32(&mut self) -> Result<u32> {
         let mut b = [0; 4];
-        b.copy_from_slice(self.read_bytes(4)?);
+        self.read_exact_into(&mut b)?;
         Ok(u32::from_le_bytes(b))
     }
     fn read_i32(&mut self) -> Result<i32> {
         let mut b = [0; 4];
-        b.copy_from_slice(self.read_bytes(4)?);
+        self.read_exact_into(&mut b)?;
         Ok(i32::from_le_bytes(b))
     }
     fn read_f32(&mut self) -> Result<f32> {
@@ -538,12 +560,12 @@ impl<'a> Cursor<'a> {
     }
     fn read_u64(&mut self) -> Result<u64> {
         let mut b = [0; 8];
-        b.copy_from_slice(self.read_bytes(8)?);
+        self.read_exact_into(&mut b)?;
         Ok(u64::from_le_bytes(b))
     }
     fn read_i64(&mut self) -> Result<i64> {
         let mut b = [0; 8];
-        b.copy_from_slice(self.read_bytes(8)?);
+        self.read_exact_into(&mut b)?;
         Ok(i64::from_le_bytes(b))
     }
     fn read_f64(&mut self) -> Result<f64> {
@@ -558,7 +580,7 @@ impl<'a> Cursor<'a> {
             )));
         }
         let bytes = self.read_bytes(len as usize)?;
-        String::from_utf8(bytes.to_vec())
+        String::from_utf8(bytes)
             .map_err(|_| BackendError::InvalidGguf("invalid UTF-8 string".to_string()))
     }
 }

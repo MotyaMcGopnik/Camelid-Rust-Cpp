@@ -96,15 +96,15 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .unwrap();
     assert_eq!(
         llama32_3b["status"],
-        "acceptance_target_blocked_before_first_token"
+        "acceptance_target_first_token_evidence_only"
     );
     assert_eq!(
         llama32_3b["generation_runs"],
-        "blocked_before_first_token_under_memory_pressure"
+        "one_backend_only_first_token_success"
     );
     assert_eq!(
         llama32_3b["tested_context"],
-        "api_load_only_guarded_first_chat_retry"
+        "backend_only_completion_prompt_hello_1_token"
     );
     let llama3 = compatibility
         .iter()
