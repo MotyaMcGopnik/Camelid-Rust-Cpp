@@ -82,15 +82,30 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .unwrap();
     assert_eq!(llama32_1b["status"], "evidence_only");
     assert_eq!(llama32_1b["metadata_parses"], "validated");
-    assert_eq!(llama32_1b["generation_runs"], "validated_for_one_compact_prompt");
-    assert_eq!(llama32_1b["tested_context"], "compact_header_hello_5_token_smoke");
+    assert_eq!(
+        llama32_1b["generation_runs"],
+        "validated_for_one_compact_prompt"
+    );
+    assert_eq!(
+        llama32_1b["tested_context"],
+        "compact_header_hello_5_token_smoke"
+    );
     let llama32_3b = compatibility
         .iter()
         .find(|item| item["id"] == "llama32_3b_instruct_q8_0")
         .unwrap();
-    assert_eq!(llama32_3b["status"], "acceptance_target_blocked_before_first_token");
-    assert_eq!(llama32_3b["generation_runs"], "blocked_before_first_token_under_memory_pressure");
-    assert_eq!(llama32_3b["tested_context"], "api_load_only_guarded_first_chat_retry");
+    assert_eq!(
+        llama32_3b["status"],
+        "acceptance_target_blocked_before_first_token"
+    );
+    assert_eq!(
+        llama32_3b["generation_runs"],
+        "blocked_before_first_token_under_memory_pressure"
+    );
+    assert_eq!(
+        llama32_3b["tested_context"],
+        "api_load_only_guarded_first_chat_retry"
+    );
     let llama3 = compatibility
         .iter()
         .find(|item| item["id"] == "llama3_8b_instruct_gguf")
