@@ -42,17 +42,47 @@ In plain terms: TinyLlama Q8_0 is the live supported gate; Llama 3.2 1B is a nar
 
 ## Current release ledger
 
-The table below is the authoritative row-by-row support ledger reflected in `/api/capabilities`.
+The compact table below is the authoritative release ledger reflected in `/api/capabilities`. It is intentionally short: what is the row, how far along is it, what is already true, and what must happen next.
 
-| Target | Family | Quant | Status | Validated now | Missing gates | Promotion blocker |
-| --- | --- | --- | --- | --- | --- | --- |
-| TinyLlama 1.1B Chat Q8_0 | LLaMA/SPM decoder | Q8_0 | Supported current gate | Metadata, tokenizer, tensors, generation, parity, performance envelope, and frontend readiness are all validated for the five-prompt, 50-token gate. | No missing release gates for the current supported claim. | Preserve the existing gate and avoid regressions while expanding adjacent rows separately. |
-| Llama 3.2 1B Instruct Q8_0 | LLaMA decoder + Llama 3 BPE | Q8_0 | Evidence only / not a supported gate | Metadata is validated, the compact `hello` tokenizer path is validated, tensors load, and one prompt matches llama.cpp for five deterministic generated tokens `[9906,0,2650,649,358]` / `"Hello! How can I"`. | Repeat bounded generation, broader prompt coverage, stronger memory/performance evidence, API readiness, and frontend readiness. | This row has useful narrow parity evidence, but not enough exact-row evidence to promote it beyond evidence-only. |
-| Llama 3.2 3B Instruct Q8_0 | LLaMA decoder + Llama 3 BPE | Q8_0 | Acceptance target / first-token evidence only | The exact tracked GGUF is present, metadata/API load is validated, the file-backed lazy-Q8 seam is partially wired, and one Ubuntu backend-only `/v1/completions` probe returned one token for `hello`. | Prompt-token parity, second bounded first-token success, short-generation parity, API smoke, WebUI readiness, and stronger memory follow-up evidence. | Support remains frozen until Camelid has repeat bounded success plus exact-row prompt-token/parity/short-generation/API/WebUI evidence. |
-| Llama 3 8B Instruct Q8_0 | LLaMA decoder + Llama 3 BPE | Q8_0 | Groundwork only / first-token evidence only | Metadata/config/template handling is fixture-guarded, tokenizer reference parity is guarded, lazy/file-backed Q8 execution reached one bounded Ubuntu backend-only first-token artifact for `hello`, and one bounded memory trace exists. | Second bounded first-token success, prompt-token parity, short-generation evidence, API readiness, frontend readiness, and a clearly passed memory gate for the exact acceptance criteria. | This row now has real runtime evidence, but only as a single backend-only first-token artifact; it is not yet validated like the TinyLlama support row. |
-| LLaMA/SPM Q4_0/Q5_0 | LLaMA/SPM decoder | Q4_0/Q5_0 | Planned Phase 10 | Descriptor parsing is guarded and unsupported behavior is typed. | Real dequant/matmul support, runtime generation, parity, memory/performance evidence, API readiness, and frontend readiness. | CPU f32 loading still rejects these rows until actual quant runtime support exists. |
-| LLaMA/SPM Q4_K_M/Q5_K_M | LLaMA/SPM decoder | Q4_K_M/Q5_K_M | Planned Phase 10 | Initial planning boundary only. | Loader, matmul, runtime generation, parity, memory/performance evidence, API readiness, and frontend readiness. | Start only after simpler Q4_0/Q5_0 rows have concrete artifact-backed support work. |
-| Mistral GGUF | Mistral | Not selected | Planned model family | No validated release evidence yet. | Concrete target selection, tokenizer/chat-template fixtures, tensor/runtime path, generation, parity, memory/performance, API readiness, and frontend readiness. | No exact row has been selected or validated yet, so Camelid must not imply support. |
+| Lane | Status | What Camelid can honestly say now | Next gate |
+| --- | --- | --- | --- |
+| TinyLlama 1.1B Chat Q8_0 | Supported | End-to-end generation, parity, performance envelope, and frontend readiness are validated for the five-prompt, 50-token gate. | Preserve the current supported lane without regressions. |
+| Llama 3.2 1B Instruct Q8_0 | Evidence only | One compact `hello` prompt matches llama.cpp for five deterministic generated tokens; metadata, tokenizer path, and tensor loading are in place. | Add repeat bounded generation, broader prompt coverage, stronger memory/performance evidence, and API/frontend readiness. |
+| Llama 3.2 3B Instruct Q8_0 | Acceptance target / first-token evidence only | The exact tracked GGUF loads through `/api/models/load`, the lazy/file-backed Q8 seam is partially wired, and one Ubuntu backend-only `/v1/completions` probe returned a first token for `hello`. | Add a second bounded success, prompt-token parity, short-generation parity, API smoke, WebUI readiness, and stronger memory follow-up evidence. |
+| Llama 3 8B Instruct Q8_0 | Groundwork only / first-token evidence only | Fixture-guarded metadata/template handling exists, tokenizer reference parity is guarded, and one bounded Ubuntu backend-only first-token artifact now exists for `hello`. | Add a second bounded success, prompt-token parity, short-generation evidence, API/frontend readiness, and a clearly passed memory gate. |
+
+### Row details
+
+#### TinyLlama 1.1B Chat Q8_0
+- **Family / quant:** LLaMA/SPM decoder, Q8_0
+- **Validated now:** metadata, tokenizer, tensors, generation, parity, performance envelope, and frontend readiness
+- **Promotion blocker:** none for the current supported claim
+
+#### Llama 3.2 1B Instruct Q8_0
+- **Family / quant:** LLaMA decoder + Llama 3 BPE, Q8_0
+- **Validated now:** metadata is validated, the compact `hello` tokenizer path is validated, tensors load, and one prompt matches llama.cpp for five deterministic generated tokens `[9906,0,2650,649,358]` / `"Hello! How can I"`
+- **Missing gates:** repeat bounded generation, broader prompt coverage, stronger memory/performance evidence, API readiness, and frontend readiness
+- **Promotion blocker:** useful narrow parity evidence exists, but not enough exact-row evidence to promote beyond evidence-only
+
+#### Llama 3.2 3B Instruct Q8_0
+- **Family / quant:** LLaMA decoder + Llama 3 BPE, Q8_0
+- **Validated now:** the exact tracked GGUF is present, metadata/API load is validated, the file-backed lazy-Q8 seam is partially wired, and one Ubuntu backend-only `/v1/completions` probe returned one token for `hello`
+- **Missing gates:** prompt-token parity, second bounded first-token success, short-generation parity, API smoke, WebUI readiness, and stronger memory follow-up evidence
+- **Promotion blocker:** support remains frozen until Camelid has repeat bounded success plus exact-row prompt-token/parity/short-generation/API/WebUI evidence
+
+#### Llama 3 8B Instruct Q8_0
+- **Family / quant:** LLaMA decoder + Llama 3 BPE, Q8_0
+- **Validated now:** metadata/config/template handling is fixture-guarded, tokenizer reference parity is guarded, lazy/file-backed Q8 execution reached one bounded Ubuntu backend-only first-token artifact for `hello`, and one bounded memory trace exists
+- **Missing gates:** second bounded first-token success, prompt-token parity, short-generation evidence, API readiness, frontend readiness, and a clearly passed memory gate for the exact acceptance criteria
+- **Promotion blocker:** this row now has real runtime evidence, but only as a single backend-only first-token artifact; it is not yet validated like the TinyLlama support row
+
+### Planned lanes
+
+| Lane | Current state | Main blocker |
+| --- | --- | --- |
+| LLaMA/SPM Q4_0 / Q5_0 | Descriptor parsing is guarded and unsupported behavior is typed. | Real dequant/matmul support and full runtime evidence do not exist yet. |
+| LLaMA/SPM Q4_K_M / Q5_K_M | Initial planning boundary only. | Start after simpler Q4_0/Q5_0 rows have concrete artifact-backed support work. |
+| Mistral GGUF | No validated release evidence yet. | A concrete target row, tokenizer/template fixtures, and runtime evidence still need to be selected and built. |
 
 ## Status-promotion checklist
 
