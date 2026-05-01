@@ -17,7 +17,7 @@ Treat the labels below as release language, not implementation optimism:
 
 ## Current release posture
 
-Camelid's public support language is intentionally narrow, evidence-bound, and easy to audit. The four rows below are the entire release posture Camelid may claim today, and every public surface should reduce back to this same ledger.
+Camelid's public support language is intentionally narrow, evidence-bound, and easy to audit. The rows below are the entire release posture Camelid may claim today, and every public surface should reduce back to this same ledger.
 
 - **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 is the only supported generation lane today. Camelid matches known-good llama-server behavior across the five-prompt, 50-token TinyLlama audit, including prompt token IDs, generated token arrays, and generated text.
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 has one compact-header `hello` prompt that matches llama.cpp for five deterministic generated tokens. That is useful evidence, not broader Llama 3 support.

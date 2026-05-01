@@ -2,11 +2,11 @@
 
 Last updated: 2026-05-01
 
-`ROADMAP.md` is Camelid's delivery plan of record. It is not a backlog and it is not a feature wish list. It answers one product question: **what must happen next for Camelid to widen its support boundary without weakening credibility?** The sequence is deliberate: protect the supported lane, remove the next exact blocker, and widen claims only when the resulting evidence can survive scrutiny.
+`ROADMAP.md` is Camelid's delivery plan of record. It is not a backlog and it is not a feature wish list. It answers one product question: **what must happen next for Camelid to widen its support boundary without weakening credibility?** The sequencing is intentional: protect the supported lane, remove the next exact blocker, and widen claims only when the resulting evidence can survive scrutiny.
 
-[`COMPATIBILITY.md`](COMPATIBILITY.md) defines what Camelid can honestly support today. [`STATUS.md`](STATUS.md) records the artifacts, evidence boundaries, and blocker state behind that posture. Detailed completed-phase history lives in `ROADMAP_ARCHIVE.md` and `STATUS.md`. Read this file as sequencing, not aspiration.
+[`COMPATIBILITY.md`](COMPATIBILITY.md) defines what Camelid can honestly support today. [`STATUS.md`](STATUS.md) records the artifacts, evidence boundaries, and blocker state behind that posture. Detailed completed-phase history lives in `ROADMAP_ARCHIVE.md` and `STATUS.md`. Read this file as operating sequence, not aspiration.
 
-Executive summary: Camelid already has one supported release gate. The roadmap exists to earn the next exact row without relaxing the evidence standard or letting implementation progress outrun public claims.
+Executive summary: Camelid already has one supported release gate. This roadmap exists to earn the next exact row without relaxing the evidence standard or letting implementation progress outrun public claims.
 
 ## Program objective
 

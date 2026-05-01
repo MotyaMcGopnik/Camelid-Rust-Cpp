@@ -4,21 +4,21 @@
 
 ![Camelid banner](assets/camelid-banner.png)
 
-Camelid is a Rust-native local inference backend for GGUF language models. It is being built for teams that want a local-model stack with explicit support boundaries, reproducible validation artifacts, and release language that stays inside the evidence.
+Camelid is a Rust-native local inference backend for GGUF language models. It is being built for teams that want a local-model stack whose claims can be audited: exact support rows, reproducible validation artifacts, and release language that never outruns the evidence.
 
-Most local-inference READMEs optimize for breadth. Camelid optimizes for auditability. A row is not "supported" because it parses metadata, tokenizes a prompt, or partially runs once. Camelid promotes a row only when runtime behavior, API capability reporting, frontend readiness, documentation, and artifact-backed validation all agree for the exact model, tokenizer path, and quantization being claimed.
+Most local-inference READMEs optimize for breadth. Camelid optimizes for credibility. A row is not "supported" because metadata parses, a tokenizer round-trips, or a prompt partially runs once. Camelid promotes a row only when runtime behavior, API capability reporting, frontend readiness, documentation, and artifact-backed validation all agree for the exact model, tokenizer path, and quantization being claimed.
 
-Camelid is also in a naming transition. **Camelid** is the product name; the repository, crate, binary, some API diagnostics, and several scripts still use `backendinference`. Keep current commands, package identifiers, and tests on those names until a separate rename plan is validated.
+Camelid is also mid-transition in naming. **Camelid** is the product name; the repository, crate, binary, some API diagnostics, and several scripts still use `backendinference`. Keep current commands, package identifiers, and tests on those names until a separate rename plan is validated.
 
-Camelid is original Rust code, and it keeps visible credit for the reference tooling behind tokenizer checks, compatibility baselines, and parity evidence. In particular, llama.cpp / ggml remains explicitly acknowledged here and in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) because Camelid still relies on it as a MIT-licensed inspiration, tokenizer reference, compatibility baseline, and parity benchmark.
+Camelid is original Rust code. It also keeps visible credit for the reference work behind tokenizer checks, compatibility baselines, and parity evidence. In particular, llama.cpp / ggml remains explicitly acknowledged here and in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) because Camelid still relies on it as a MIT-licensed inspiration, tokenizer reference, compatibility baseline, and parity benchmark.
 
-## Front-door release posture
+## Executive snapshot
 
-If you are evaluating Camelid quickly, this is the current public boundary:
+If you are evaluating Camelid quickly, this is the current release boundary:
 
 - **Supported generation today:** TinyLlama 1.1B Chat Q8_0.
 - **Useful evidence, not support:** Llama 3.2 1B Instruct Q8_0 has one compact-header `hello` prompt that matches llama.cpp for five deterministic generated tokens.
-- **Next acceptance target:** Llama 3.2 3B Instruct Q8_0. The exact tracked GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, but the guarded first chat still stops before any generated token under host free-page pressure.
+- **Next exact acceptance target:** Llama 3.2 3B Instruct Q8_0. The exact tracked GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, but the guarded first chat still stops before any generated token under host free-page pressure.
 - **Groundwork only:** Llama 3 8B Instruct Q8_0 has tokenizer/config/Q8 groundwork, but generation remains unsupported until lazy or on-demand Q8 execution and bounded parity and memory evidence land.
 - **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
@@ -26,7 +26,7 @@ Nothing adjacent inherits support. Model family, quantization, tokenizer path, A
 
 ## Current support ledger
 
-This same four-row ledger is reflected in [`COMPATIBILITY.md`](COMPATIBILITY.md), [`STATUS.md`](STATUS.md), `/api/capabilities`, and frontend readiness copy. If another surface sounds broader, treat it as stale and bring it back to this matrix.
+This four-row ledger is the front door for the product. The same boundary should appear in [`COMPATIBILITY.md`](COMPATIBILITY.md), [`STATUS.md`](STATUS.md), `/api/capabilities`, and frontend readiness copy. If another surface sounds broader, treat it as stale and bring it back to this matrix.
 
 | Exact lane | Release posture | Evidence Camelid has today | What Camelid does **not** yet claim |
 | --- | --- | --- | --- |
