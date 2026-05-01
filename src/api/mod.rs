@@ -2186,6 +2186,7 @@ fn generate_token_ids(
             prepared.session = cached.session.clone();
             input.clear();
             let first_step = sample_cached_prompt_prefix(&cached, &history)?;
+            let cached_next_token = first_step.next_token_id;
             sample += first_step.sample;
             reused_prompt_prefix = true;
             prepared.timings.prompt_cache_hit = true;
@@ -2201,6 +2202,9 @@ fn generate_token_ids(
                     finish_reason: &mut finish_reason,
                 },
             )?;
+            if finish_reason == "length" {
+                input.push(cached_next_token);
+            }
         }
     }
 
@@ -2979,6 +2983,27 @@ mod tests {
     }
 
     #[test]
+    fn cached_prompt_prefix_followed_by_longer_completion_keeps_generating() {
+        let config = tiny_config();
+        let weights = tiny_weights();
+        let mut session = LlamaInferenceSession::new(config, weights).unwrap();
+        let step = session
+            .generate_next_token_with_history_diagnostics(
+                &[1, 2],
+                crate::inference::LlamaSampler::Greedy,
+                &[1, 2],
+                false,
+            )
+            .unwrap();
+        let prepared = prepared_for_cache("tiny", "model-a.gguf", vec![1, 2], session);
+        store_prompt_prefix_cache(&prepared, &step);
+
+        let generated = generate_token_ids(prepared).expect("cached generation should succeed");
+
+        assert!(!generated.token_ids.is_empty());
+        assert!(generated.token_ids.len() >= 1);
+    }
+
     fn renders_tinyllama_marker_prompt_with_eos_newline_and_assistant_prefix() {
         let tokenizer = Tokenizer {
             model: TokenizerModel::LlamaSpm,
