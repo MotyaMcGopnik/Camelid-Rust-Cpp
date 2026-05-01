@@ -12,12 +12,14 @@ Executive summary: runtime capability improved at the blocker seam, but the publ
 
 Camelid follows the same four-lane release ledger across the README, compatibility matrix, API capability reporting, and frontend readiness copy. If another surface sounds broader, treat it as stale and bring it back to this ledger. The purpose of this file is simple: record exactly what the current evidence can defend, no more and no less.
 
+Reading rule for the matrix: each row should answer three questions in plain English — what is validated now, what gates are still missing, and what exact blocker prevents promotion to the next release label.
+
 For a fast read, the current answer is:
 
 - **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 remains the only supported end-to-end generation lane.
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 remains narrow evidence only.
-- **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 remains below supported generation until lazy or on-demand Q8 execution and bounded parity and memory evidence exist.
 - **Acceptance target:** Llama 3.2 3B Instruct Q8_0 remains the exact WebUI target. The exact GGUF now loads successfully through `/api/models/load` with low backend RSS, and one healthy Ubuntu backend-only first-token success artifact exists, but this is still not a supported row. Support remains frozen until repeat bounded success plus prompt-token/parity/short-generation/API/WebUI evidence exists.
+- **Groundwork-only lane with first-token evidence:** Llama 3 8B Instruct Q8_0 still sits below supported generation, but it now has one healthy Ubuntu backend-only first-token artifact on the exact tracked Q8_0 GGUF. Support remains frozen until stronger bounded parity, repeatability, API, and readiness evidence exists.
 - **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
 Two standing rules apply to every row:
@@ -35,8 +37,8 @@ Recent work improved the blocker seam without changing the release ledger:
 
 - TinyLlama Q8_0 remains the trusted supported gate.
 - Llama 3.2 1B Q8_0 remains informative evidence only.
-- Llama 3 8B Q8_0 remains groundwork-only until lazy or on-demand execution is wired through attention, FFN, and output projection and then validated with bounded artifacts.
 - Llama 3.2 3B Q8_0 now has exact-GGUF metadata/API load success with low backend RSS after streaming metadata parsing, file-backed lazy-Q8 recovery materially reduced the earlier eager dense-load spike, and one healthy Ubuntu backend-only first-token success artifact. That is blocker-seam progress, not a support change.
+- Llama 3 8B Q8_0 remains groundwork-only in release terms, but the lane now has one healthy Ubuntu backend-only first-token artifact on top of the earlier lazy/file-backed Q8 execution work.
 
 Bottom line: the engineering seam moved forward, but no new support claim was earned.
 
@@ -99,19 +101,21 @@ Promotion remains blocked until Camelid has at least two consecutive bounded suc
 
 ### Llama 3 8B Instruct Q8_0
 
-Status: **groundwork only / generation blocked**
+Status: **groundwork only / first-token evidence only**
 
 Current evidence boundary:
 
 - Metadata, config, tokenizer, and chat-template handling are fixture-guarded.
 - Independent tokenizer reference fixtures exist.
-- Q8_0 retained-block loading and serial row/all-row dot groundwork exist.
-- Generation remains blocked until lazy or on-demand Q8 execution is wired through attention, FFN, and output projection and then validated with bounded artifacts.
+- Lazy/file-backed Q8 execution is now good enough for one healthy Ubuntu backend-only first-token artifact on the exact tracked Q8_0 GGUF.
+- `/api/models/load` succeeded and `/v1/completions` with prompt `hello`, `max_tokens=1`, `temperature=0` returned text `,` while the required forward trace reached `layer_0_attention_q_done` and `first_token_success_or_fail=success`.
+- Camelid still does not claim 8B prompt-token parity, repeat bounded success, API/frontend readiness, or supported generation for this row.
 
 Representative artifacts:
 
 - `target/backend-small-model-readiness-20260429T131209Z/`
 - `target/perf-cron-20260429T122814Z-single-row-adapter-head-da53871/`
+- `target/ubuntu-llama3-8b-q8-first-token-20260501T2152Z/`
 
 ## Latest promotion-relevant work
 
@@ -125,17 +129,27 @@ Recent backend work kept the support contract unchanged while improving the 3B e
 
 - streaming metadata parsing moved `/api/models/load` to low backend RSS for the exact 3B artifact
 - file-backed Q8 linear handling reduced the older eager dense-load spike
-- one healthy Ubuntu backend-only `/v1/completions` probe produced a first token while keeping backend RSS near 331 MiB
+- one healthy Ubuntu backend-only `/v1/completions` probe produced a first token for the exact tracked 3B row
 
 This is useful blocker-reduction and first-token evidence, not a support promotion.
+
+### Llama 3 8B first-token groundwork
+
+Recent backend work also produced the first bounded 8B runtime artifact without widening the release boundary:
+
+- the exact tracked `Meta-Llama-3-8B-Instruct-Q8_0.gguf` loaded successfully on Ubuntu
+- one healthy backend-only `/v1/completions` probe returned the first token `,` for prompt `hello`
+- the required trace reached `first_token_success_or_fail=success` while backend RSS trace stayed roughly `269068 -> 273804 KiB`
+
+This is promising seam evidence, but still not a support promotion.
 
 ## Next blocking work
 
 In order of importance:
 
 1. Preserve the TinyLlama Q8_0 supported gate.
-2. Finish lazy or on-demand Q8 execution for larger LLaMA-family rows.
-3. Capture bounded first-token and short-generation evidence for Llama 3.2 3B Q8_0.
+2. Capture the second bounded Llama 3.2 3B Q8_0 success plus prompt-token, short-generation, API, and WebUI evidence for the exact target row.
+3. Re-run Llama 3 8B Q8_0 with a second bounded first-token slice, then extend toward short-generation/parity evidence without changing support language early.
 4. Keep docs, `/api/capabilities`, and frontend readiness copy aligned with the exact-row support contract.
 
 ## Validation note
