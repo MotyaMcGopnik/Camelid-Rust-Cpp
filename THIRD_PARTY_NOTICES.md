@@ -12,18 +12,11 @@ Practical rule: documentation cleanup, branding polish, or repository renaming m
 
 ## Current credited reference work
 
-Camelid is an independent Rust-native local inference project. Its implementation is original, but
-parts of its public credibility story — especially compatibility comparisons, tokenizer references,
-parity harnesses, and benchmark evidence — rely on important open-source reference work. Those
-references travel through the README, compatibility matrix, status ledger, and release-note claims
-whenever Camelid cites parity-backed evidence.
+Camelid is an independent Rust-native local inference project. Its implementation is original, but parts of its public credibility story — especially compatibility comparisons, tokenizer references, parity harnesses, and benchmark evidence — rely on important open-source reference work. Those references travel through the README, compatibility matrix, status ledger, and release-note claims whenever Camelid cites parity-backed evidence.
 
 ### llama.cpp / ggml
 
-Camelid uses llama.cpp as a compatibility and parity reference for GGUF model behavior, tokenizer
-fixtures, and local inference validation. This is not incidental credit: those references remain
-part of Camelid's documented evidence trail and should stay explicitly credited wherever that
-evidence is summarized or redistributed.
+Camelid uses llama.cpp as a compatibility and parity reference for GGUF model behavior, tokenizer fixtures, and local inference validation. This is not incidental credit: those references remain part of Camelid's documented evidence trail and should stay explicitly credited wherever that evidence is summarized or redistributed.
 
 - Project: <https://github.com/ggml-org/llama.cpp>
 - License: MIT
@@ -54,7 +47,4 @@ SOFTWARE.
 
 ## Maintenance note
 
-Keep this file in sync with any third-party source, binary, fixture, or reference tooling
-Camelid redistributes or materially depends on for public evidence. Documentation polish, branding
-cleanup, or repository renaming work must not remove these credits while the underlying technical
-reliance still exists.
+Keep this file in sync with any third-party source, binary, fixture, or reference tooling Camelid redistributes or materially depends on for public evidence. Documentation polish, branding cleanup, or repository renaming work must not remove these credits while the underlying technical reliance still exists.

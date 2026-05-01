@@ -24,6 +24,8 @@ Current program posture:
 
 Nothing inherits support from a nearby size, quantization, family, tokenizer lane, API surface, or UI state.
 
+Near-term thesis: protect the trusted TinyLlama gate, turn Llama 3 groundwork into bounded runtime evidence, and keep every public surface synchronized with the exact support boundary.
+
 ## Roadmap operating rules
 
 Three rules drive prioritization and sequencing:

@@ -8,7 +8,7 @@ Use this document to answer one release question: **may Camelid honestly say thi
 
 Practical reading rule: if a statement cannot be reduced to an exact row in this file, Camelid should not publish that statement as product truth.
 
-## How to use this matrix
+## Release-language definitions
 
 Treat the labels below as release language, not implementation optimism:
 
@@ -17,15 +17,17 @@ Treat the labels below as release language, not implementation optimism:
 - **Acceptance target** means Camelid has chosen the next exact lane to prove, not that runtime support already exists.
 - **Groundwork only** means implementation or validation pieces exist, but the product must still say `not supported` until the blocking runtime and evidence work are complete.
 
-## Current release posture
+## Executive release posture
 
-Camelid's public support language is intentionally narrow, evidence-bound, and easy to audit. For executive review, the current answer is short:
+Camelid's public support language is intentionally narrow, evidence-bound, and easy to audit. For an executive read, the current answer is short:
 
 - **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 is the only supported generation lane today. Camelid matches known-good llama-server behavior across the five-prompt, 50-token TinyLlama audit, including prompt token IDs, generated token arrays, and generated text.
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 has one compact-header `hello` prompt that matches llama.cpp for five deterministic generated tokens. That is useful evidence, not broader Llama 3 support.
 - **Acceptance target:** Llama 3.2 3B Instruct Q8_0 is the exact next WebUI real-chat target. The exact tracked GGUF is present locally, `/api/models/load` succeeds with low backend RSS after streaming metadata parsing, and the latest file-backed lazy-Q8 retry shows the earlier eager dense-load spike is materially reduced. The first guarded chat still stops before any token under host free-page pressure, so no 3B prompt-token, first-token, short-generation, parity, or WebUI evidence should be inferred from the 1B or 8B rows.
 - **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 has metadata/config/tokenizer/template evidence, independent tokenizer reference fixtures, a materialization-budget guard, Q8_0 block-only retained-weight groundwork, and serial row/all-row dot primitives in place, but generation remains blocked until lazy or on-demand Q8_0 linear execution is wired through attention, FFN, and output projection and QA captures bounded first-token parity and memory evidence.
 - **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
+
+Nothing adjacent inherits support. Support does not spread across nearby sizes, neighboring quantizations, matching tokenizers, or partial runtime seams.
 
 ## Governing rules
 

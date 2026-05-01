@@ -27,6 +27,8 @@ Two standing rules apply to every row:
 
 For the formal support ledger, see [`COMPATIBILITY.md`](COMPATIBILITY.md). For sequencing, see [`ROADMAP.md`](ROADMAP.md).
 
+Bottom line for reviewers: Camelid has one supported generation lane, one narrow evidence lane, one blocked acceptance target, and one larger-model groundwork lane. Recent work improved the blocker seam, but it did not earn broader release language.
+
 ## What improved without changing the support line
 
 Recent work improved the blocker seam without changing the release ledger:
