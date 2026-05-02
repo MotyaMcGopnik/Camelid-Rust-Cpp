@@ -12,39 +12,28 @@ Many local-inference projects optimize for breadth of apparent compatibility. Ca
 
 **Reference-credit note.** Camelid is original Rust code, and it keeps visible credit for the reference work behind tokenizer checks, compatibility baselines, and parity evidence. In particular, llama.cpp / ggml remains explicitly acknowledged here and in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) because Camelid still relies on it as a MIT-licensed inspiration, tokenizer reference, compatibility baseline, and parity benchmark.
 
-## Executive brief
+## What Camelid is today
 
-If you are evaluating Camelid quickly, this is the current public release boundary:
+Camelid is a local GGUF inference server with a deliberately small public support line and a growing validation bench behind it. The goal is simple: make local models feel boringly dependable — load the exact row, expose honest readiness, and generate through an API and WebUI without pretending nearby models are supported.
 
-- **Supported generation today:** TinyLlama 1.1B Chat Q8_0.
-- **New Llama 3-family validation, not a support expansion:** Camelid now has exact-row validation for tracked Llama 3-family lanes, but no Llama 3-family lane is supported today.
-  - **Llama 3.2 1B Instruct Q8_0:** one compact-header `hello` prompt matches llama.cpp through the full bounded run on Ubuntu; prompt tokens, generated token IDs, and generated text all matched for the completed response.
-  - **Llama 3.2 3B Instruct Q8_0:** the exact tracked GGUF now has compact-header `hello` prompt-token parity plus deterministic 1-token, 5-token, and bounded 50-token generation parity against llama.cpp on Ubuntu, in addition to successful `/api/models/load` evidence.
-  - **Llama 3 8B Instruct Q8_0:** the exact tracked Q8_0 GGUF now has compact-header `hello` prompt-token parity plus deterministic 1-token, 5-token, and bounded 50-token generation parity against llama.cpp on Ubuntu, alongside basic API smoke and bounded-memory evidence.
-- **Public support contract stays unchanged:** 1B remains evidence-only, 3B remains an acceptance target, 8B remains groundwork-only in release terms, and no Llama 3-family row is a supported generation lane today.
+The current product slice includes:
 
-Nothing adjacent inherits support. The same family is not enough. The same quantization is not enough. The same tokenizer path is not enough. Camelid treats every public claim as row-specific.
+- a Rust server with OpenAI-compatible completions and chat endpoints
+- GGUF metadata/tensor parsing, tokenizer binding, and typed unsupported-state errors
+- exact-row capability reporting through `/api/capabilities`
+- a React/Vite WebUI that only unlocks chat when runtime readiness and support-contract readiness both agree
+- parity harnesses against llama.cpp so support moves by evidence, not vibes
 
-## Release ledger at a glance
+## Current support line
 
-This four-row ledger is Camelid's front door. The same boundary should appear in [`COMPATIBILITY.md`](COMPATIBILITY.md), [`STATUS.md`](STATUS.md), `/api/capabilities`, and frontend readiness copy. If another surface sounds broader, treat it as stale and bring it back to this matrix.
-
-| Exact lane | Release posture | Evidence Camelid has today | What Camelid does **not** yet claim |
+| Exact lane | Public posture | Evidence today | Still needed |
 | --- | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 | Supported current gate | Five 50-token prompt audits match known-good llama-server prompt token IDs, generated token arrays, and generated text. | No implied support for adjacent TinyLlama quantizations or other model families. |
-| Llama 3.2 1B Instruct Q8_0 | Evidence only | One compact-header `hello` prompt matches llama.cpp on Ubuntu for prompt tokens, generated token IDs, and generated text through the completed bounded run. | No broader Llama 3 support claim, no broader prompt-pack claim, and no neighboring 3B or 8B promotion. |
-| Llama 3.2 3B Instruct Q8_0 | Acceptance target with compact parity evidence | The exact tracked GGUF is present locally; that exact GGUF succeeds through `/api/models/load`; and the compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on Ubuntu. | Not a supported row. Broader prompt/chat-template coverage, API readiness, WebUI readiness, and stronger performance evidence are still required before any support promotion. |
-| Llama 3 8B Instruct Q8_0 | Groundwork only with compact parity validation | The exact tracked Q8_0 GGUF now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, deterministic 5-token, and bounded 50-token parity, with basic API smoke and bounded memory evidence alongside it. | No supported generation, broader prompt/chat-template parity, WebUI readiness, performance, or portable-packaging claim until exact-row follow-up evidence exists. |
+| Llama 3.2 1B Instruct Q8_0 | Evidence only | One compact-header `hello` prompt matches llama.cpp on Ubuntu for prompt tokens, generated token IDs, and generated text through the completed bounded run. | Broader prompt coverage and aligned API/WebUI support language before promotion. |
+| Llama 3.2 3B Instruct Q8_0 | Acceptance target with compact parity evidence | Exact GGUF load succeeds; compact-header `hello` matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation. | Broader prompt/chat-template coverage, API smoke, WebUI smoke, and stronger perf evidence. |
+| Llama 3 8B Instruct Q8_0 | Groundwork only with compact parity validation | Compact-header `hello` matches llama.cpp for prompt-token, 1-token, 5-token, and bounded 50-token parity, with basic API smoke and bounded-memory evidence. | Broader prompt/chat-template parity, WebUI readiness, performance envelope, and portable packaging evidence. |
 
-## What would need to change before the support line moves
-
-The current ledger is intentionally strict. Here is the shortest honest description of what each non-supported row still needs before Camelid can widen release language:
-
-- **Llama 3.2 1B Instruct Q8_0:** move beyond the single compact-header `hello` slice into broader prompt coverage before this row can become more than evidence-only.
-- **Llama 3.2 3B Instruct Q8_0:** keep the exact acceptance target narrow until Camelid has at least two consecutive bounded successes plus prompt-token parity, short-generation parity, API evidence, and WebUI evidence for the same exact GGUF.
-- **Llama 3 8B Instruct Q8_0:** treat the new backend-only first-token, short-generation, and API-smoke artifacts as groundwork until broader prompt/chat-template parity, WebUI readiness, and a defensible performance envelope exist for the same exact row.
-
-That means the practical public answer is still simple: TinyLlama is supported today; 1B is evidence-only; 3B is the blocked acceptance target with compact parity evidence; 8B is groundwork-only with compact parity validation.
+TinyLlama is the only supported generation lane today. The Llama 3-family work is real progress, but it is not a support expansion yet. Nothing adjacent inherits support.
 
 ## Start here
 
@@ -55,17 +44,11 @@ For most readers, the fastest path through the repo is:
 3. [`ROADMAP.md`](ROADMAP.md) — the ordered path to the next support expansion.
 4. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — the reference-tool and MIT-license notices behind Camelid's public evidence trail.
 
-## Why the release bar is strict
+## How support moves
 
-Camelid is being built as a dependable local-model backend, not as a broad compatibility claim padded with caveats. If a skeptical reviewer could not trace a statement back to exact, row-specific artifacts, Camelid should not publish that statement yet.
+Camelid promotes a row only when runtime behavior, API capability reporting, frontend readiness, docs, and artifact-backed validation all agree for the exact model, tokenizer path, and quantization being claimed.
 
-Three rules govern implementation work and public communication:
-
-- **Exact-row support.** Support does not spread by resemblance.
-- **Aligned public surfaces.** README, [`COMPATIBILITY.md`](COMPATIBILITY.md), [`STATUS.md`](STATUS.md), `/api/capabilities`, and frontend readiness copy should describe the same boundary.
-- **Visible reference credit.** When Camelid cites parity, tokenizer references, or compatibility baselines, llama.cpp / ggml stays visibly credited.
-
-For the governing support ledger, see [`COMPATIBILITY.md`](COMPATIBILITY.md). For the current evidence snapshot and blockers, see [`STATUS.md`](STATUS.md). For milestone sequencing, see [`ROADMAP.md`](ROADMAP.md).
+That keeps the product honest without making the front door miserable: run what is supported, inspect what is being validated, and treat every promotion as an exact-row release decision.
 
 ## What Camelid can prove today
 
