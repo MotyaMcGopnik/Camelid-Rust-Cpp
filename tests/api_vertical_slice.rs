@@ -95,12 +95,12 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_3b["status"], "supported_exact_row_smoke");
     assert_eq!(
         llama32_3b["generation_runs"],
-        "api_completion_and_chat_smoke_plus_small_prompt_pack"
+        "api_completion_and_chat_smoke_plus_five_prompt_api_smoke"
     );
     assert_eq!(llama32_3b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_3b["tested_context"],
-        "short_api_webui_smoke_plus_five_prompt_pack"
+        "short_api_webui_smoke_with_compact_parity"
     );
     let llama3 = compatibility
         .iter()
@@ -117,11 +117,11 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     assert_eq!(
         llama3["generation_runs"],
-        "repeat_backend_only_5_token_generation_plus_50_token_artifact"
+        "basic_api_smoke_plus_compact_1_5_50_token_backend_generation"
     );
     assert_eq!(
         llama3["tested_context"],
-        "backend_only_completion_prompt_hello_5_and_50_tokens"
+        "compact_header_hello_prompt_1_5_50_tokens_backend_only"
     );
     let planned_quant = compatibility
         .iter()
