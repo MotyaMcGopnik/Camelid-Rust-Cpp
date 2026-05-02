@@ -73,12 +73,17 @@ Current evidence boundary:
 
 - One compact-header `hello` prompt matches llama.cpp through the completed bounded run on Ubuntu.
 - Prompt token IDs, generated token IDs, and generated text all match for the compact bounded response.
+- A canonical Discord QA bundle now also preserves the broader 5-prompt parity pack plus API and WebUI smoke evidence for this exact 1B row, but the row remains evidence-only until compatibility/API/frontend wording is aligned in one release-language pass.
 
 Representative artifacts:
 
 - `target/autonomous-small-model-parity-20260429T134615Z-head-9049492/llama32-1b-q8-chat-parity-5tok.json`
 - `target/qa-small-model-parity-20260429T1338Z-head-35bfd58/`
 - `target/parity-50tok-20260502T031820Z/llama32-1b-50tok/report.json`
+- `target/qa-discord-20260502T1832Z/PROMOTION_QA_SUMMARY.md`
+- `target/qa-discord-20260502T1832Z/llama32-1b-broad-canonical/summary.json`
+- `target/qa-discord-20260502T1832Z/llama32-1b-api-smoke/summary.json`
+- `target/qa-discord-20260502T1832Z/llama32-1b-webui-smoke/summary-node22b.txt`
 
 ### Llama 3.2 3B Instruct Q8_0
 
@@ -112,6 +117,7 @@ Latest broader-prompt result:
 - `target/parity-broad-20260502T033606Z/llama32-3b-p1/report.json` (`hello`) matched llama.cpp.
 - `target/parity-broad-20260502T033606Z/llama32-3b-p2/report.json` (`give me exactly three bullet points about alpacas`) matched llama.cpp.
 - `target/parity-broad-20260502T033606Z/llama32-3b-p3/report.json` exposed the current blocker: prompt tokens still matched, but Camelid returned fenced JSON while llama.cpp returned inline backticked JSON for `answer with valid JSON for {"ok":true,"value":2}`.
+- `target/qa-discord-20260502T1939Z/llama32-3b-json-repro-fix-evidence/report.json` preserves that exact blocker for follow-up: first generated token diverges immediately, no fix artifact exists yet, and promotion remains disallowed until the JSON prompt-pack rerun passes.
 - Until that exact-row divergence is fixed and the remaining broader prompts are rerun cleanly, this row stays below supported Ubuntu chat.
 
 ### Llama 3 8B Instruct Q8_0

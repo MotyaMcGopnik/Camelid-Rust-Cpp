@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+import { spawn } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+
+const args = parseArgs(process.argv.slice(2))
+const packPath = args.get('pack')
+const outDirArg = args.get('out-dir') || args.get('output-dir')
+const modelPathArg = args.get('model')
+const modelId = args.get('model-id') || process.env.LLAMA3_MODEL_ID || 'llama3-q8-pack'
+const prefix = args.get('prefix') || modelId
+const backendBase = (args.get('backend') || process.env.BACKENDINFERENCE_API_BASE || 'http://127.0.0.1:8181').replace(/\/$/, '')
+const llamaBase = (args.get('llama-url') || process.env.LLAMA3_LLAMA_SERVER_URL || 'http://127.0.0.1:8183').replace(/\/$/, '')
+const waitMs = Number.parseInt(args.get('wait-ms') || process.env.LLAMA3_WAIT_MS || '120000', 10)
+const requirePromptMatch = args.has('require-prompt-match') || process.env.LLAMA3_CHAT_REQUIRE_PROMPT_MATCH === '1'
+const requireGeneratedMatch = args.has('require-generated-match') || process.env.LLAMA3_CHAT_REQUIRE_GENERATED_MATCH === '1'
+const passthroughFlags = [
+  ['start-llama-server', args.has('start-llama-server') || process.env.LLAMA3_START_LLAMA_SERVER === '1'],
+]
+const passthroughArgs = [
+  ['llama-server', args.get('llama-server') || process.env.LLAMA3_LLAMA_SERVER],
+  ['llama-tokenize', args.get('llama-tokenize') || process.env.LLAMA3_LLAMA_TOKENIZE],
+]
+
+if (!packPath) throw new Error('--pack is required')
+if (!outDirArg) throw new Error('--out-dir is required')
+if (!modelPathArg) throw new Error('--model is required')
+if (!Number.isInteger(waitMs) || waitMs < 1) throw new Error(`--wait-ms must be a positive integer, got ${args.get('wait-ms')}`)
+
+const pack = JSON.parse(await readFile(resolve(packPath), 'utf8'))
+const prompts = Array.isArray(pack.prompts) ? pack.prompts : []
+if (prompts.length === 0) throw new Error(`${packPath} does not contain any prompts[] entries`)
+
+const outDir = resolve(outDirArg)
+const modelPath = resolve(modelPathArg)
+await mkdir(outDir, { recursive: true })
+
+const defaultMaxTokens = Number.parseInt(String(pack.defaults?.max_tokens ?? 50), 10)
+const summary = {
+  schema: 'camelid.llama3.prompt-pack-run.v1',
+  pack: {
+    id: pack.pack_id || null,
+    path: resolve(packPath),
+    prompt_count: prompts.length,
+  },
+  backend: backendBase,
+  llama_server: llamaBase,
+  model: modelPath,
+  model_id: modelId,
+  prefix,
+  wait_ms: waitMs,
+  require_prompt_match: requirePromptMatch,
+  require_generated_match: requireGeneratedMatch,
+  prompts: [],
+}
+
+let hadFailure = false
+for (let index = 0; index < prompts.length; index += 1) {
+  const prompt = prompts[index]
+  const promptId = prompt.id || `p${index + 1}`
+  const promptDir = join(outDir, `${prefix}-${promptId}`)
+  await mkdir(promptDir, { recursive: true })
+
+  const diagnosticsPath = join(promptDir, 'report.json')
+  const stdoutPath = join(promptDir, 'stdout.log')
+  const stderrPath = join(promptDir, 'stderr.log')
+  const commandPath = join(promptDir, 'command.txt')
+  const promptPath = join(promptDir, 'prompt.json')
+  const maxTokens = Number.parseInt(String(prompt.max_tokens ?? defaultMaxTokens), 10)
+  const commandArgs = [
+    resolve('scripts/chat-parity-llama3.mjs'),
+    '--backend', backendBase,
+    '--llama-url', llamaBase,
+    '--model', modelPath,
+    '--model-id', modelId,
+    '--message', String(prompt.message ?? ''),
+    '--max-tokens', String(maxTokens),
+    '--wait-ms', String(waitMs),
+    '--diagnostics-out', diagnosticsPath,
+  ]
+  if (requirePromptMatch) commandArgs.push('--require-prompt-match')
+  if (requireGeneratedMatch) commandArgs.push('--require-generated-match')
+  for (const [flag, enabled] of passthroughFlags) {
+    if (enabled) commandArgs.push(`--${flag}`)
+  }
+  for (const [flag, value] of passthroughArgs) {
+    if (value) commandArgs.push(`--${flag}`, String(value))
+  }
+
+  await writeFile(promptPath, `${JSON.stringify({ ...prompt, resolved_max_tokens: maxTokens }, null, 2)}\n`)
+  await writeFile(commandPath, `${shellJoin(process.execPath, commandArgs)}\n`)
+
+  const { code, stdout, stderr } = await run(process.execPath, commandArgs)
+  await writeFile(stdoutPath, stdout)
+  await writeFile(stderrPath, stderr)
+
+  let report = null
+  try {
+    report = JSON.parse(await readFile(diagnosticsPath, 'utf8'))
+  } catch {
+    report = null
+  }
+
+  const result = {
+    id: promptId,
+    message: prompt.message ?? '',
+    note: prompt.note ?? null,
+    max_tokens: maxTokens,
+    artifact_dir: promptDir,
+    report_path: diagnosticsPath,
+    stdout_path: stdoutPath,
+    stderr_path: stderrPath,
+    command_path: commandPath,
+    exit_code: code,
+    prompt_tokens_match: report?.prompt_tokens_match ?? null,
+    generated_tokens_match: report?.generated_tokens_match ?? null,
+    generated_text_match: report?.generated_text_match ?? null,
+    first_generated_token_diff_index: report?.first_generated_token_diff_index ?? null,
+    first_generated_text_diff_index: report?.first_generated_text_diff_index ?? null,
+  }
+  if (code !== 0) hadFailure = true
+  if (requirePromptMatch && result.prompt_tokens_match === false) hadFailure = true
+  if (requireGeneratedMatch && result.generated_tokens_match === false) hadFailure = true
+  summary.prompts.push(result)
+}
+
+summary.passed = !hadFailure
+summary.prompt_tokens_all_match = summary.prompts.every(prompt => prompt.prompt_tokens_match === true)
+summary.generated_tokens_all_match = summary.prompts.every(prompt => prompt.generated_tokens_match === true)
+summary.generated_text_all_match = summary.prompts.every(prompt => prompt.generated_text_match === true)
+await writeFile(join(outDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
+
+console.log(`pack=${resolve(packPath)}`)
+console.log(`out_dir=${outDir}`)
+console.log(`model=${modelPath}`)
+console.log(`model_id=${modelId}`)
+console.log(`prompt_count=${summary.prompts.length}`)
+console.log(`prompt_tokens_all_match=${summary.prompt_tokens_all_match}`)
+console.log(`generated_tokens_all_match=${summary.generated_tokens_all_match}`)
+console.log(`generated_text_all_match=${summary.generated_text_all_match}`)
+console.log(`summary_json=${join(outDir, 'summary.json')}`)
+
+if (hadFailure) process.exitCode = 1
+
+function parseArgs(argv) {
+  const parsed = new Map()
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]
+    if (!arg.startsWith('--')) continue
+    const [key, inline] = arg.slice(2).split('=', 2)
+    const next = argv[i + 1]
+    const value = inline ?? (next && !next.startsWith('--') ? argv[++i] : 'true')
+    parsed.set(key, value)
+  }
+  return parsed
+}
+
+function run(command, commandArgs) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, commandArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.once('error', reject)
+    child.once('close', code => {
+      resolvePromise({ code: code ?? 1, stdout, stderr })
+    })
+  })
+}
+
+function shellJoin(command, args) {
+  return [command, ...args].map(shellEscape).join(' ')
+}
+
+function shellEscape(value) {
+  if (/^[A-Za-z0-9_/:=.,-]+$/.test(value)) return value
+  return `'${String(value).replace(/'/g, `'\\''`)}'`
+}
