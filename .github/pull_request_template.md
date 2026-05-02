@@ -14,6 +14,11 @@ Explain the user-visible or engineering reason for the change.
 - [ ] `cd frontend && npm run build`
 - [ ] Other evidence attached below
 
+## Public-repo privacy check
+
+- [ ] No private hostnames, SSH commands, user home paths, key paths, or local validation details are included
+- [ ] `bash scripts/check-public-scrub.sh`
+
 ## Support-contract check
 
 - [ ] This PR does not overclaim support

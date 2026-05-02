@@ -5,3 +5,6 @@ models/
 .env
 *.log
 .DS_Store
+
+# Internal/local harness command scratchpads
+*-harness-commands.md
