@@ -18,7 +18,7 @@ Current program posture:
 
 - **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 is the only supported end-to-end generation lane.
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 has narrow parity evidence and remains below supported generation.
-- **Acceptance target:** Llama 3.2 3B Instruct Q8_0 is the exact next WebUI real-chat target. The exact GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, and one healthy Ubuntu backend-only first-token artifact exists, but the row remains blocked until repeat bounded prompt-token, parity, API, WebUI, and memory evidence exist.
+- **Acceptance target:** Llama 3.2 3B Instruct Q8_0 is the exact next WebUI real-chat target. The exact GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, and the Ubuntu compact-header `hello` harness now has prompt-token parity plus deterministic 1-token, 5-token, and bounded 50-token generation parity, but the row remains blocked until broader prompt/chat-template coverage, API, WebUI, and stronger memory/performance evidence exist.
 - **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 now has repeat bounded backend-only first-token evidence, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence for the exact tracked Q8_0 GGUF, but it is still not a supported generation row until broader prompt/chat-template parity, WebUI readiness, and performance/portability evidence are captured.
 - **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
@@ -40,7 +40,7 @@ Recent work improved the engineering seam without moving the release ledger. Tha
 
 - TinyLlama Q8_0 remains the trusted release gate.
 - Llama 3.2 1B Q8_0 remains informative evidence only.
-- Llama 3.2 3B Q8_0 now has the exact local GGUF, successful metadata/load behavior with low backend RSS after streaming metadata parsing, and one healthy Ubuntu backend-only first-token artifact, but still no promotable exact-row support evidence because repeat bounded success, parity, API, and WebUI evidence are not in hand yet.
+- Llama 3.2 3B Q8_0 now has the exact local GGUF, successful metadata/load behavior with low backend RSS after streaming metadata parsing, and compact-header `hello` parity for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on Ubuntu, but still no promotable exact-row support evidence because broader prompt/chat-template coverage, API, and WebUI evidence are not in hand yet.
 - Llama 3 8B Q8_0 now has repeat bounded backend-only first-token success on Ubuntu, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence for the exact tracked row. Release posture still stays groundwork-only until broader prompt/chat-template parity, WebUI readiness, and performance evidence exist.
 
 Near-term objective: preserve the supported TinyLlama lane, finish the lazy-Q8 execution seam for larger LLaMA-family rows, and publish no broader support claim until row-specific evidence is in hand.

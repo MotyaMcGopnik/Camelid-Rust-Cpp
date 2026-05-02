@@ -44,7 +44,7 @@ The current ledger is intentionally strict. Here is the shortest honest descript
 - **Llama 3.2 3B Instruct Q8_0:** keep the exact acceptance target narrow until Camelid has at least two consecutive bounded successes plus prompt-token parity, short-generation parity, API evidence, and WebUI evidence for the same exact GGUF.
 - **Llama 3 8B Instruct Q8_0:** treat the new backend-only first-token, short-generation, and API-smoke artifacts as groundwork until broader prompt/chat-template parity, WebUI readiness, and a defensible performance envelope exist for the same exact row.
 
-That means the practical public answer is still simple: TinyLlama is supported today; 1B is evidence-only; 3B is the blocked acceptance target with first-token evidence only; 8B is groundwork-only with backend validation.
+That means the practical public answer is still simple: TinyLlama is supported today; 1B is evidence-only; 3B is the blocked acceptance target with compact parity evidence; 8B is groundwork-only with compact parity validation.
 
 ## Start here
 
@@ -191,7 +191,7 @@ node scripts/small-model-readiness.mjs \
   --markdown-out target/small-model-readiness.md
 ```
 
-The readiness gate inspects each present manifest GGUF with `backendinference inspect`, binds LLaMA metadata/tensor shapes, chooses the current tokenizer/template lane, estimates eager `f32` plus retained-source CPU materialization against `BACKENDINFERENCE_MAX_CPU_WEIGHT_MATERIALIZATION_BYTES`, and reports whether the existing TinyLlama or Llama 3 parity harness is safe to run. A `load_and_generation_candidate` row is only an inventory/readiness result; it still needs target-specific deterministic parity evidence before support changes. The exact 3B WebUI acceptance target is tracked separately in [`QA_LLAMA32_3B_Q8_ACCEPTANCE.md`](QA_LLAMA32_3B_Q8_ACCEPTANCE.md); even with exact-GGUF load success and one backend-only first-token artifact, the row remains blocked until repeat bounded generation, parity, API, and WebUI evidence exist.
+The readiness gate inspects each present manifest GGUF with `backendinference inspect`, binds LLaMA metadata/tensor shapes, chooses the current tokenizer/template lane, estimates eager `f32` plus retained-source CPU materialization against `BACKENDINFERENCE_MAX_CPU_WEIGHT_MATERIALIZATION_BYTES`, and reports whether the existing TinyLlama or Llama 3 parity harness is safe to run. A `load_and_generation_candidate` row is only an inventory/readiness result; it still needs target-specific deterministic parity evidence before support changes. The exact 3B WebUI acceptance target is tracked separately in [`QA_LLAMA32_3B_Q8_ACCEPTANCE.md`](QA_LLAMA32_3B_Q8_ACCEPTANCE.md); even with exact-GGUF load success plus compact prompt-token, 1-token, 5-token, and bounded 50-token parity on the `hello` harness, the row remains blocked until broader prompt coverage, API, and WebUI evidence exist.
 
 ## Frontend
 

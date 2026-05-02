@@ -19,14 +19,15 @@ QA checklist for the exact Llama 3.2 3B WebUI real-chat acceptance gate.
 - **Earlier HEAD ETag/Xet hash:** `291ce1d4ca0fcef86407b7c6531bf85a1c348c65d5d3c69c57c98fec6483bb1f`
 
 Current state: the exact GGUF is now present at the expected model-dir path, Camelid metadata/API
-load evidence exists, and one healthy Ubuntu backend-only first-token artifact now exists. The
-blocker has moved from artifact presence to repeat bounded parity/API/WebUI acceptance.
+load evidence exists, and the Ubuntu compact-header `hello` harness now has prompt-token parity
+plus deterministic 1-token, 5-token, and bounded 50-token generation parity. The blocker has
+moved from artifact presence to broader prompt/chat-template, API, and WebUI acceptance.
 
 ## Current blocker summary
 
 - `/api/models/load` succeeds for the exact 3B target.
 - The latest file-backed lazy-Q8 recovery materially reduced the earlier eager dense-load spike.
-- One healthy Ubuntu backend-only `/v1/completions` probe returned a first token for `hello`.
+- The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
 - Therefore the row remains blocked before broader prompt/chat-template coverage, API chat acceptance,
   WebUI acceptance, and stronger performance follow-up evidence.
 
@@ -58,6 +59,6 @@ Do not mark the 3B row green until all applicable items have artifact paths.
 Status: **acceptance target with compact parity evidence**
 
 The exact 3B artifact now exists, and the Ubuntu compact-header `hello` harness now matches
-llama.cpp for prompt tokens plus deterministic 1-token and 5-token generation. The current work
-is to widen that exact-row evidence into broader prompt coverage plus API and WebUI acceptance
-without changing the support contract early.
+llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
+The current work is to widen that exact-row evidence into broader prompt coverage plus API and
+WebUI acceptance without changing the support contract early.
