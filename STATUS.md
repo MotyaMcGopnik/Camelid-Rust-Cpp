@@ -17,9 +17,9 @@ Reading rule for the matrix: each row should answer three questions in plain Eng
 For a fast read, the current answer is:
 
 - **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 remains the only supported end-to-end generation lane.
-- **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 remains narrow evidence only.
-- **Acceptance target:** Llama 3.2 3B Instruct Q8_0 remains the exact WebUI target. The exact tracked GGUF now loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token and 5-token generation on that same exact row, but this is still not a supported row. Support remains frozen until broader prompt/chat-template coverage, API evidence, WebUI evidence, and stronger performance follow-up exist.
-- **Groundwork-only lane with compact parity evidence:** Llama 3 8B Instruct Q8_0 still sits below supported generation, but it now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, and deterministic 5-token parity, with basic API smoke evidence and a clearly passed memory gate for the exact tracked Q8_0 GGUF. Support remains frozen until broader prompt/chat-template parity, WebUI readiness, and performance/portability evidence exists.
+- **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 remains narrow evidence only, but its compact Ubuntu harness now matches llama.cpp through the completed bounded run.
+- **Acceptance target:** Llama 3.2 3B Instruct Q8_0 remains the exact WebUI target. The exact tracked GGUF now loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on that same exact row, but this is still not a supported row. Support remains frozen until broader prompt/chat-template coverage, API evidence, WebUI evidence, and stronger performance follow-up exist.
+- **Groundwork-only lane with compact parity evidence:** Llama 3 8B Instruct Q8_0 still sits below supported generation, but it now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, deterministic 5-token, and bounded 50-token parity, with basic API smoke evidence and a clearly passed memory gate for the exact tracked Q8_0 GGUF. Support remains frozen until broader prompt/chat-template parity, WebUI readiness, and performance/portability evidence exists.
 - **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
 Two standing rules apply to every row:
@@ -36,9 +36,9 @@ Bottom line for reviewers: Camelid has one supported generation lane, one narrow
 Recent work improved the blocker seam without changing the release ledger:
 
 - TinyLlama Q8_0 remains the trusted supported gate.
-- Llama 3.2 1B Q8_0 remains informative evidence only.
-- Llama 3.2 3B Q8_0 now loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token and 5-token generation on that exact row. That is blocker-seam progress, not a support change.
-- Llama 3 8B Q8_0 remains groundwork-only in release terms, but the lane now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, and deterministic 5-token parity, with basic API smoke evidence and an explicit memory gate on top of the earlier lazy/file-backed Q8 execution work.
+- Llama 3.2 1B Q8_0 remains informative evidence only, with compact Ubuntu parity through the completed bounded run.
+- Llama 3.2 3B Q8_0 now loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on that exact row. That is blocker-seam progress, not a support change.
+- Llama 3 8B Q8_0 remains groundwork-only in release terms, but the lane now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, deterministic 5-token, and bounded 50-token parity, with basic API smoke evidence and an explicit memory gate on top of the earlier lazy/file-backed Q8 execution work.
 
 Bottom line: the engineering seam moved forward, but no new support claim was earned.
 
@@ -71,13 +71,14 @@ Status: **evidence only / not a supported gate**
 
 Current evidence boundary:
 
-- One compact-header `hello` prompt matches llama.cpp through five deterministic generated tokens.
-- Prompt IDs and generated IDs match for `[9906,0,2650,649,358]` / `"Hello! How can I"`.
+- One compact-header `hello` prompt matches llama.cpp through the completed bounded run on Ubuntu.
+- Prompt token IDs, generated token IDs, and generated text all match for the compact bounded response.
 
 Representative artifacts:
 
 - `target/autonomous-small-model-parity-20260429T134615Z-head-9049492/llama32-1b-q8-chat-parity-5tok.json`
 - `target/qa-small-model-parity-20260429T1338Z-head-35bfd58/`
+- `target/parity-50tok-20260502T031820Z/llama32-1b-50tok/report.json`
 
 ### Llama 3.2 3B Instruct Q8_0
 
@@ -88,8 +89,8 @@ Current evidence boundary:
 - The exact tracked GGUF is present locally.
 - The exact tracked GGUF loads successfully through `/api/models/load` with low backend RSS after streaming metadata parsing.
 - Recent file-backed lazy-Q8 recovery materially reduced the older eager dense-load spike.
-- The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token and 5-token generation.
-- This row is still not supported; the current artifact is compact prompt parity plus deterministic 1-token and 5-token generation for `hello`, but broader prompt coverage, API evidence, WebUI evidence, and stronger performance follow-up are still missing.
+- The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
+- This row is still not supported; the current artifact is compact prompt parity plus bounded 50-token generation for `hello`, but broader prompt coverage, API evidence, WebUI evidence, and stronger performance follow-up are still missing.
 
 Representative artifacts:
 
@@ -102,6 +103,7 @@ Representative artifacts:
 - `target/ubuntu-llama32-3b-q8-first-token-20260501T210715Z/meminfo-samples.log`
 - `target/parity-20260502T030911Z/llama32-3b-1tok/report.json`
 - `target/parity-20260502T030911Z/llama32-3b-5tok/report.json`
+- `target/parity-50tok-20260502T031820Z/llama32-3b-50tok/report.json`
 
 Promotion remains blocked until Camelid has broader prompt coverage plus API, memory/performance, and WebUI evidence for this exact row.
 
@@ -113,10 +115,9 @@ Current evidence boundary:
 
 - Metadata, config, tokenizer, and chat-template handling are fixture-guarded.
 - Independent tokenizer reference fixtures exist.
-- Lazy/file-backed Q8 execution is now good enough for repeat bounded Ubuntu backend-only first-token evidence on the exact tracked Q8_0 GGUF.
-- At current head `268f6fb`, `/api/models/load` succeeded and `/v1/completions` with prompt `hello`, `max_tokens=1`, `temperature=0` returned text `,`; the required forward trace reached `layer_0_attention_q_done` twice and the backend stayed bounded at roughly `6,220 -> 378,520 KiB` RSS on the sampled process trace.
-- Raw prompt-token parity for `hello` is now captured for this exact model SHA: Camelid returned `[128000, 15339]`, matching the prior llama.cpp `llama-tokenize --ids` reference for the same GGUF SHA.
-- A short deterministic backend generation slice with `max_tokens=5`, `temperature=0` returned `, I'm a new`; the sampled RSS trace stayed roughly `6,076 -> 396,912 KiB`, and `/api/models/load`, `/api/models/tokenizer/encode`, `/v1/models`, and `/v1/completions` all responded in the artifact.
+- Lazy/file-backed Q8 execution is now good enough for repeat bounded parity on the exact tracked Q8_0 GGUF.
+- The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens and deterministic generation at 1, 5, and bounded 50-token lengths on this exact row.
+- Basic `/api/models/load` and completion smoke still passed alongside the parity artifacts.
 - Camelid still does not claim 8B supported generation, broader prompt-pack parity, chat-template parity, WebUI readiness, performance envelope, or portable packaging for this row.
 
 Representative artifacts:
@@ -131,6 +132,7 @@ Representative artifacts:
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/first-token.required-forward-trace.log`
 - `target/parity-20260502T030911Z/llama3-8b-1tok/report.json`
 - `target/parity-20260502T030911Z/llama3-8b-5tok/report.json`
+- `target/parity-50tok-20260502T031820Z/llama3-8b-50tok/report.json`
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/short-5tok.completion-summary.json`
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/short-5tok.meminfo-samples.log`
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/short-5tok.required-forward-trace.log`
