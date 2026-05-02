@@ -120,6 +120,7 @@ assert.equal(quantLabelFromGgufFileType('unknown'), null)
 assert.equal(isSupportedCapabilityStatus('supported_current_gate'), true)
 assert.equal(isGuardedCapabilityStatus('future'), true)
 assert.equal(capabilityStatusTone('blocked_until_tensor_load_and_parity'), 'warm')
+assert.equal(capabilityStatusTone('groundwork_backend_evidence_only'), 'warm')
 assert.match(summarizeCapabilityItems([{ id: 'Q8_0', status: 'supported_current_gate' }]), /Q8_0: supported current gate/)
 assert.match(guardedCapabilityCopy({ notes: 'Multi-choice is not implemented yet' }, 'API controls'), /API controls should stay disabled.*typed backend refusals.*not silently drop/)
 assert.equal(getCurrentCompatibilityTarget({ model_compatibility: [{ id: 'planned', status: 'planned' }, { id: 'tiny', status: 'supported_current_gate' }] }).id, 'tiny')
@@ -133,7 +134,7 @@ const capabilityFixture = {
     { id: 'llama_spm_q4_k_q5_k', family: 'llama_spm_decoder', quantization: 'Q4_K_M/Q5_K_M', status: 'planned_phase_10', next_step: 'implement K-quant support' },
     { id: 'llama32_1b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'evidence_only', evidence: '1B compact-header evidence only' },
     { id: 'llama32_3b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'acceptance_target_blocked_before_first_token', next_step: 'clear the first-token memory blocker before parity work' },
-    { id: 'llama3_8b_instruct_gguf', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'planned_phase_11_12', next_step: 'safe lazy execution first' },
+    { id: 'llama3_8b_instruct_gguf', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'groundwork_backend_evidence_only', next_step: 'broader prompt/chat-template parity and WebUI evidence first' },
   ],
 }
 const tinyQ8Hint = findCompatibilityHint(capabilityFixture, { name: 'TinyLlama 1.1B Chat', quant: 'Q8_0' })
@@ -149,7 +150,7 @@ assert.match(compatibilityHintCopy(tinyKQuantHint), /runtime generation still re
 const llama3Q4Hint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct', quant: 'Q4_K_M' })
 assert.equal(llama3Q4Hint.kind, 'quant_mismatch')
 assert.match(compatibilityHintCopy(llama3Q4Hint), /Do not inherit the supported gate|wait for an exact COMPATIBILITY\.md row/)
-assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Meta Llama 3 8B Instruct', quant: 'Q8_0' }), false, 'planned Llama 3 8B rows must not unlock chat')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Meta Llama 3 8B Instruct', quant: 'Q8_0' }), false, 'groundwork Llama 3 8B rows must not unlock chat')
 const llama32OneBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32OneBHint.target.id, 'llama32_1b_instruct_q8_0', 'Llama 3.2 1B must match its exact evidence-only row')
 assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' }), false, 'evidence-only 1B rows must not unlock chat')

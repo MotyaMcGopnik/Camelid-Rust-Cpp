@@ -19,7 +19,7 @@ Current program posture:
 - **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 is the only supported end-to-end generation lane.
 - **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 has narrow parity evidence and remains below supported generation.
 - **Acceptance target:** Llama 3.2 3B Instruct Q8_0 is the exact next WebUI real-chat target. The exact GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, and one healthy Ubuntu backend-only first-token artifact exists, but the row remains blocked until repeat bounded prompt-token, parity, API, WebUI, and memory evidence exist.
-- **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 now has one backend-only first-token artifact on the exact tracked Q8_0 GGUF, but it is still not a supported generation row until repeat bounded success and bounded parity/readiness evidence are captured.
+- **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 now has repeat bounded backend-only first-token evidence, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence for the exact tracked Q8_0 GGUF, but it is still not a supported generation row until broader prompt/chat-template parity, WebUI readiness, and performance/portability evidence are captured.
 - **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
 
 Nothing inherits support from a nearby size, quantization, family, tokenizer lane, API surface, or UI state.
@@ -41,7 +41,7 @@ Recent work improved the engineering seam without moving the release ledger. Tha
 - TinyLlama Q8_0 remains the trusted release gate.
 - Llama 3.2 1B Q8_0 remains informative evidence only.
 - Llama 3.2 3B Q8_0 now has the exact local GGUF, successful metadata/load behavior with low backend RSS after streaming metadata parsing, and one healthy Ubuntu backend-only first-token artifact, but still no promotable exact-row support evidence because repeat bounded success, parity, API, and WebUI evidence are not in hand yet.
-- Llama 3 8B Q8_0 now has one bounded backend-only first-token success on Ubuntu, confirming the lazy/file-backed Q8 seam can reach generation for the exact tracked row. Release posture still stays groundwork-only until repeat bounded success and follow-up parity/readiness evidence exist.
+- Llama 3 8B Q8_0 now has repeat bounded backend-only first-token success on Ubuntu, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence for the exact tracked row. Release posture still stays groundwork-only until broader prompt/chat-template parity, WebUI readiness, and performance evidence exist.
 
 Near-term objective: preserve the supported TinyLlama lane, finish the lazy-Q8 execution seam for larger LLaMA-family rows, and publish no broader support claim until row-specific evidence is in hand.
 
@@ -54,7 +54,7 @@ This is the highest-level execution order. **Now** protects the current gate and
 Protect the supported lane and finish the engineering seam most likely to produce the next honest promotion artifact.
 
 - Protect the validated TinyLlama Q8_0 gate.
-- Convert the first 8B backend-only win into repeat bounded first-token and short-generation evidence without promoting support early.
+- Convert the current 8B backend-only evidence into broader prompt-pack/chat-template parity, WebUI readiness, and performance evidence without promoting support early.
 - Convert retained-Q8 groundwork into bounded first-token evidence for the blocked Llama 3 lanes.
 - Keep README, `COMPATIBILITY.md`, `ROADMAP.md`, `STATUS.md`, `/api/capabilities`, and frontend readiness copy aligned.
 
@@ -83,7 +83,7 @@ Broaden the product surface only after correctness and release discipline are st
 | TinyLlama 1.1B Chat Q8_0 supported gate | Complete | End-to-end generation parity artifacts exist and docs/API/frontend agree. |
 | Llama 3.2 1B Instruct Q8_0 evidence lane | In progress / evidence only | Narrow deterministic evidence exists, but no support promotion is implied. |
 | Llama 3.2 3B Instruct Q8_0 WebUI acceptance | Blocked | Exact GGUF loads safely and produces bounded prompt-token and generated-token evidence with WebUI/API confirmation. |
-| Llama 3 8B Instruct Q8_0 bounded evidence expansion | In progress | One backend-only Ubuntu first-token artifact exists for the exact tracked row; next gate is repeat bounded success plus short-generation/parity evidence without widening support language early. |
+| Llama 3 8B Instruct Q8_0 bounded evidence expansion | In progress | Repeat bounded backend-only first-token evidence, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence exist for the exact tracked row; next gate is broader prompt/chat-template parity plus WebUI/performance evidence without widening support language early. |
 | Quantization breadth beyond Q8_0 | Planned | Each quant format has loader/runtime tests, docs, and at least one row-specific real-model artifact. |
 | Longer-context correctness | Planned | Context-length claims are backed by model-specific audits and documented limits. |
 | API and sampling completeness | Planned | Newly supported fields have tests, honest docs, and typed unsupported errors removed only after implementation. |
@@ -100,7 +100,7 @@ Current required discipline:
 - TinyLlama 1.1B Chat Q8_0 remains the only supported generation gate.
 - Llama 3.2 1B Q8_0 remains evidence-only.
 - Llama 3.2 3B Q8_0 remains blocked until its own bounded artifacts exist.
-- Llama 3 8B Q8_0 remains groundwork-only in release terms even after the first bounded first-token artifact; docs and capability language must stay conservative until repeat bounded evidence lands.
+- Llama 3 8B Q8_0 remains groundwork-only in release terms even after repeat bounded backend-only first-token, raw prompt-token, short-generation, API-smoke, and memory evidence; docs and capability language must stay conservative until broader parity/readiness evidence lands.
 - Frontend readiness must remain exact-row and exact-quant aware.
 
 Promotion evidence must update docs, API capability reporting, and frontend readiness language in the same change window.

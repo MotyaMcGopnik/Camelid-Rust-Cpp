@@ -110,15 +110,22 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "llama3_8b_instruct_gguf")
         .unwrap();
-    assert_eq!(llama3["status"], "planned_phase_11_12");
+    assert_eq!(llama3["status"], "groundwork_backend_evidence_only");
     assert_eq!(
         llama3["metadata_parses"],
         "real_artifact_inspected_and_config_guarded"
     );
-    assert_eq!(llama3["tokenizer_works"], "llama_bpe_fixture_guarded");
+    assert_eq!(
+        llama3["tokenizer_works"],
+        "llama_bpe_fixture_guarded_plus_raw_hello_parity"
+    );
     assert_eq!(
         llama3["generation_runs"],
-        "blocked_until_tensor_load_and_parity"
+        "repeat_backend_only_first_token_plus_5_token_slice"
+    );
+    assert_eq!(
+        llama3["tested_context"],
+        "backend_only_completion_prompt_hello_1_and_5_tokens"
     );
     let planned_quant = compatibility
         .iter()

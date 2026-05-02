@@ -129,6 +129,8 @@ export function capabilityStatusTone(status = '') {
     value.includes('planned')
     || value.includes('partial')
     || value.includes('guarded')
+    || value.includes('groundwork')
+    || value.includes('evidence')
     || value.includes('blocked')
     || value.includes('unsupported')
     || value.includes('future')
