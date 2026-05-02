@@ -36,6 +36,16 @@ This four-row ledger is Camelid's front door. The same boundary should appear in
 | Llama 3.2 3B Instruct Q8_0 | Acceptance target / first-token evidence only | The exact tracked GGUF is present locally; that exact GGUF now succeeds through `/api/models/load` with low backend RSS after streaming metadata parsing; file-backed lazy-Q8 materially reduced the earlier eager dense-load spike; and one healthy Ubuntu backend-only first-token artifact now exists for `hello`. | Not a supported row. No repeat bounded generation, prompt-token parity, broader prompt/chat-template parity, API readiness, or WebUI readiness claim until bounded exact-row promotion evidence exists. |
 | Llama 3 8B Instruct Q8_0 | Groundwork only with backend validation | Repeat bounded Ubuntu backend-only first-token evidence, raw `hello` prompt-token parity, a short deterministic 5-token backend generation slice, basic API smoke evidence, and a bounded memory gate now exist for the exact tracked Q8_0 GGUF. | No supported generation, broader prompt/chat-template parity, WebUI readiness, performance, or portable-packaging claim until exact-row follow-up evidence exists. |
 
+## What would need to change before the support line moves
+
+The current ledger is intentionally strict. Here is the shortest honest description of what each non-supported row still needs before Camelid can widen release language:
+
+- **Llama 3.2 1B Instruct Q8_0:** move beyond the single compact-header `hello` slice into broader prompt coverage before this row can become more than evidence-only.
+- **Llama 3.2 3B Instruct Q8_0:** keep the exact acceptance target narrow until Camelid has at least two consecutive bounded successes plus prompt-token parity, short-generation parity, API evidence, and WebUI evidence for the same exact GGUF.
+- **Llama 3 8B Instruct Q8_0:** treat the new backend-only first-token, short-generation, and API-smoke artifacts as groundwork until broader prompt/chat-template parity, WebUI readiness, and a defensible performance envelope exist for the same exact row.
+
+That means the practical public answer is still simple: TinyLlama is supported today; 1B is evidence-only; 3B is the blocked acceptance target with first-token evidence only; 8B is groundwork-only with backend validation.
+
 ## Start here
 
 For most readers, the fastest path through the repo is:
