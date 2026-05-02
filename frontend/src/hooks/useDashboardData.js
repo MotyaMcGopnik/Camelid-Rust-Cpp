@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, quantLabelFromGgufFileType } from '../lib/capabilities'
-import { isExternalModel, isRunnableInCurrentRuntime, isRunnableModel } from '../lib/modelState'
+import { getChatGateState } from '../lib/chatGate'
+import { isExternalModel, isRunnableModel } from '../lib/modelState'
 
 const TAB_STORAGE_KEY = 'camelid.activeTab'
 const SELECTED_CONVERSATION_STORAGE_KEY = 'camelid.selectedConversationId'
@@ -481,9 +482,10 @@ export function useDashboardData({ showNotice, clearNotice }) {
   }, [conversations, selectedConversationId])
 
   const selectedModel = useMemo(() => models.find((model) => model.id === selectedModelId) || models[0], [models, selectedModelId])
-  const selectedModelRuntimeReady = isRunnableInCurrentRuntime(selectedModel, runtime)
-  const selectedModelCapabilitySupported = isCompatibilitySupportedForModel(dashboard?.capabilities, selectedModel)
-  const selectedModelRunnable = selectedModelRuntimeReady && selectedModelCapabilitySupported
+  const selectedModelChatGate = getChatGateState(dashboard?.capabilities, selectedModel, runtime)
+  const selectedModelRuntimeReady = selectedModelChatGate.runtimeReady
+  const selectedModelCapabilitySupported = selectedModelChatGate.contractSupported
+  const selectedModelRunnable = selectedModelChatGate.chatUnlocked
   const pendingConversation = pendingChat?.conversationId
     && (selectedConversation?.id === pendingChat.conversationId || selectedConversationId === pendingChat.conversationId)
     ? pendingChat

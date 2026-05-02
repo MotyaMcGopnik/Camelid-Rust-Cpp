@@ -23,7 +23,12 @@ const rawModelPath = args.get('model') || process.env.BACKENDINFERENCE_SMOKE_MOD
 const modelPath = rawModelPath ? resolve(rawModelPath) : undefined
 const modelId = args.get('model-id') || process.env.BACKENDINFERENCE_SMOKE_MODEL_ID || (modelPath ? 'smoke-model' : 'tiny-generation')
 const requireGeneration = args.has('require-generation') || process.env.BACKENDINFERENCE_SMOKE_REQUIRE_GENERATION === '1'
+const allowGuardedChat = args.has('allow-guarded-chat') || process.env.BACKENDINFERENCE_SMOKE_ALLOW_GUARDED_CHAT === '1'
 const chatRepeats = Number.parseInt(args.get('chat-repeats') || process.env.BACKENDINFERENCE_SMOKE_CHAT_REPEATS || '1', 10)
+const expectCompatibilityRow = args.get('expect-compatibility-row') || process.env.BACKENDINFERENCE_SMOKE_EXPECT_COMPATIBILITY_ROW || ''
+const expectCompatibilityStatus = args.get('expect-compatibility-status') || process.env.BACKENDINFERENCE_SMOKE_EXPECT_COMPATIBILITY_STATUS || ''
+const expectContractSupported = parseOptionalBoolean(args.get('expect-contract-supported') || process.env.BACKENDINFERENCE_SMOKE_EXPECT_CONTRACT_SUPPORTED, 'expect-contract-supported')
+const expectWebUiChat = args.get('expect-webui-chat') || process.env.BACKENDINFERENCE_SMOKE_EXPECT_WEBUI_CHAT || ''
 
 if (!Number.isInteger(chatRepeats) || chatRepeats < 1) {
   throw new Error(`--chat-repeats must be a positive integer, got ${args.get('chat-repeats')}`)
@@ -55,6 +60,20 @@ async function timed(label, fn) {
   const elapsedMs = performance.now() - started
   console.log(`  ${label}_ms=${elapsedMs.toFixed(0)}`)
   return { result, elapsedMs }
+}
+
+function parseOptionalBoolean(value, name) {
+  if (value === undefined || value === null || value === '') return null
+  const normalized = value.toString().trim().toLowerCase()
+  if (['1', 'true', 'yes'].includes(normalized)) return true
+  if (['0', 'false', 'no'].includes(normalized)) return false
+  throw new Error(`--${name} must be true or false, got ${value}`)
+}
+
+function assertExpected(label, actual, expected) {
+  if (actual !== expected) {
+    throw new Error(`${label} mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
 }
 
 function pushU32(bytes, value) {
@@ -241,11 +260,35 @@ if (activeModel) {
   console.log(`  WebUI contract note=${compatibilityHintCopy(activeCompatibilityHint)}`)
 }
 
+if (expectCompatibilityRow) {
+  assertExpected('compatibility row', activeCompatibilityHint?.target?.id || null, expectCompatibilityRow)
+}
+if (expectCompatibilityStatus) {
+  assertExpected('compatibility status', activeCompatibilityHint?.target?.status || null, expectCompatibilityStatus)
+}
+if (expectContractSupported !== null) {
+  assertExpected('contract supported', activeSupportedByContract, expectContractSupported)
+}
+
 if (requireGeneration && !health.generation_ready) {
   throw new Error('generation_ready=false after smoke setup; omit --require-generation to allow metadata/UI guardrail smoke runs')
 }
 
-const webuiChatEnabled = Boolean(health.generation_ready && activeModel && activeSupportedByContract && modelIds.includes(activeModel.id))
+const activeModelListed = Boolean(activeModel && modelIds.includes(activeModel.id))
+const guardedChatBypass = Boolean(allowGuardedChat && health.generation_ready && activeModel && activeModelListed && !activeSupportedByContract)
+const webuiChatEnabled = Boolean(health.generation_ready && activeModel && activeModelListed && (activeSupportedByContract || guardedChatBypass))
+const webuiChatState = guardedChatBypass ? 'guarded' : webuiChatEnabled ? 'enabled' : 'blocked'
+
+if (expectWebUiChat) {
+  if (!['enabled', 'blocked', 'guarded'].includes(expectWebUiChat)) {
+    throw new Error(`--expect-webui-chat must be one of enabled, blocked, guarded; got ${expectWebUiChat}`)
+  }
+  assertExpected('WebUI chat state', webuiChatState, expectWebUiChat)
+}
+
+if (guardedChatBypass) {
+  console.log('ℹ allow-guarded-chat enabled: running one QA chat even though the active model is still outside the exact supported /api/capabilities contract row')
+}
 
 if (webuiChatEnabled) {
   const chatTimings = []
@@ -318,5 +361,5 @@ if (webuiChatEnabled) {
     : !activeSupportedByContract
       ? 'the active model does not have an exact supported /api/capabilities compatibility row'
       : 'no active model is listed by /v1/models'
-  console.log(`ℹ chat completion skipped because ${reason}; frontend should keep chat disabled`)
+  console.log(`ℹ chat completion skipped because ${reason}; frontend should keep chat disabled${allowGuardedChat ? ' until a QA-only guarded chat rerun is requested' : ''}`)
 }

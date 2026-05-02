@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, formatCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { LLAMA32_3B_ACCEPTANCE_AVAILABILITY, LLAMA32_3B_ACCEPTANCE_GATING_NOTE, LLAMA32_3B_ACCEPTANCE_SUMMARY, LLAMA32_3B_ACCEPTANCE_TARGET } from '../lib/acceptanceTargets'
+import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, formatCapabilityStatus, getCurrentCompatibilityTarget, getTrackedCompatibilityTargets, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { getChatGateState } from '../lib/chatGate'
 import { formatBytes, formatCompactNumber } from '../lib/formatters'
 import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, isRunnableModel } from '../lib/modelState'
 
@@ -13,31 +15,6 @@ const FILTERS = [
 ]
 
 const CATALOG_PAGE_SIZE = 18
-
-const LLAMA32_3B_ACCEPTANCE_TARGET = {
-  id: 'llama-3.2-3b-instruct-q8',
-  name: 'Llama 3.2 3B Instruct Q8_0',
-  model_path: '$CAMELID_MODEL_DIR/Llama-3.2-3B-Instruct-Q8_0.gguf',
-  runtime_model_name: 'llama-3.2-3b-instruct-q8',
-  source: 'bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q8_0.gguf',
-  provider_kind: 'local',
-  status: 'registered',
-  engine: 'backendinference',
-  quant: 'Q8_0',
-  size_gb: '3.19',
-  loaded_now: false,
-  generation_ready: false,
-  load_error: 'Exact GGUF is not present locally yet, so no 3B prompt-token, first-token, short-generation, API, or WebUI chat evidence exists. Even after the file arrives, Camelid may still keep generation_ready=false or raise cpu_weight_materialization_exceeds_budget until the lazy/on-demand Q8 path lands.',
-  backendinference: {
-    active: false,
-    loaded_now: false,
-    generation_ready: false,
-    tokenizer_status: null,
-    tokenizer_model: null,
-    tensor_ready: false,
-    config_ready: false,
-  },
-}
 
 function getGroupKey(model, runtime) {
   if (runtime?.active_model_id === model.id) return 'installed'
@@ -85,6 +62,18 @@ function matchesLlama32ThreeBTarget(model) {
     || model?.model_path === LLAMA32_3B_ACCEPTANCE_TARGET.model_path
     || /llama[\s._-]*3\.2[\s._-]*3b/.test(subject)
     || /llama[\s._-]*32[\s._-]*3b/.test(subject)
+}
+
+function findModelMatchingCapabilityRow(models, capabilities, target, runtime, selectedModelId) {
+  if (!target) return { model: null, active: false, selected: false }
+  const matches = models.filter((model) => findCompatibilityHint(capabilities, model)?.target?.id === target.id)
+  const activeModel = matches.find((model) => runtime?.active_model_id === model.id) || null
+  const selectedModel = matches.find((model) => model.id === selectedModelId) || null
+  return {
+    model: activeModel || selectedModel || matches[0] || null,
+    active: Boolean(activeModel),
+    selected: Boolean(selectedModel),
+  }
 }
 
 function formatRemoteMeta(item) {
@@ -268,8 +257,9 @@ export default function ModelsView({
   const runtimeOnline = runtime?.status === 'online'
   const hostedRoutingAvailable = Boolean(capabilities?.hosted_provider_routing || capabilities?.external_api_routing || capabilities?.openai_compatible_routing)
   const catalogInstallAvailable = Boolean(capabilities?.model_catalog_install || capabilities?.model_downloads || capabilities?.hf_catalog_install)
-  const currentCompatibilityTarget = (capabilities?.model_compatibility || []).find((target) => target.status === 'supported_current_gate') || capabilities?.model_compatibility?.[0] || null
+  const currentCompatibilityTarget = getCurrentCompatibilityTarget(capabilities)
   const compatibilityRows = capabilities?.model_compatibility || []
+  const trackedCompatibilityRows = getTrackedCompatibilityTargets(capabilities)
   const plannedCompatibilityRows = compatibilityRows.filter((target) => !isSupportedCapabilityStatus(target.status))
   const supportedQuantSummary = (capabilities?.supported_quantization || []).map((item) => `${item.id}: ${formatCapabilityStatus(item.status)}`).join(' · ') || 'None advertised'
   const plannedQuantSummary = (capabilities?.planned_quantization || []).map((item) => `${item.id}: ${formatCapabilityStatus(item.status)}`).join(' · ') || 'None advertised'
@@ -429,7 +419,10 @@ export default function ModelsView({
     setShowImportAdvanced(true)
   }
 
-  const selectedRunnable = isRunnableModel(selectedLocalModel)
+  const selectedChatGate = getChatGateState(capabilities, selectedLocalModel, runtime)
+  const selectedRuntimeReady = selectedChatGate.runtimeReady
+  const selectedRunnable = selectedChatGate.chatUnlocked
+  const selectedContractBlocked = selectedRuntimeReady && !selectedChatGate.contractSupported
   const activeGenerationReady = activeLocalModel ? isModelGenerationReady(activeLocalModel) : Boolean(runtime?.generation_ready)
   const readyModels = [...groupedModels.installed].sort(compareModelsByName)
   const apiLinkModels = [...groupedModels.external].sort(compareModelsByName)
@@ -563,19 +556,21 @@ export default function ModelsView({
           <h3>{selectedLocalModel?.name || 'No model selected'}</h3>
           <p className="model-summary">
             {selectedRunnable
-              ? 'The selected model is loaded and generation-ready for the next chat.'
-              : selectedLocalModel
-                ? getNextStepCopy(selectedLocalModel, {
-                  active: selectedLocalModel.id === runtime?.active_model_id,
-                  selected: true,
-                  runnable: selectedRunnable,
-                  generationReady: isModelGenerationReady(selectedLocalModel),
-                })
-                : 'Import or load a local GGUF, then choose it for the next chat.'}
+              ? 'The selected model is loaded, generation-ready, and backed by an exact supported /api/capabilities row for the next chat.'
+              : selectedContractBlocked
+                ? `${selectedChatGate.label}: Camelid reports this exact model loaded and generation-ready, but chat stays blocked until /api/capabilities promotes the matching COMPATIBILITY.md row.`
+                : selectedLocalModel
+                  ? getNextStepCopy(selectedLocalModel, {
+                    active: selectedLocalModel.id === runtime?.active_model_id,
+                    selected: true,
+                    runnable: selectedRuntimeReady,
+                    generationReady: isModelGenerationReady(selectedLocalModel),
+                  })
+                  : 'Import or load a local GGUF, then choose it for the next chat.'}
           </p>
           <div className="models-card-tags">
             {selectedLocalModel && <div className="pin-badge">selected: {selectedLocalModel.id}</div>}
-            {selectedLocalModel && <div className={`pin-badge ${selectedRunnable ? 'ready' : ''}`}>{selectedRunnable ? 'chat enabled' : 'chat blocked'}</div>}
+            {selectedLocalModel && <div className={`pin-badge ${selectedRunnable ? 'ready' : 'warm'}`}>{selectedRunnable ? 'chat enabled' : selectedContractBlocked ? 'contract blocked' : 'chat blocked'}</div>}
           </div>
           {selectedLocalModel && <ReadinessGrid model={selectedLocalModel} runtime={runtime} includePath />}
         </div>
@@ -588,7 +583,7 @@ export default function ModelsView({
               <p className="panel-kicker">Acceptance target</p>
               <h3>Llama 3.2 3B Instruct Q8_0</h3>
             </div>
-            <p className="model-summary">This exact 3B row is the current acceptance target. It now has backend-only first-token evidence, but chat must stay blocked until Camelid reports loaded_now=true, generation_ready=true, stays inside the CPU materialization budget guard, and /api/capabilities exposes an exact supported 3B Q8_0 compatibility row.</p>
+            <p className="model-summary">{LLAMA32_3B_ACCEPTANCE_SUMMARY}</p>
           </div>
 
           <div className="models-card-grid">
@@ -598,24 +593,26 @@ export default function ModelsView({
                   <strong>{LLAMA32_3B_ACCEPTANCE_TARGET.name}</strong>
                   <span>{formatModelMeta(LLAMA32_3B_ACCEPTANCE_TARGET)}</span>
                 </div>
-                <div className="status-pill warm">Artifact missing · chat blocked</div>
+                <div className="status-pill warm">Acceptance target · chat blocked</div>
               </div>
 
               <div className="models-card-tags">
                 <div className="pin-badge">Exact target</div>
                 <div className="pin-badge">Q8_0</div>
+                <div className="pin-badge warm">Compact parity exists</div>
+                <div className="pin-badge warm">No 3B API smoke yet</div>
                 <div className="pin-badge warm">No 3B WebUI smoke yet</div>
               </div>
 
               <div className="models-card-copy-stack">
                 <p className="model-summary">Expected source: {LLAMA32_3B_ACCEPTANCE_TARGET.source}.</p>
-                <p className="model-summary">Local path is reserved for the acceptance run, but the file is not present on this Mac yet. Do not infer readiness from the passing 1B row or tokenizer-only 8B row.</p>
-                <p className="model-summary">Once the backend is genuinely ready, load this exact GGUF and refresh runtime state. If the file loads but `generation_ready` stays false or Camelid returns `cpu_weight_materialization_exceeds_budget`, treat that as the current backend blocker rather than inferred 3B support. The WebUI can enable chat only after the runtime health gate and exact support-contract row both pass.</p>
+                <p className="model-summary">{LLAMA32_3B_ACCEPTANCE_AVAILABILITY}</p>
+                <p className="model-summary">{LLAMA32_3B_ACCEPTANCE_GATING_NOTE}</p>
               </div>
 
               <CapabilityEvidenceBlock capabilities={capabilities} model={LLAMA32_3B_ACCEPTANCE_TARGET} />
               <ReadinessGrid model={LLAMA32_3B_ACCEPTANCE_TARGET} runtime={runtime} includePath />
-              <p className="library-error-copy">{LLAMA32_3B_ACCEPTANCE_TARGET.load_error}</p>
+              <p className="model-summary">Do not infer readiness from the evidence-only 1B row or the groundwork-only 8B row; this exact 3B row needs its own runtime-green + supported-row proof before chat unlocks.</p>
 
               <div className="models-card-actions">
                 <button className="ghost-button" onClick={fillLlama32ThreeBImport}>Fill import form with exact path</button>
@@ -626,13 +623,85 @@ export default function ModelsView({
         </section>
       )}
 
+      {trackedCompatibilityRows.length > 0 && (
+        <section className="panel models-section-panel" aria-label="Tracked Llama Q8 compatibility rows">
+          <div className="models-section-heading">
+            <div>
+              <p className="panel-kicker">Exact-row contract</p>
+              <h3>Llama Q8 promotion rows</h3>
+            </div>
+            <p className="model-summary">These cards mirror the exact 1B/3B/8B rows from /api/capabilities so the frontend shows row-specific readiness instead of inheriting support from neighboring sizes, filenames, or family matches.</p>
+          </div>
+
+          <div className="models-card-grid">
+            {trackedCompatibilityRows.map((target) => {
+              const tone = capabilityStatusTone(target.status)
+              const supported = isSupportedCapabilityStatus(target.status)
+              const match = findModelMatchingCapabilityRow(models, capabilities, target, runtime, selectedModelId)
+              const matchedModel = match.model
+              const runtimeReady = Boolean(match.active && matchedModel && isModelGenerationReady(matchedModel))
+              const chatUnlocked = Boolean(supported && runtimeReady)
+
+              return (
+                <article key={target.id} className="model-card models-model-card">
+                  <div className="models-card-head">
+                    <div className="models-card-title">
+                      <strong>{target.id}</strong>
+                      <span>{target.family} · {target.quantization}</span>
+                    </div>
+                    <div className={`status-pill ${tone}`}>{formatCapabilityStatus(target.status)}</div>
+                  </div>
+
+                  <div className="models-card-tags">
+                    <div className="pin-badge">{target.tested_context || 'Context not advertised'}</div>
+                    <div className={`pin-badge ${target.frontend_load_path_verified === 'validated' ? 'ready' : 'warm'}`}>frontend: {formatCapabilityStatus(target.frontend_load_path_verified || 'not_promoted')}</div>
+                    <div className={`pin-badge ${chatUnlocked ? 'ready' : 'warm'}`}>{chatUnlocked ? 'Chat unlockable' : supported ? 'Runtime still needed' : 'Chat blocked by row status'}</div>
+                    {match.active && <div className="pin-badge ready">Loaded exact-row match</div>}
+                    {!match.active && match.selected && <div className="pin-badge">Selected exact-row match</div>}
+                  </div>
+
+                  <div className="models-card-copy-stack">
+                    <p className="model-summary"><b>Evidence:</b> {target.evidence}</p>
+                    <p className="model-summary"><b>Next step:</b> {target.next_step}</p>
+                    <p className="model-summary">
+                      {chatUnlocked
+                        ? 'This exact row is both contract-supported and runtime-green.'
+                        : runtimeReady
+                          ? `Camelid can load a matching local GGUF right now, but chat must stay blocked because this row is still ${formatCapabilityStatus(target.status)}.`
+                          : supported
+                            ? 'This row is contract-supported, but chat still requires a matching loaded_now=true + generation_ready=true local GGUF.'
+                            : 'This row is not promoted yet; keep readiness and smoke expectations guarded until backend evidence advances this exact row.'}
+                    </p>
+                  </div>
+
+                  {matchedModel ? (
+                    <>
+                      <CapabilityEvidenceBlock capabilities={capabilities} model={matchedModel} />
+                      <ReadinessGrid model={matchedModel} runtime={runtime} includePath />
+                    </>
+                  ) : (
+                    <p className="model-summary">No local browser entry currently matches this exact row. That is not a green state and does not erase backend evidence or blockers for the row.</p>
+                  )}
+
+                  {target.id === 'llama32_3b_instruct_q8_0' && !matchedModel && (
+                    <div className="models-card-actions">
+                      <button className="ghost-button" onClick={fillLlama32ThreeBImport}>Fill import form with exact path</button>
+                    </div>
+                  )}
+                </article>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
       <section className="panel models-section-panel">
         <div className="models-section-heading">
           <div>
             <p className="panel-kicker">Local runtime</p>
             <h3>{readyModels.length === 0 ? 'No local models listed yet' : `${readyModels.length} local ${readyModels.length === 1 ? 'model' : 'models'}`}</h3>
           </div>
-          <p className="model-summary">These are loaded now or saved with a local GGUF path. The page keeps loadable-local separate from generation-ready: chat unlocks only when Camelid reports loaded_now=true, generation_ready=true, and no CPU materialization budget guard is blocking the active model.</p>
+          <p className="model-summary">These are loaded now or saved with a local GGUF path. The page keeps loadable-local separate from chat-ready: chat unlocks only when Camelid reports loaded_now=true, generation_ready=true, and an exact supported /api/capabilities row for the active model/quant.</p>
         </div>
 
         {readyModels.length === 0 ? (
@@ -640,7 +709,10 @@ export default function ModelsView({
         ) : (
           <div className="models-card-grid">
             {readyModels.map((model) => {
-              const runnable = isRunnableModel(model)
+              const runtimeReady = isRunnableModel(model)
+              const chatGate = getChatGateState(capabilities, model, runtime)
+              const chatUnlocked = chatGate.chatUnlocked
+              const contractBlocked = runtimeReady && !chatGate.contractSupported
               const canLoad = canLoadIntoRuntime(model)
               const external = isExternalModel(model)
               const active = runtime?.active_model_id === model.id
@@ -662,14 +734,14 @@ export default function ModelsView({
 
                   <div className="models-card-tags">
                     {loadedNow && <div className={`pin-badge ${generationReady ? 'ready' : 'warm'}`}>{generationReady ? 'Loaded + generation-ready' : 'Loaded, not ready'}</div>}
-                    {selected && <div className="pin-badge">Next chat</div>}
+                    {selected && <div className={`pin-badge ${chatUnlocked ? 'ready' : contractBlocked ? 'warm' : ''}`}>{chatUnlocked ? 'Next chat ready' : contractBlocked ? 'Next chat contract-blocked' : 'Next chat'}</div>}
                     {external && <div className="pin-badge">API planned</div>}
                     {model.model_path && !external && <div className="pin-badge">Saved locally</div>}
                   </div>
 
                   <div className="models-card-copy-stack">
                     <p className="model-summary">{describeModelState(model)}</p>
-                    <p className="model-summary">{getNextStepCopy(model, { active: loadedNow, selected, runnable, generationReady })}</p>
+                    <p className="model-summary">{contractBlocked ? `${chatGate.label}: runtime is green, but chat remains blocked until this exact COMPATIBILITY.md row is supported by /api/capabilities.` : getNextStepCopy(model, { active: loadedNow, selected, runnable: runtimeReady, generationReady })}</p>
                     <p className="model-summary">{formatModelOrigin(model)}</p>
                   </div>
 
@@ -680,7 +752,7 @@ export default function ModelsView({
                   {errorCopy && <p className="library-error-copy">{errorCopy}</p>}
 
                   <div className="models-card-actions">
-                    <button className="ghost-button" onClick={() => setSelectedModelId(model.id)} disabled={busy}>{selected ? 'Chosen for next chat' : generationReady ? 'Use for next chat' : 'Select after load'}</button>
+                    <button className="ghost-button" onClick={() => setSelectedModelId(model.id)} disabled={busy}>{selected ? 'Chosen for next chat' : chatUnlocked ? 'Use for next chat' : contractBlocked ? 'Select; chat stays blocked' : generationReady ? 'Select and inspect contract' : 'Select after load'}</button>
                     {canLoad && !external && <button className="primary-button" onClick={() => activateModel(model.id)} disabled={busy || (loadedNow && generationReady)}>{busy ? 'Loading…' : loadedNow ? generationReady ? 'Loaded now' : 'Retry readiness check' : 'Load now'}</button>}
                   </div>
                 </article>
@@ -887,7 +959,10 @@ export default function ModelsView({
 
           <div className="models-card-grid">
             {setupModels.map((model) => {
-              const runnable = isRunnableModel(model)
+              const runtimeReady = isRunnableModel(model)
+              const chatGate = getChatGateState(capabilities, model, runtime)
+              const chatUnlocked = chatGate.chatUnlocked
+              const contractBlocked = runtimeReady && !chatGate.contractSupported
               const canLoad = canLoadIntoRuntime(model)
               const external = isExternalModel(model)
               const selected = selectedModelId === model.id
@@ -909,14 +984,14 @@ export default function ModelsView({
 
                   <div className="models-card-tags">
                     {loadedNow && <div className={`pin-badge ${generationReady ? 'ready' : 'warm'}`}>{generationReady ? 'Loaded + generation-ready' : 'Loaded, not ready'}</div>}
-                    {selected && <div className="pin-badge">Next chat</div>}
+                    {selected && <div className={`pin-badge ${chatUnlocked ? 'ready' : contractBlocked ? 'warm' : ''}`}>{chatUnlocked ? 'Next chat ready' : contractBlocked ? 'Next chat contract-blocked' : 'Next chat'}</div>}
                     {external && <div className="pin-badge">API planned</div>}
                     {model.model_path && !external && <div className="pin-badge">Saved locally</div>}
                   </div>
 
                   <div className="models-card-copy-stack">
                     <p className="model-summary">{describeModelState(model)}</p>
-                    <p className="model-summary">{getNextStepCopy(model, { active: loadedNow, selected, runnable, generationReady })}</p>
+                    <p className="model-summary">{contractBlocked ? `${chatGate.label}: runtime is green, but chat remains blocked until this exact COMPATIBILITY.md row is supported by /api/capabilities.` : getNextStepCopy(model, { active: loadedNow, selected, runnable: runtimeReady, generationReady })}</p>
                     <p className="model-summary">{formatModelOrigin(model)}</p>
                   </div>
 
@@ -937,7 +1012,7 @@ export default function ModelsView({
                     {!external && (model.status === 'not_installed' || (model.status === 'failed' && !model.model_path)) && <button className="primary-button" onClick={() => installModel(model.id)} disabled={busy}>{model.status === 'failed' ? 'Retry download' : 'Download'}</button>}
                     {!external && (model.status === 'downloading' || model.status === 'canceling') && <button className="ghost-button" onClick={() => cancelModelDownload(model.id)} disabled={model.status === 'canceling'}>{model.status === 'canceling' ? 'Canceling…' : 'Cancel download'}</button>}
                     {!external && !model.model_path && (model.status === 'ready' || model.status === 'registered') && <button className="ghost-button" disabled>Re-import with a local file path</button>}
-                    {(runnable || model.model_path) && <button className="ghost-button" onClick={() => setSelectedModelId(model.id)} disabled={busy}>{selected ? 'Chosen for next chat' : runnable ? 'Use for next chat' : 'Select, then load'}</button>}
+                    {(runtimeReady || model.model_path) && <button className="ghost-button" onClick={() => setSelectedModelId(model.id)} disabled={busy}>{selected ? 'Chosen for next chat' : chatUnlocked ? 'Use for next chat' : contractBlocked ? 'Select; chat stays blocked' : runtimeReady ? 'Select and inspect contract' : 'Select, then load'}</button>}
                     {canLoad && !external && <button className="primary-button" onClick={() => activateModel(model.id)} disabled={busy || (loadedNow && generationReady)}>{busy ? 'Loading…' : loadedNow ? generationReady ? 'Loaded now' : 'Retry readiness check' : model.status === 'registered' ? 'Load now and confirm file' : 'Load now'}</button>}
                   </div>
                 </article>

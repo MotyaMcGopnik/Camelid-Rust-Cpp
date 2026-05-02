@@ -2,12 +2,19 @@
 import assert from 'node:assert/strict'
 
 import {
+  LLAMA32_3B_ACCEPTANCE_AVAILABILITY,
+  LLAMA32_3B_ACCEPTANCE_GATING_NOTE,
+  LLAMA32_3B_ACCEPTANCE_SUMMARY,
+} from '../src/lib/acceptanceTargets.js'
+
+import {
   capabilityStatusTone,
   compatibilityHintCopy,
   compatibilityHintLabel,
   findCompatibilityHint,
   formatCapabilityStatus,
   getCurrentCompatibilityTarget,
+  getTrackedCompatibilityTargets,
   guardedCapabilityCopy,
   isCompatibilitySupportedForModel,
   isGuardedCapabilityStatus,
@@ -28,6 +35,8 @@ import {
   isRunnableInCurrentRuntime,
   isRunnableModel,
 } from '../src/lib/modelState.js'
+
+import { getChatGateState } from '../src/lib/chatGate.js'
 
 const localLoadedReady = {
   id: 'tiny-generation',
@@ -124,6 +133,7 @@ assert.equal(capabilityStatusTone('groundwork_backend_evidence_only'), 'warm')
 assert.match(summarizeCapabilityItems([{ id: 'Q8_0', status: 'supported_current_gate' }]), /Q8_0: supported current gate/)
 assert.match(guardedCapabilityCopy({ notes: 'Multi-choice is not implemented yet' }, 'API controls'), /API controls should stay disabled.*typed backend refusals.*not silently drop/)
 assert.equal(getCurrentCompatibilityTarget({ model_compatibility: [{ id: 'planned', status: 'planned' }, { id: 'tiny', status: 'supported_current_gate' }] }).id, 'tiny')
+assert.equal(getCurrentCompatibilityTarget({ model_compatibility: [{ id: 'planned', status: 'planned' }] }), null, 'a planned/evidence row must not become the current supported gate fallback')
 
 const capabilityFixture = {
   planned_model_families: [
@@ -133,10 +143,16 @@ const capabilityFixture = {
     { id: 'tinyllama_1_1b_chat_q8_0', family: 'llama_spm_decoder', quantization: 'Q8_0', status: 'supported_current_gate', evidence: 'TinyLlama Q8_0 evidence' },
     { id: 'llama_spm_q4_k_q5_k', family: 'llama_spm_decoder', quantization: 'Q4_K_M/Q5_K_M', status: 'planned_phase_10', next_step: 'implement K-quant support' },
     { id: 'llama32_1b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'evidence_only', evidence: '1B compact-header evidence only' },
-    { id: 'llama32_3b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'acceptance_target_blocked_before_first_token', next_step: 'clear the first-token memory blocker before parity work' },
+    { id: 'llama32_3b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'acceptance_target_with_compact_parity_evidence', next_step: 'fix the JSON-shaped broader prompt divergence, then capture API smoke and WebUI smoke before any support promotion' },
     { id: 'llama3_8b_instruct_gguf', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'groundwork_backend_evidence_only', next_step: 'broader prompt/chat-template parity and WebUI evidence first' },
   ],
 }
+assert.deepEqual(
+  getTrackedCompatibilityTargets(capabilityFixture).map((target) => target.id),
+  ['llama32_1b_instruct_q8_0', 'llama32_3b_instruct_q8_0', 'llama3_8b_instruct_gguf'],
+  'tracked promotion rows should stay pinned to the exact 1B/3B/8B ids in /api/capabilities order',
+)
+
 const tinyQ8Hint = findCompatibilityHint(capabilityFixture, { name: 'TinyLlama 1.1B Chat', quant: 'Q8_0' })
 assert.equal(tinyQ8Hint.target.id, 'tinyllama_1_1b_chat_q8_0')
 assert.equal(compatibilityHintLabel(tinyQ8Hint), 'tinyllama_1_1b_chat_q8_0: supported current gate')
@@ -154,11 +170,62 @@ assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Meta L
 const llama32OneBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32OneBHint.target.id, 'llama32_1b_instruct_q8_0', 'Llama 3.2 1B must match its exact evidence-only row')
 assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' }), false, 'evidence-only 1B rows must not unlock chat')
+assert.deepEqual(
+  getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-1b', name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-1b', loaded_now: true, generation_ready: true }),
+  {
+    hint: llama32OneBHint,
+    runtimeReady: true,
+    runtimeLoaded: true,
+    runtimeGenerationReady: true,
+    contractSupported: false,
+    chatUnlocked: false,
+    label: 'llama32_1b_instruct_q8_0: evidence only',
+    copy: compatibilityHintCopy(llama32OneBHint),
+  },
+  'Llama 3.2 1B can be runtime-green but must stay chat-blocked while /api/capabilities says evidence_only',
+)
+const llama32OneBQuantMissingHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 1B Instruct' })
+assert.equal(llama32OneBQuantMissingHint.kind, 'quant_missing', 'Llama 3.2 exact-size matches must not become compatibility matches without quant evidence')
+assert.equal(compatibilityHintLabel(llama32OneBQuantMissingHint), 'llama32_1b_instruct_q8_0: quant not verified')
+assert.match(compatibilityHintCopy(llama32OneBQuantMissingHint), /does not expose a quant label yet/)
+const promotedOneBFixture = {
+  ...capabilityFixture,
+  model_compatibility: capabilityFixture.model_compatibility.map((row) => row.id === 'llama32_1b_instruct_q8_0' ? { ...row, status: 'supported_current_gate' } : row),
+}
+assert.equal(isCompatibilitySupportedForModel(promotedOneBFixture, { name: 'Llama 3.2 1B Instruct' }), false, 'exact-size Llama rows still need quant evidence even after promotion')
 const llama32ThreeBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32ThreeBHint.target.id, 'llama32_3b_instruct_q8_0', 'Llama 3.2 3B must match its exact row rather than inheriting the 8B row')
+assert.equal(compatibilityHintLabel(llama32ThreeBHint), 'llama32_3b_instruct_q8_0: acceptance target with compact parity evidence')
 assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }), false, 'blocked 3B rows must not unlock chat')
+assert.equal(
+  getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-3b', name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-3b', loaded_now: true, generation_ready: true }).chatUnlocked,
+  false,
+  'Llama 3.2 3B acceptance-target rows must stay chat-blocked even when runtime-green',
+)
+const llama3EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(llama3EightBHint.target.id, 'llama3_8b_instruct_gguf', 'Llama 3 8B must match its exact groundwork-only row')
+assert.equal(
+  getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama3-8b', name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama3-8b', loaded_now: true, generation_ready: true }).chatUnlocked,
+  false,
+  'Llama 3 8B groundwork rows must stay chat-blocked even when runtime-green',
+)
+const llama32NoSizeHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(llama32NoSizeHint, null, 'Llama 3.2 names without exact 1B/3B size must not inherit a tracked row or family readiness hint')
+const llama32EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 8B Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(llama32EightBHint, null, 'Llama 3.2 8B must not inherit the Llama 3 8B row or a family readiness hint')
+const llama3OneBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 1B Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(llama3OneBHint, null, 'Llama 3 1B must not inherit the Llama 3.2 1B row or a family readiness hint')
+const llama32OneBBaseHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 1B Base Q8_0', quant: 'Q8_0' })
+assert.equal(llama32OneBBaseHint, null, 'Llama 3.2 1B non-instruct names must not inherit the exact Instruct row')
 const noExactThreeBHint = findCompatibilityHint({ ...capabilityFixture, model_compatibility: capabilityFixture.model_compatibility.filter((row) => row.id !== 'llama32_3b_instruct_q8_0') }, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' })
-assert.equal(noExactThreeBHint.kind, 'family', 'Llama 3.2 3B must stay at planned-family evidence when no exact compatibility row exists')
-assert.match(compatibilityHintCopy(noExactThreeBHint), /not chat-ready support until a concrete compatibility row is validated/)
+assert.equal(noExactThreeBHint, null, 'Llama 3.2 3B must not show family readiness when no exact compatibility row exists')
+assert.match(compatibilityHintCopy(noExactThreeBHint), /No exact COMPATIBILITY\.md row matched/)
+assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /\/api\/models\/load success/)
+assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /deterministic 1-token, 5-token, and bounded 50-token parity/)
+assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /exact-row API smoke, WebUI smoke/)
+assert.match(LLAMA32_3B_ACCEPTANCE_AVAILABILITY, /does not currently show the exact 3B row/)
+assert.doesNotMatch(LLAMA32_3B_ACCEPTANCE_AVAILABILITY, /not present locally yet/)
+assert.match(LLAMA32_3B_ACCEPTANCE_GATING_NOTE, /loaded_now=true and generation_ready=true/)
+assert.match(LLAMA32_3B_ACCEPTANCE_GATING_NOTE, /supported compatibility row/)
 
 console.log('✓ model-state smoke passed')

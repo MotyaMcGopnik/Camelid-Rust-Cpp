@@ -75,41 +75,48 @@ function findCompatibilityRowForQuant(rows, family, quantKey) {
   return rows.find((row) => row.family === family && targetMatchesQuant(row, quantKey)) || null
 }
 
+const EXACT_LLAMA_PROMOTION_ROWS = [
+  { id: 'llama32_1b_instruct_q8_0', versionKey: '3.2', sizeKey: '1B', requiresInstruct: true },
+  { id: 'llama32_3b_instruct_q8_0', versionKey: '3.2', sizeKey: '3B', requiresInstruct: true },
+  { id: 'llama3_8b_instruct_gguf', versionKey: '3', sizeKey: '8B', requiresInstruct: true },
+]
+
 function detectLlamaBpeTarget(subject) {
   if (!/llama[\s._-]*3|meta[\s._-]*llama[\s._-]*3/.test(subject)) return null
   const sizeMatch = subject.match(/(?:^|[^a-z0-9])([138])\s*b(?:[^a-z0-9]|$)/i)
+  const versionKey = /llama[\s._-]*3(?:[._-]\s*2|2)/.test(subject) ? '3.2' : '3'
   return {
     family: 'llama_bpe_decoder',
     sizeKey: sizeMatch ? `${sizeMatch[1]}B` : null,
+    versionKey,
+    instruct: /(?:^|[^a-z0-9])instruct(?:[^a-z0-9]|$)/i.test(subject),
   }
 }
 
-function rowMatchesModelSize(row, sizeKey) {
-  if (!sizeKey) return true
-  return normalizeCapabilityKey(row?.id).includes(normalizeCapabilityKey(sizeKey))
-}
-
-function findPlannedFamilyForLlamaBpe(plannedFamilies) {
-  return plannedFamilies.find((item) => item.id.includes('larger_llama') || item.id.includes('llama3') || item.id.includes('llama')) || null
+function rowMatchesModelSizeAndVersion(row, identity) {
+  const exactRow = EXACT_LLAMA_PROMOTION_ROWS.find((target) => (
+    target.id === row?.id
+    && target.versionKey === identity.versionKey
+    && target.sizeKey === identity.sizeKey
+  ))
+  if (!exactRow) return false
+  if (exactRow.requiresInstruct && !identity.instruct) return false
+  return true
 }
 
 function findLlamaBpeCompatibilityHint(rows, plannedFamilies, quantKey, identity) {
   const familyRows = rows.filter((row) => row.family === identity.family)
-  const exactSizeTarget = familyRows.find((row) => rowMatchesModelSize(row, identity.sizeKey)) || null
-  if (exactSizeTarget && targetMatchesQuant(exactSizeTarget, quantKey)) {
-    return { kind: 'compatibility', target: exactSizeTarget, confidence: quantKey ? 'exact model-size + quant match' : 'exact model-size match' }
+  const exactTarget = familyRows.find((row) => rowMatchesModelSizeAndVersion(row, identity)) || null
+  if (exactTarget && quantKey && targetMatchesQuant(exactTarget, quantKey)) {
+    return { kind: 'compatibility', target: exactTarget, confidence: 'exact model-size + quant match' }
   }
-  if (exactSizeTarget) {
-    return { kind: 'quant_mismatch', target: exactSizeTarget, observedQuant: quantKey, confidence: 'exact model-size match with different quant' }
+  if (exactTarget && !quantKey) {
+    return { kind: 'quant_missing', target: exactTarget, confidence: 'exact model-size match without quant evidence' }
   }
-
-  if (!identity.sizeKey) {
-    const genericTarget = findCompatibilityRowForQuant(rows, identity.family, quantKey)
-    if (genericTarget) return { kind: 'compatibility', target: genericTarget, confidence: 'family + quant match' }
+  if (exactTarget) {
+    return { kind: 'quant_mismatch', target: exactTarget, observedQuant: quantKey, confidence: 'exact model-size match with different quant' }
   }
 
-  const plannedFamily = findPlannedFamilyForLlamaBpe(plannedFamilies)
-  if (plannedFamily) return { kind: 'family', target: plannedFamily, confidence: identity.sizeKey ? `Llama BPE ${identity.sizeKey} family match without exact row` : 'Llama BPE family match' }
   return null
 }
 
@@ -149,9 +156,20 @@ export function guardedCapabilityCopy(item, subject = 'UI controls') {
   return `${notes}${subject} should stay disabled, labeled planned/unsupported, or require an explicit verification path until /api/capabilities reports this row as supported; callers should expect typed backend refusals and surface them directly, not silently drop parameters, downgrade behavior, or infer broad compatibility.`
 }
 
+export const TRACKED_LLAMA_PROMOTION_ROW_IDS = [
+  'llama32_1b_instruct_q8_0',
+  'llama32_3b_instruct_q8_0',
+  'llama3_8b_instruct_gguf',
+]
+
 export function getCurrentCompatibilityTarget(capabilities) {
   const targets = capabilities?.model_compatibility || []
-  return targets.find((target) => target.status === 'supported_current_gate') || targets[0] || null
+  return targets.find((target) => target.status === 'supported_current_gate') || null
+}
+
+export function getTrackedCompatibilityTargets(capabilities, ids = TRACKED_LLAMA_PROMOTION_ROW_IDS) {
+  const targets = capabilities?.model_compatibility || []
+  return ids.map((id) => targets.find((target) => target.id === id) || null).filter(Boolean)
 }
 
 function getModelCapabilitySubject(model, catalogItem) {
@@ -207,6 +225,7 @@ export function findCompatibilityHint(capabilities, model, catalogItem) {
 
 export function compatibilityHintLabel(hint, fallback = 'No matching compatibility row') {
   if (!hint) return fallback
+  if (hint.kind === 'quant_missing') return `${hint.target.id}: quant not verified`
   if (hint.kind === 'quant_mismatch') return `${hint.target.id}: quant mismatch`
   return `${hint.target.id}: ${formatCapabilityStatus(hint.target.status)}`
 }
@@ -214,6 +233,7 @@ export function compatibilityHintLabel(hint, fallback = 'No matching compatibili
 export function compatibilityHintCopy(hint) {
   if (!hint) return 'No exact COMPATIBILITY.md row matched this model name/path, so the UI will not infer model-family support; load results and typed backend errors remain the source of truth.'
   if (hint.kind === 'family') return `${hint.target.notes}. This is only a ${hint.confidence}; it is not chat-ready support until a concrete compatibility row is validated.`
+  if (hint.kind === 'quant_missing') return `${hint.target.id} is the right model-size row, but this local record does not expose a quant label yet. Do not unlock chat from a size/name match alone; wait for GGUF quant evidence from the loaded model metadata plus generation_ready=true.`
   if (hint.kind === 'quant_mismatch') return `${hint.target.id} is scoped to ${hint.target.quantization}, but this entry appears to be ${hint.observedQuant || 'a different quantization'}. Do not inherit the supported gate from a same-family row; wait for an exact COMPATIBILITY.md row plus generation_ready=true.`
   return `${hint.target.family} · ${hint.target.quantization} · ${hint.target.evidence || hint.target.next_step}. Match source: ${hint.confidence}; runtime generation still requires loaded_now=true and generation_ready=true.`
 }

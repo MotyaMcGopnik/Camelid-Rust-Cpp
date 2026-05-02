@@ -1,5 +1,5 @@
 import { clampText, formatPreview, formatSidebarDate } from '../lib/formatters'
-import { formatCapabilityStatus, getCurrentCompatibilityTarget } from '../lib/capabilities'
+import { formatCapabilityStatus, getCurrentCompatibilityTarget, isCompatibilitySupportedForModel } from '../lib/capabilities'
 import { describeModelState, getModelStatusLabel, isRunnableModel } from '../lib/modelState'
 
 const titles = {
@@ -45,7 +45,9 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
   const supportGateDetail = currentCompatibilityTarget
     ? `${currentCompatibilityTarget.id}: ${formatCapabilityStatus(currentCompatibilityTarget.status)}`
     : 'Open the API contract before treating any model family or quant as supported.'
-  const runtimeGateDetail = `loaded_now=${runtime?.loaded_now ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready ? 'true' : 'false'}`
+  const activeModelSupported = isCompatibilitySupportedForModel(capabilities, activeModel)
+  const runtimeChatReady = Boolean(runtime?.generation_ready && activeModelSupported)
+  const runtimeGateDetail = `loaded_now=${runtime?.loaded_now ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready ? 'true' : 'false'} · supported_row=${activeModelSupported ? 'true' : 'false'}`
 
   if (tab === 'chat') {
     return (
@@ -81,7 +83,7 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
           <label className="topbar-chat-picker" title={selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what new chats should use next.'}>
             <select className="topbar-select topbar-select-chat" aria-label="Use for next chat" value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
               {models.map((model) => {
-                const runnable = isRunnableModel(model)
+                const runnable = isRunnableModel(model) && isCompatibilitySupportedForModel(capabilities, model)
                 return (
                   <option key={model.id} value={model.id} disabled={!runnable}>
                     {model.name}
@@ -97,7 +99,7 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
       </div>
       {tab !== 'library' && (
         <div className="topbar-status-strip" aria-label="Model status">
-          <div className={`status-pill topbar-status-pill ${runtime?.generation_ready ? 'ready' : runtime?.loaded_now ? 'warm' : ''}`} title={`${activeModelLabel} · ${runtimeGateDetail}`}>
+          <div className={`status-pill topbar-status-pill ${runtimeChatReady ? 'ready' : runtime?.loaded_now ? 'warm' : ''}`} title={`${activeModelLabel} · ${runtimeGateDetail}`}>
             <span className="topbar-status-label">Runtime chat gate</span>
             <strong>{clampText(activeModelLabel, 32)}</strong>
             <small>{runtimeGateDetail}</small>
