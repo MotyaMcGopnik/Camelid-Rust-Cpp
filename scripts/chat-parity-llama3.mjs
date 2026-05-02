@@ -104,10 +104,17 @@ try {
 
   const backendPromptTokens = backendChat.backendinference?.prompt_token_ids || []
   const backendGeneratedTokens = backendChat.backendinference?.generated_token_ids || []
+  const backendTopLogits = backendChat.backendinference?.top_logits || []
   const promptMatch = JSON.stringify(backendPromptTokens) === JSON.stringify(referencePromptTokens)
   const generatedTokensMatch = JSON.stringify(backendGeneratedTokens) === JSON.stringify(llamaGeneratedTokens)
   const backendText = backendChat.choices?.[0]?.message?.content ?? ''
   const textMatch = backendText === llamaText
+  const firstGeneratedTokenLogitComparison = compareFirstGeneratedTokenLogits({
+    backendGeneratedTokens,
+    backendTopLogits,
+    llamaGeneratedTokens,
+    llamaLogprobContent,
+  })
 
   const report = {
     backend: backendBase,
@@ -119,6 +126,8 @@ try {
     prompt_tokens_match: promptMatch,
     generated_tokens_match: generatedTokensMatch,
     generated_text_match: textMatch,
+    first_generated_token_diff_index: firstArrayDifference(backendGeneratedTokens, llamaGeneratedTokens),
+    first_generated_token_logit_comparison: firstGeneratedTokenLogitComparison,
     first_generated_text_diff_index: firstStringDifference(backendText, llamaText),
     backend_prompt_tokens: backendPromptTokens,
     reference_prompt_tokens: referencePromptTokens,
@@ -144,6 +153,7 @@ try {
   console.log(`backend_generated_tokens=${JSON.stringify(backendGeneratedTokens)}`)
   console.log(`llama_generated_tokens=${JSON.stringify(llamaGeneratedTokens)}`)
   console.log(`generated_tokens_match=${generatedTokensMatch}`)
+  console.log(`first_generated_token_logit_comparison=${JSON.stringify(firstGeneratedTokenLogitComparison)}`)
   console.log(`backend_text=${JSON.stringify(backendText)}`)
   console.log(`llama_text=${JSON.stringify(llamaText)}`)
   console.log(`generated_text_match=${textMatch}`)
@@ -242,7 +252,49 @@ function uniqueTokenIds(ids) {
   return out
 }
 
+function compareFirstGeneratedTokenLogits({ backendGeneratedTokens, backendTopLogits, llamaGeneratedTokens, llamaLogprobContent }) {
+  const backendTokenId = backendGeneratedTokens[0]
+  const llamaTokenId = llamaGeneratedTokens[0]
+  if (!Number.isInteger(backendTokenId) || !Number.isInteger(llamaTokenId)) return null
+
+  const backendByToken = new Map((backendTopLogits || []).map(row => [row.token_id, row]))
+  const llamaFirstTopLogprobs = llamaLogprobContent?.[0]?.top_logprobs || []
+  const llamaByToken = new Map(llamaFirstTopLogprobs.map(row => [row.id, row]))
+  const backendForBackendToken = backendByToken.get(backendTokenId) || null
+  const backendForLlamaToken = backendByToken.get(llamaTokenId) || null
+  const llamaForBackendToken = llamaByToken.get(backendTokenId) || null
+  const llamaForLlamaToken = llamaByToken.get(llamaTokenId) || null
+
+  const backendMarginLlamaMinusBackend = Number.isFinite(backendForLlamaToken?.logit) && Number.isFinite(backendForBackendToken?.logit)
+    ? backendForLlamaToken.logit - backendForBackendToken.logit
+    : null
+  const llamaMarginLlamaMinusBackend = Number.isFinite(llamaForLlamaToken?.logprob) && Number.isFinite(llamaForBackendToken?.logprob)
+    ? llamaForLlamaToken.logprob - llamaForBackendToken.logprob
+    : null
+
+  return {
+    backend_token_id: backendTokenId,
+    llama_token_id: llamaTokenId,
+    token_ids_match: backendTokenId === llamaTokenId,
+    backend_margin_llama_minus_backend: backendMarginLlamaMinusBackend,
+    llama_margin_llama_minus_backend: llamaMarginLlamaMinusBackend,
+    margin_disagreement: Number.isFinite(backendMarginLlamaMinusBackend) && Number.isFinite(llamaMarginLlamaMinusBackend)
+      ? llamaMarginLlamaMinusBackend - backendMarginLlamaMinusBackend
+      : null,
+    backend_rows: [backendForBackendToken, backendForLlamaToken].filter(Boolean),
+    llama_rows: [llamaForBackendToken, llamaForLlamaToken].filter(Boolean),
+  }
+}
+
 function firstStringDifference(left, right) {
+  const max = Math.max(left.length, right.length)
+  for (let i = 0; i < max; i += 1) {
+    if (left[i] !== right[i]) return i
+  }
+  return -1
+}
+
+function firstArrayDifference(left, right) {
   const max = Math.max(left.length, right.length)
   for (let i = 0; i < max; i += 1) {
     if (left[i] !== right[i]) return i
