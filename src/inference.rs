@@ -3242,12 +3242,15 @@ fn validate_output_projection_row_layout(
             let cols = output_weight.dim(1)?;
             if rows == vocab_size && cols == hidden_width {
                 Ok(EffectiveOutputProjectionRowLayout::DescriptorOutputInput)
-            } else if output_weight.data.len() == hidden_width * vocab_size {
+            } else if rows == hidden_width
+                && cols == vocab_size
+                && (output_weight.data.len() == hidden_width * vocab_size
+                    || output_weight.q8_0_file_backing.is_some())
+            {
                 Ok(EffectiveOutputProjectionRowLayout::TokenMajorReinterpret)
             } else {
                 Err(BackendError::RuntimeShapeMismatch(format!(
-                    "token-major output projection diagnostics expected tied/output-input [{vocab_size}, {hidden_width}] or {} output weight values, got shape {:?} with {} values",
-                    hidden_width * vocab_size,
+                    "token-major output projection diagnostics expected tied/output-input [{vocab_size}, {hidden_width}] or a token-major reinterpretation of [{hidden_width}, {vocab_size}], got shape {:?} with {} values",
                     output_weight.shape.dims,
                     output_weight.data.len()
                 )))
@@ -3271,24 +3274,86 @@ impl EffectiveOutputProjectionRowLayout {
             Self::TokenMajorReinterpret => "token_major",
         }
     }
+}
 
-    fn row_value(
-        self,
-        output_weight: &CpuTensor,
-        hidden_width: usize,
-        token_index: usize,
-        hidden_index: usize,
-    ) -> f32 {
-        match self {
-            Self::DescriptorInputOutput => {
+fn output_projection_token_row(
+    output_weight: &CpuTensor,
+    hidden_width: usize,
+    token_index: usize,
+    layout: EffectiveOutputProjectionRowLayout,
+) -> Result<Vec<f32>> {
+    if !output_weight.data.is_empty() {
+        return Ok(match layout {
+            EffectiveOutputProjectionRowLayout::DescriptorInputOutput => {
                 let output_row_width = output_weight.shape.dims[1];
-                output_weight.data[hidden_index * output_row_width + token_index]
+                (0..hidden_width)
+                    .map(|hidden_index| {
+                        output_weight.data[hidden_index * output_row_width + token_index]
+                    })
+                    .collect()
             }
-            Self::DescriptorOutputInput | Self::TokenMajorReinterpret => {
-                output_weight.data[token_index * hidden_width + hidden_index]
+            EffectiveOutputProjectionRowLayout::DescriptorOutputInput
+            | EffectiveOutputProjectionRowLayout::TokenMajorReinterpret => {
+                let start = token_index.checked_mul(hidden_width).ok_or_else(|| {
+                    BackendError::RuntimeShapeMismatch(
+                        "output projection token row offset overflow".to_string(),
+                    )
+                })?;
+                output_weight.data[start..start + hidden_width].to_vec()
             }
-        }
+        });
     }
+
+    let backing = output_weight.q8_0_file_backing.as_ref().ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(format!(
+            "output projection diagnostics need dense values or q8_0 file backing for token row {}, got empty tensor {}",
+            token_index, output_weight.name
+        ))
+    })?;
+    if output_weight.source_type != Some(GgufTensorType::Q8_0) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection diagnostics only support empty file-backed rows for q8_0 tensors, got {:?}",
+            output_weight.source_type
+        )));
+    }
+    if layout != EffectiveOutputProjectionRowLayout::TokenMajorReinterpret
+        && layout != EffectiveOutputProjectionRowLayout::DescriptorOutputInput
+    {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection diagnostics cannot lazily decode {} layout for tensor {}",
+            layout.label(), output_weight.name
+        )));
+    }
+
+    let file = File::open(&backing.path).map_err(|source| BackendError::Io {
+        path: backing.path.clone(),
+        source,
+    })?;
+    disable_file_cache_best_effort(&file);
+    let blocks_per_row = hidden_width / Q8_0_BLOCK_VALUES;
+    let row_block_start = token_index.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("output projection token row block offset overflow".to_string())
+    })?;
+    let row_offset = backing
+        .absolute_offset
+        .checked_add((row_block_start * Q8BlockReader::BLOCK_SIZE_BYTES) as u64)
+        .ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "output projection token row byte offset overflow".to_string(),
+            )
+        })?;
+    let mut dest = vec![0.0_f32; hidden_width];
+    let reader = Q8BlockReader::new(row_offset, blocks_per_row);
+    for local_block_idx in 0..blocks_per_row {
+        reader
+            .dequantize_block_to_slice(&file, local_block_idx, &mut dest)
+            .map_err(|err| {
+                BackendError::InvalidTensorData(format!(
+                    "output projection diagnostics failed to decode q8_0 token row {token_index} block {local_block_idx}: {err}",
+                ))
+            })?;
+    }
+    Ok(dest)
 }
 
 fn output_projection_token_diagnostic(
@@ -3301,6 +3366,7 @@ fn output_projection_token_diagnostic(
     final_norm_sources: Option<OutputProjectionFinalNormSources<'_>>,
 ) -> Result<LlamaOutputProjectionDiagnostic> {
     let token_index = token_id as usize;
+    let output_row = output_projection_token_row(output_weight, hidden_width, token_index, layout)?;
     let mut reconstructed_logit = 0.0f32;
     let mut norm_sum_sq = 0.0f32;
     let mut row_sum_sq = 0.0f32;
@@ -3316,7 +3382,7 @@ fn output_projection_token_diagnostic(
 
     for idx in 0..hidden_width {
         let norm_value = output_norm.data[idx];
-        let row_value = layout.row_value(output_weight, hidden_width, token_index, idx);
+        let row_value = output_row[idx];
         let component = norm_value * row_value;
         component_products.push(component);
         let final_norm_component = match final_norm_sources {
@@ -6278,6 +6344,59 @@ mod tests {
         assert_close(logits.data[0], 2.0);
         assert_close(logits.data[1], 3.0);
         assert_close(logits.data[2], 13.0);
+    }
+
+    #[test]
+    fn output_projection_diagnostics_support_q8_0_file_backed_token_major_rows() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let input_values = (0..32).map(|idx| idx as f32 * 0.25 - 2.0).collect::<Vec<_>>();
+        let input = CpuTensor::from_f32("output_norm", vec![1, 32], input_values.clone()).unwrap();
+        let row0 = Q8_0Block {
+            scale: 0.125,
+            quants: std::array::from_fn(|idx| idx as i8 - 8),
+        };
+        let row1 = Q8_0Block {
+            scale: 0.0625,
+            quants: std::array::from_fn(|idx| if idx.is_multiple_of(2) { 6 } else { -5 }),
+        };
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        for block in [&row0, &row1] {
+            use std::io::Write;
+            temp_file
+                .write_all(&f32_to_f16_bits(block.scale).to_le_bytes())
+                .unwrap();
+            let bytes = block.quants.iter().map(|q| *q as u8).collect::<Vec<_>>();
+            temp_file.write_all(&bytes).unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let output_weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            crate::tensor::TensorShape { dims: vec![32, 2] },
+            Q8_0FileBacking {
+                path: temp_file.path().to_path_buf(),
+                absolute_offset: 0,
+                num_blocks: 2,
+            },
+        );
+
+        let logits = output_projection_runtime(&input, &output_weight, "logits", false).unwrap();
+        let diagnostics = output_projection_diagnostics(
+            &input,
+            &output_weight,
+            &logits,
+            &[0, 1],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_close(diagnostics[0].reconstructed_logit, logits.data[0]);
+        assert_close(diagnostics[1].reconstructed_logit, logits.data[1]);
     }
 
     #[test]
