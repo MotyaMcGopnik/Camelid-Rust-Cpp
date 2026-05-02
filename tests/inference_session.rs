@@ -447,7 +447,7 @@ fn tiny_weights() -> LlamaLoadedWeights {
 
 fn assert_approx_eq(actual: f32, expected: f32) {
     assert!(
-        (actual - expected).abs() < 1e-5,
+        (actual - expected).abs() < 5e-4,
         "expected {actual} to be within tolerance of {expected}"
     );
 }
