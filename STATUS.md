@@ -1,12 +1,12 @@
 # Camelid Status
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
 `STATUS.md` is Camelid's current release-evidence checkpoint. It records what Camelid can prove today, what moved recently, and what still blocks the next support change. Treat it as a briefing memo, not a diary. Detailed historical run logs, older validation slices, and superseded tactical notes now live in [`STATUS_ARCHIVE_2026-04.md`](STATUS_ARCHIVE_2026-04.md).
 
 Use this file to answer three practical questions: what is supported now, what changed recently, and what still blocks the next support move?
 
-Executive summary: runtime capability improved at the 3B/8B blocker seam, but the public support boundary did not move.
+Executive summary: runtime capability improved at the 3B/8B blocker seam, but the public support boundary did not move; the latest broader-prompt sweep also exposed a real 3B formatting divergence that still blocks the Ubuntu support-contract flip.
 
 ## Release ledger snapshot
 
@@ -107,6 +107,13 @@ Representative artifacts:
 
 Promotion remains blocked until Camelid has broader prompt coverage plus API, memory/performance, and WebUI evidence for this exact row.
 
+Latest broader-prompt result:
+
+- `target/parity-broad-20260502T033606Z/llama32-3b-p1/report.json` (`hello`) matched llama.cpp.
+- `target/parity-broad-20260502T033606Z/llama32-3b-p2/report.json` (`give me exactly three bullet points about alpacas`) matched llama.cpp.
+- `target/parity-broad-20260502T033606Z/llama32-3b-p3/report.json` exposed the current blocker: prompt tokens still matched, but Camelid returned fenced JSON while llama.cpp returned inline backticked JSON for `answer with valid JSON for {"ok":true,"value":2}`.
+- Until that exact-row divergence is fixed and the remaining broader prompts are rerun cleanly, this row stays below supported Ubuntu chat.
+
 ### Llama 3 8B Instruct Q8_0
 
 Status: **groundwork only with compact parity validation**
@@ -164,6 +171,16 @@ Recent backend work also converted the first bounded 8B runtime artifact into st
 - the current-head memory gate stayed bounded: first-token sampled RSS roughly `6,220 -> 378,520 KiB`; 5-token sampled RSS roughly `6,076 -> 396,912 KiB`; no swap, OOM, timeout, or runaway retained-RSS signature appeared
 
 This is promising backend evidence, but still not a support promotion.
+
+## Latest broader-prompt sweep
+
+Latest Ubuntu prompt-pack run: `target/parity-broad-20260502T033606Z`
+
+- **Llama 3.2 1B Instruct Q8_0:** all five broader prompts cleared at `max_tokens=50`; prompt tokens, generated token IDs, and generated text all matched llama.cpp.
+- **Llama 3.2 3B Instruct Q8_0:** the first two broader prompts cleared, then the JSON-shaped prompt diverged in output formatting despite matching prompt tokens.
+- **Llama 3 8B Instruct Q8_0:** the broader pack did not run to completion because the 3B divergence needs fixing first.
+
+This is why the repo should not yet claim a full Ubuntu support-contract flip for the Llama 3 rows.
 
 ## Next blocking work
 

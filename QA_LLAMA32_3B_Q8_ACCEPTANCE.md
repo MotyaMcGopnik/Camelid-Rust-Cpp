@@ -1,6 +1,6 @@
 # Llama 3.2 3B Instruct Q8_0 Parity Acceptance
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
 > [!NOTE]
 > This QA checklist is an acceptance document for one exact model row. It does not change the
@@ -28,6 +28,7 @@ moved from artifact presence to broader prompt/chat-template, API, and WebUI acc
 - `/api/models/load` succeeds for the exact 3B target.
 - The latest file-backed lazy-Q8 recovery materially reduced the earlier eager dense-load spike.
 - The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
+- A broader Ubuntu prompt-pack run started to widen that evidence, but it uncovered a real exact-row divergence on the JSON-shaped prompt `answer with valid JSON for {"ok":true,"value":2}`: Camelid returned fenced JSON while llama.cpp returned inline backticked JSON.
 - Therefore the row remains blocked before broader prompt/chat-template coverage, API chat acceptance,
   WebUI acceptance, and stronger performance follow-up evidence.
 
@@ -60,5 +61,8 @@ Status: **acceptance target with compact parity evidence**
 
 The exact 3B artifact now exists, and the Ubuntu compact-header `hello` harness now matches
 llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
-The current work is to widen that exact-row evidence into broader prompt coverage plus API and
-WebUI acceptance without changing the support contract early.
+A follow-on broader prompt-pack run (`target/parity-broad-20260502T033606Z`) cleared `hello` and the
+three-bullet alpaca prompt, then failed on the JSON-shaped prompt because Camelid and llama.cpp
+formatted the answer differently even though prompt tokens still matched. The current work is to
+fix that exact divergence, rerun the broader pack cleanly, and only then widen the API/WebUI
+support contract.
