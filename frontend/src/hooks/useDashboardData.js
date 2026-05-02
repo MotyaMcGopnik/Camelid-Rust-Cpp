@@ -485,6 +485,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const selectedModelChatGate = getChatGateState(dashboard?.capabilities, selectedModel, runtime)
   const selectedModelRuntimeReady = selectedModelChatGate.runtimeReady
   const selectedModelCapabilitySupported = selectedModelChatGate.contractSupported
+  const selectedModelGuardedLlamaEvaluation = selectedModelChatGate.guardedLlamaEvaluation
   const selectedModelRunnable = selectedModelChatGate.chatUnlocked
   const pendingConversation = pendingChat?.conversationId
     && (selectedConversation?.id === pendingChat.conversationId || selectedConversationId === pendingChat.conversationId)
@@ -556,7 +557,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
 
     const messageContent = composer.trim()
     setSending(true)
-    showNotice(`Running Camelid local chat completion (${LOCAL_CHAT_DEMO_MAX_TOKENS} token demo cap)…`, 'info')
+    showNotice(selectedModelGuardedLlamaEvaluation ? `Running guarded Llama evaluation chat (${LOCAL_CHAT_DEMO_MAX_TOKENS} token cap)…` : `Running Camelid local chat completion (${LOCAL_CHAT_DEMO_MAX_TOKENS} token demo cap)…`, 'info')
 
     try {
       const conversation = await ensureConversation()

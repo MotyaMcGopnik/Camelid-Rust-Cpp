@@ -1,6 +1,7 @@
 import { clampText, formatPreview, formatSidebarDate } from '../lib/formatters'
-import { formatCapabilityStatus, getCurrentCompatibilityTarget, isCompatibilitySupportedForModel } from '../lib/capabilities'
-import { describeModelState, getModelStatusLabel, isRunnableModel } from '../lib/modelState'
+import { formatCapabilityStatus, getCurrentCompatibilityTarget } from '../lib/capabilities'
+import { getChatGateState } from '../lib/chatGate'
+import { describeModelState, getModelStatusLabel } from '../lib/modelState'
 
 const titles = {
   chat: 'Chat',
@@ -45,9 +46,9 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
   const supportGateDetail = currentCompatibilityTarget
     ? `${currentCompatibilityTarget.id}: ${formatCapabilityStatus(currentCompatibilityTarget.status)}`
     : 'Open the API contract before treating any model family or quant as supported.'
-  const activeModelSupported = isCompatibilitySupportedForModel(capabilities, activeModel)
-  const runtimeChatReady = Boolean(runtime?.generation_ready && activeModelSupported)
-  const runtimeGateDetail = `loaded_now=${runtime?.loaded_now ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready ? 'true' : 'false'} · supported_row=${activeModelSupported ? 'true' : 'false'}`
+  const activeChatGate = getChatGateState(capabilities, activeModel, runtime)
+  const runtimeChatReady = activeChatGate.chatUnlocked
+  const runtimeGateDetail = `loaded_now=${runtime?.loaded_now ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready ? 'true' : 'false'} · supported_row=${activeChatGate.contractSupported ? 'true' : 'false'} · guarded_llama_eval=${activeChatGate.guardedLlamaEvaluation ? 'true' : 'false'}`
 
   if (tab === 'chat') {
     return (
@@ -83,7 +84,7 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
           <label className="topbar-chat-picker" title={selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what new chats should use next.'}>
             <select className="topbar-select topbar-select-chat" aria-label="Use for next chat" value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
               {models.map((model) => {
-                const runnable = isRunnableModel(model) && isCompatibilitySupportedForModel(capabilities, model)
+                const runnable = getChatGateState(capabilities, model, runtime).chatUnlocked
                 return (
                   <option key={model.id} value={model.id} disabled={!runnable}>
                     {model.name}

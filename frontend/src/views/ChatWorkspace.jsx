@@ -1,6 +1,7 @@
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, formatCapabilityStatus, getCurrentCompatibilityTarget, isCompatibilitySupportedForModel, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
 import { clampText, formatDate, formatRate } from '../lib/formatters'
-import { describeModelState, getModelStatusLabel, isRunnableInCurrentRuntime, isRunnableModel } from '../lib/modelState'
+import { getChatGateState } from '../lib/chatGate'
+import { describeModelState, getModelStatusLabel, isRunnableInCurrentRuntime } from '../lib/modelState'
 
 const CHAT_DEMO_TOKEN_CAP = 16
 
@@ -87,14 +88,18 @@ export default function ChatWorkspace({
   const staleTelemetryModelLabel = latestVisibleAssistantMessage?.model_id && !latestTelemetryMatchesSelection
     ? (latestVisibleAssistantMessage.model_name || latestVisibleAssistantMessage.model_id)
     : ''
-  const runnableModels = models.filter((model) => isRunnableModel(model) && isCompatibilitySupportedForModel(capabilities, model))
+  const runnableModels = models.filter((model) => getChatGateState(capabilities, model, runtime).chatUnlocked)
   const hasRunnableChoices = runnableModels.length > 0
   const modelPickerTitle = selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what Camelid should use for this chat.'
-  const selectedRuntimeReady = isRunnableInCurrentRuntime(selectedModel, runtime)
-  const selectedModelCapabilitySupported = isCompatibilitySupportedForModel(capabilities, selectedModel)
-  const supportBlocked = selectedRuntimeReady && !selectedModelCapabilitySupported
+  const selectedChatGate = getChatGateState(capabilities, selectedModel, runtime)
+  const selectedRuntimeReady = selectedChatGate.runtimeReady || isRunnableInCurrentRuntime(selectedModel, runtime)
+  const selectedModelCapabilitySupported = selectedChatGate.contractSupported || isCompatibilitySupportedForModel(capabilities, selectedModel)
+  const selectedModelGuardedLlamaEvaluation = selectedChatGate.guardedLlamaEvaluation
+  const supportBlocked = selectedRuntimeReady && !selectedModelCapabilitySupported && !selectedModelGuardedLlamaEvaluation
   const selectedModelMeta = supportBlocked
     ? 'Loaded, but not supported by the current compatibility contract'
+    : selectedModelGuardedLlamaEvaluation
+      ? `Guarded Llama evaluation · ${CHAT_DEMO_TOKEN_CAP}-token cap`
     : !selectedModelRunnable
       ? describeModelState(selectedModel)
       : runtime?.loaded_now && runtime?.active_model_id === selectedModelId
@@ -137,8 +142,8 @@ export default function ChatWorkspace({
       </div>
       <div>
         <span>Chat unlock</span>
-        <strong>{selectedModelRunnable ? 'generation_ready=true + supported row' : supportBlocked ? 'Blocked by compatibility contract' : 'Blocked until health is ready'}</strong>
-        <small>loaded_now={runtime?.loaded_now ? 'true' : 'false'} · generation_ready={runtime?.generation_ready ? 'true' : 'false'}; chat also requires an exact supported /api/capabilities model/quant row.</small>
+        <strong>{selectedModelRunnable ? (selectedModelGuardedLlamaEvaluation ? 'guarded Llama evaluation ready' : 'generation_ready=true + supported row') : supportBlocked ? 'Blocked by compatibility contract' : 'Blocked until health is ready'}</strong>
+        <small>loaded_now={runtime?.loaded_now ? 'true' : 'false'} · generation_ready={runtime?.generation_ready ? 'true' : 'false'}; chat requires either an exact supported row or an exact tracked Llama evaluation row.</small>
       </div>
       <div>
         <span>API guardrails</span>
@@ -212,8 +217,8 @@ export default function ChatWorkspace({
             <div className="chat-empty-stage">
               <div className="chat-empty-hero chat-empty-hero-gemini">
                 <p className="chat-empty-greeting">Local Camelid chat</p>
-                <h2>{selectedModelRunnable ? 'Ask the loaded model, then inspect the raw reply.' : supportBlocked ? 'Compatibility contract blocks chat for this model' : 'Load a generation-ready local model first'}</h2>
-                <p className="hero-summary">{selectedModelRunnable ? 'The first-token output-projection fix is in; longer replies still need validation, so Camelid shows raw text, TPS, and token probabilities instead of promising polish.' : supportBlocked ? 'Camelid reports this model is loaded and generation-ready, but the UI will not enable chat unless /api/capabilities has an exact supported COMPATIBILITY.md row for its model family and quantization.' : 'Chat unlocks only after Camelid reports loaded_now=true, generation_ready=true, and an exact supported model/quant row for the selected local GGUF.'}</p>
+                <h2>{selectedModelRunnable ? (selectedModelGuardedLlamaEvaluation ? 'Run the loaded Llama model in guarded evaluation mode.' : 'Ask the loaded model, then inspect the raw reply.') : supportBlocked ? 'Compatibility contract blocks chat for this model' : 'Load a generation-ready local model first'}</h2>
+                <p className="hero-summary">{selectedModelRunnable ? (selectedModelGuardedLlamaEvaluation ? 'This is end-to-end WebUI chat for the exact tracked Llama row, intentionally labeled guarded until broader parity/promote evidence catches up.' : 'The first-token output-projection fix is in; longer replies still need validation, so Camelid shows raw text, TPS, and token probabilities instead of promising polish.') : supportBlocked ? 'Camelid reports this model is loaded and generation-ready, but the UI will not enable chat unless /api/capabilities has an exact supported COMPATIBILITY.md row for its model family and quantization or an exact tracked Llama evaluation row.' : 'Chat unlocks after Camelid reports loaded_now=true, generation_ready=true, and an exact supported or tracked Llama evaluation row for the selected local GGUF.'}</p>
               </div>
 
               {renderCapabilityStrip(true)}

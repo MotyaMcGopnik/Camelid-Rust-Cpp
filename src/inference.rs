@@ -4693,9 +4693,16 @@ fn write_kv_cache(
     kv_cache.ensure_position_capacity(kv_cache.position + 1)?;
     let offset = kv_cache_offset(kv_cache, layer_idx, kv_cache.position, 0);
     let end = offset + expected_width;
-    kv_cache.keys[offset..end].copy_from_slice(&key.data);
-    kv_cache.values[offset..end].copy_from_slice(&value.data);
+    copy_to_f16_kv_cache_storage(&mut kv_cache.keys[offset..end], &key.data);
+    copy_to_f16_kv_cache_storage(&mut kv_cache.values[offset..end], &value.data);
     Ok(())
+}
+
+fn copy_to_f16_kv_cache_storage(dest: &mut [f32], source: &[f32]) {
+    debug_assert_eq!(dest.len(), source.len());
+    for (dest_value, source_value) in dest.iter_mut().zip(source.iter().copied()) {
+        *dest_value = f16_bits_to_f32(f32_to_f16_bits(source_value));
+    }
 }
 
 const ATTENTION_TRACE_HEAD_LIMIT: usize = 8;
@@ -7150,6 +7157,43 @@ mod tests {
             &kv_cache.values[prior_layer1_start..prior_layer1_start + 2],
             &[7.0, 8.0]
         );
+    }
+
+    #[test]
+    fn kv_cache_storage_matches_llama_cpp_f16_rounding() {
+        let plan = LlamaKvCachePlan {
+            max_sequence_length: 1,
+            layer_count: 1,
+            kv_head_count: 1,
+            head_dim: 2,
+            key_shape: vec![1, 1, 1, 2],
+            value_shape: vec![1, 1, 1, 2],
+        };
+        let mut kv_cache = LlamaKvCache::new(plan).expect("KV cache");
+        let key = CpuTensor::from_f32("key", vec![1, 2], vec![1.0001, -2.0003]).unwrap();
+        let value = CpuTensor::from_f32("value", vec![1, 2], vec![3.0007, -4.0009]).unwrap();
+
+        write_kv_cache(&mut kv_cache, 0, &key, &value).unwrap();
+
+        assert_eq!(
+            kv_cache.keys,
+            key.data
+                .iter()
+                .copied()
+                .map(|value| f16_bits_to_f32(f32_to_f16_bits(value)))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            kv_cache.values,
+            value
+                .data
+                .iter()
+                .copied()
+                .map(|value| f16_bits_to_f32(f32_to_f16_bits(value)))
+                .collect::<Vec<_>>()
+        );
+        assert_ne!(kv_cache.keys, key.data);
+        assert_ne!(kv_cache.values, value.data);
     }
 
     #[test]

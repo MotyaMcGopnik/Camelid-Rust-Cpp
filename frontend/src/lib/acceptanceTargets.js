@@ -22,8 +22,8 @@ export const LLAMA32_3B_ACCEPTANCE_TARGET = {
   },
 }
 
-export const LLAMA32_3B_ACCEPTANCE_SUMMARY = 'This exact 3B row is the current acceptance target. The exact-row backend record already includes /api/models/load success plus Ubuntu compact-header hello prompt-token, deterministic 1-token, 5-token, and bounded 50-token parity against llama.cpp, but broader prompt/chat-template coverage, exact-row API smoke, WebUI smoke, and stronger memory/perf follow-up are still missing, so chat must stay guarded.'
+export const LLAMA32_3B_ACCEPTANCE_SUMMARY = 'This exact 3B row is the current acceptance target. The exact-row backend record already includes /api/models/load success plus Ubuntu compact-header hello prompt-token, deterministic 1-token, 5-token, and bounded 50-token parity against llama.cpp, but broader prompt/chat-template coverage, exact-row API smoke, WebUI smoke, and stronger memory/perf follow-up are still missing, so any WebUI chat must stay guarded and labeled as evaluation rather than supported release chat.'
 
 export const LLAMA32_3B_ACCEPTANCE_AVAILABILITY = 'This browser/runtime list does not currently show the exact 3B row. That does not erase the existing backend evidence for the row, and it must not be turned into a green frontend state or neighboring-row support claim.'
 
-export const LLAMA32_3B_ACCEPTANCE_GATING_NOTE = 'Frontend readiness remains blocked until Camelid reports loaded_now=true and generation_ready=true for this exact GGUF and /api/capabilities promotes the same 3B Q8_0 row from acceptance target to a supported compatibility row.'
+export const LLAMA32_3B_ACCEPTANCE_GATING_NOTE = 'Frontend chat can enter guarded evaluation only after Camelid reports loaded_now=true and generation_ready=true for this exact GGUF plus an exact tracked Llama compatibility row; supported release chat still requires /api/capabilities to promote the same 3B Q8_0 row from acceptance target to a supported compatibility row.'

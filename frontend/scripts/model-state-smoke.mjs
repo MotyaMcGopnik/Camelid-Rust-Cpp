@@ -166,10 +166,10 @@ assert.match(compatibilityHintCopy(tinyKQuantHint), /runtime generation still re
 const llama3Q4Hint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct', quant: 'Q4_K_M' })
 assert.equal(llama3Q4Hint.kind, 'quant_mismatch')
 assert.match(compatibilityHintCopy(llama3Q4Hint), /Do not inherit the supported gate|wait for an exact COMPATIBILITY\.md row/)
-assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Meta Llama 3 8B Instruct', quant: 'Q8_0' }), false, 'groundwork Llama 3 8B rows must not unlock chat')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Meta Llama 3 8B Instruct', quant: 'Q8_0' }), false, 'groundwork Llama 3 8B rows are not supported rows')
 const llama32OneBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32OneBHint.target.id, 'llama32_1b_instruct_q8_0', 'Llama 3.2 1B must match its exact evidence-only row')
-assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' }), false, 'evidence-only 1B rows must not unlock chat')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' }), false, 'evidence-only 1B rows are not supported rows')
 assert.deepEqual(
   getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-1b', name: 'Llama 3.2 1B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-1b', loaded_now: true, generation_ready: true }),
   {
@@ -178,11 +178,13 @@ assert.deepEqual(
     runtimeLoaded: true,
     runtimeGenerationReady: true,
     contractSupported: false,
-    chatUnlocked: false,
+    guardedLlamaEvaluation: true,
+    chatUnlocked: true,
+    chatMode: 'guarded_llama_evaluation',
     label: 'llama32_1b_instruct_q8_0: evidence only',
     copy: compatibilityHintCopy(llama32OneBHint),
   },
-  'Llama 3.2 1B can be runtime-green but must stay chat-blocked while /api/capabilities says evidence_only',
+  'Llama 3.2 1B runtime-green exact rows should unlock guarded WebUI evaluation chat without claiming support',
 )
 const llama32OneBQuantMissingHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 1B Instruct' })
 assert.equal(llama32OneBQuantMissingHint.kind, 'quant_missing', 'Llama 3.2 exact-size matches must not become compatibility matches without quant evidence')
@@ -196,18 +198,18 @@ assert.equal(isCompatibilitySupportedForModel(promotedOneBFixture, { name: 'Llam
 const llama32ThreeBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32ThreeBHint.target.id, 'llama32_3b_instruct_q8_0', 'Llama 3.2 3B must match its exact row rather than inheriting the 8B row')
 assert.equal(compatibilityHintLabel(llama32ThreeBHint), 'llama32_3b_instruct_q8_0: acceptance target with compact parity evidence')
-assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }), false, 'blocked 3B rows must not unlock chat')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }), false, 'blocked 3B rows are not supported rows')
 assert.equal(
   getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-3b', name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-3b', loaded_now: true, generation_ready: true }).chatUnlocked,
-  false,
-  'Llama 3.2 3B acceptance-target rows must stay chat-blocked even when runtime-green',
+  true,
+  'Llama 3.2 3B acceptance-target rows should unlock guarded WebUI evaluation chat when runtime-green',
 )
 const llama3EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama3EightBHint.target.id, 'llama3_8b_instruct_gguf', 'Llama 3 8B must match its exact groundwork-only row')
 assert.equal(
   getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama3-8b', name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama3-8b', loaded_now: true, generation_ready: true }).chatUnlocked,
-  false,
-  'Llama 3 8B groundwork rows must stay chat-blocked even when runtime-green',
+  true,
+  'Llama 3 8B groundwork rows should unlock guarded WebUI evaluation chat when runtime-green',
 )
 const llama32NoSizeHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32NoSizeHint, null, 'Llama 3.2 names without exact 1B/3B size must not inherit a tracked row or family readiness hint')

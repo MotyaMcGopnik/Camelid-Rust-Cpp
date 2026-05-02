@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, quantLabelFromGgufFileType } from '../src/lib/capabilities.js'
+import { getChatGateState } from '../src/lib/chatGate.js'
 
 const args = new Map()
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -275,9 +276,10 @@ if (requireGeneration && !health.generation_ready) {
 }
 
 const activeModelListed = Boolean(activeModel && modelIds.includes(activeModel.id))
-const guardedChatBypass = Boolean(allowGuardedChat && health.generation_ready && activeModel && activeModelListed && !activeSupportedByContract)
-const webuiChatEnabled = Boolean(health.generation_ready && activeModel && activeModelListed && (activeSupportedByContract || guardedChatBypass))
-const webuiChatState = guardedChatBypass ? 'guarded' : webuiChatEnabled ? 'enabled' : 'blocked'
+const activeChatGate = activeModel ? getChatGateState(capabilities, activeModel, { active_model_id: health.active_model_id, loaded_now: Boolean(health.active_model_id), generation_ready: Boolean(health.generation_ready) }) : null
+const guardedChatBypass = Boolean(allowGuardedChat && health.generation_ready && activeModel && activeModelListed && !activeChatGate?.chatUnlocked)
+const webuiChatEnabled = Boolean(activeModelListed && (activeChatGate?.chatUnlocked || guardedChatBypass))
+const webuiChatState = activeChatGate?.guardedLlamaEvaluation || guardedChatBypass ? 'guarded' : webuiChatEnabled ? 'enabled' : 'blocked'
 
 if (expectWebUiChat) {
   if (!['enabled', 'blocked', 'guarded'].includes(expectWebUiChat)) {
@@ -286,7 +288,9 @@ if (expectWebUiChat) {
   assertExpected('WebUI chat state', webuiChatState, expectWebUiChat)
 }
 
-if (guardedChatBypass) {
+if (activeChatGate?.guardedLlamaEvaluation) {
+  console.log('ℹ exact tracked Llama evaluation row: WebUI chat is guarded but intentionally enabled for end-to-end validation')
+} else if (guardedChatBypass) {
   console.log('ℹ allow-guarded-chat enabled: running one QA chat even though the active model is still outside the exact supported /api/capabilities contract row')
 }
 
@@ -358,8 +362,8 @@ if (webuiChatEnabled) {
 } else {
   const reason = !health.generation_ready
     ? 'generation is not ready'
-    : !activeSupportedByContract
-      ? 'the active model does not have an exact supported /api/capabilities compatibility row'
+    : !activeChatGate?.chatUnlocked
+      ? 'the active model is blocked by the WebUI chat gate'
       : 'no active model is listed by /v1/models'
   console.log(`ℹ chat completion skipped because ${reason}; frontend should keep chat disabled${allowGuardedChat ? ' until a QA-only guarded chat rerun is requested' : ''}`)
 }
