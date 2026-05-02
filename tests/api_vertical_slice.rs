@@ -44,7 +44,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "TinyLlama Q8_0 five-prompt parity"
+        "TinyLlama Q8_0 plus exact Llama 3.2 1B/3B Q8_0 smoke gates"
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -80,31 +80,27 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "llama32_1b_instruct_q8_0")
         .unwrap();
-    assert_eq!(llama32_1b["status"], "evidence_only");
+    assert_eq!(llama32_1b["status"], "supported_exact_row_smoke");
     assert_eq!(llama32_1b["metadata_parses"], "validated");
     assert_eq!(
         llama32_1b["generation_runs"],
-        "validated_for_one_compact_prompt"
+        "api_completion_and_chat_smoke_validated"
     );
-    assert_eq!(
-        llama32_1b["tested_context"],
-        "compact_header_hello_5_token_smoke"
-    );
+    assert_eq!(llama32_1b["frontend_load_path_verified"], "validated");
+    assert_eq!(llama32_1b["tested_context"], "short_api_webui_smoke");
     let llama32_3b = compatibility
         .iter()
         .find(|item| item["id"] == "llama32_3b_instruct_q8_0")
         .unwrap();
-    assert_eq!(
-        llama32_3b["status"],
-        "acceptance_target_backend_evidence_only"
-    );
+    assert_eq!(llama32_3b["status"], "supported_exact_row_smoke");
     assert_eq!(
         llama32_3b["generation_runs"],
-        "repeat_backend_only_short_generation_plus_bounded_50_token_run"
+        "api_completion_and_chat_smoke_validated"
     );
+    assert_eq!(llama32_3b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_3b["tested_context"],
-        "backend_only_completion_prompt_hello_5_and_50_tokens"
+        "short_api_webui_smoke"
     );
     let llama3 = compatibility
         .iter()

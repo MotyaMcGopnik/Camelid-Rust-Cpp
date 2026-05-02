@@ -1,12 +1,12 @@
 # Camelid Roadmap
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
 `ROADMAP.md` is Camelid's delivery plan of record. It is not a backlog and it is not a feature wish list. It answers one product question: **what must happen next for Camelid to widen its support boundary without weakening credibility?** The sequencing is intentional: protect the supported lane, remove the next exact blocker, and widen claims only when the resulting evidence can survive scrutiny.
 
 [`COMPATIBILITY.md`](COMPATIBILITY.md) defines what Camelid can honestly support today. [`STATUS.md`](STATUS.md) records the artifacts, evidence boundaries, and blocker state behind that posture. Detailed completed-phase history lives in `ROADMAP_ARCHIVE.md` and `STATUS.md`. Read this file as operating sequence, not aspiration.
 
-Executive summary: Camelid already has one supported release gate. This roadmap exists to earn the next exact row without relaxing the evidence standard or letting implementation progress outrun public claims.
+Executive summary: Camelid now has the TinyLlama supported gate plus exact Llama 3.2 1B/3B short-chat smoke gates. This roadmap exists to preserve those gates, widen them only with stronger row-specific evidence, and keep broader Llama 3 work honest.
 
 Practical reading rule: if a task does not protect the current gate, remove the next exact blocker, or prepare aligned support-language updates, it is secondary to this roadmap.
 
@@ -16,15 +16,14 @@ Camelid is not pursuing breadth for its own sake. The roadmap exists to expand c
 
 Current program posture:
 
-- **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 is the only supported end-to-end generation lane.
-- **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 has narrow parity evidence and remains below supported generation.
-- **Acceptance target:** Llama 3.2 3B Instruct Q8_0 is the exact next WebUI real-chat target. The exact GGUF now loads through `/api/models/load` with low backend RSS after streaming metadata parsing, and the Ubuntu compact-header `hello` harness now has prompt-token parity plus deterministic 1-token, 5-token, and bounded 50-token generation parity, but the row remains blocked until broader prompt/chat-template coverage, API, WebUI, and stronger memory/performance evidence exist.
+- **Supported generation gates:** TinyLlama 1.1B Chat Q8_0 remains supported, and the exact Llama 3.2 1B/3B Instruct Q8_0 rows are smoke-supported for short local chat.
+- **Scope boundary:** the Llama 3.2 support claim is exact-row only: Instruct variant, Q8_0 quantization, loaded runtime readiness, and the short smoke envelope all matter.
 - **Groundwork-only lane:** Llama 3 8B Instruct Q8_0 now has repeat bounded backend-only first-token evidence, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence for the exact tracked Q8_0 GGUF, but it is still not a supported generation row until broader prompt/chat-template parity, WebUI readiness, and performance/portability evidence are captured.
-- **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
+- **Explicit non-claim:** no broad Llama 3-family support exists today; the 8B row and neighboring 1B/3B variants remain unsupported unless they have their own exact row and evidence.
 
 Nothing inherits support from a nearby size, quantization, family, tokenizer lane, API surface, or UI state.
 
-Near-term thesis: protect the trusted TinyLlama gate, turn Llama 3 groundwork into bounded runtime evidence, and keep every public surface synchronized with the exact support boundary.
+Near-term thesis: protect the trusted TinyLlama and exact Llama 3.2 1B/3B smoke gates, fix the next broader 3B prompt-pack blocker, and keep every public surface synchronized with the exact support boundary.
 
 ## Roadmap operating rules
 
@@ -34,16 +33,17 @@ Three rules drive prioritization and sequencing:
 - **Remove the next honest blocker.** The highest-leverage work is the exact runtime seam that can create the next promotable artifact.
 - **Move public surfaces together.** Documentation, API signals, and frontend readiness should change in the same change window.
 
-## What improved without changing the support line
+## What changed in the support line
 
-Recent work improved the engineering seam without moving the release ledger. That is the intended outcome at this stage: implementation can advance ahead of support language, but support language does not move until evidence catches up.
+Recent work moved the release ledger only where the evidence, API, frontend, and docs now agree.
 
 - TinyLlama Q8_0 remains the trusted release gate.
-- Llama 3.2 1B Q8_0 remains informative evidence only.
-- Llama 3.2 3B Q8_0 now has the exact local GGUF, successful metadata/load behavior with low backend RSS after streaming metadata parsing, and compact-header `hello` parity for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on Ubuntu, but still no promotable exact-row support evidence because broader prompt/chat-template coverage, API, and WebUI evidence are not in hand yet.
-- Llama 3 8B Q8_0 now has repeat bounded backend-only first-token success on Ubuntu, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence for the exact tracked row. Release posture still stays groundwork-only until broader prompt/chat-template parity, WebUI readiness, and performance evidence exist.
+- Llama 3.2 1B Q8_0 is now a supported exact-row smoke lane after compact parity, broader prompt-pack parity, API smoke, and frontend smoke aligned.
+- Llama 3.2 3B Q8_0 is now a supported exact-row smoke lane after exact-GGUF load, compact prompt-token/1-token/5-token/50-token parity, API smoke, and frontend smoke aligned.
+- Llama 3.2 3B still has a known JSON-shaped broader prompt-pack divergence; that blocks widening the row beyond short local-chat smoke.
+- Llama 3 8B Q8_0 remains groundwork-only until broader prompt/chat-template parity, WebUI readiness, and performance evidence exist.
 
-Near-term objective: preserve the supported TinyLlama lane, finish the lazy-Q8 execution seam for larger LLaMA-family rows, and publish no broader support claim until row-specific evidence is in hand.
+Near-term objective: preserve the supported TinyLlama and exact Llama 3.2 1B/3B short-chat lanes, then widen only after row-specific evidence is in hand.
 
 ## Delivery sequence: now, next, later
 
@@ -51,18 +51,19 @@ This is the highest-level execution order. **Now** protects the current gate and
 
 ### Now
 
-Protect the supported lane and finish the engineering seam most likely to produce the next honest promotion artifact.
+Protect the supported lanes and clear the next blocker before widening claims.
 
 - Protect the validated TinyLlama Q8_0 gate.
+- Protect the exact Llama 3.2 1B/3B Instruct Q8_0 short-chat smoke gates.
+- Fix and rerun the Llama 3.2 3B broader JSON-shaped prompt-pack divergence before expanding the 3B claim.
 - Convert the current 8B backend-only evidence into broader prompt-pack/chat-template parity, WebUI readiness, and performance evidence without promoting support early.
-- Convert retained-Q8 groundwork into bounded first-token evidence for the blocked Llama 3 lanes.
 - Keep README, `COMPATIBILITY.md`, `ROADMAP.md`, `STATUS.md`, `/api/capabilities`, and frontend readiness copy aligned.
 
 ### Next
 
 Promote only what can be defended row by row.
 
-- Promote Llama 3.2 3B Q8_0 only if bounded prompt-token, first-token, memory, API, and WebUI evidence all land.
+- Widen Llama 3.2 3B Q8_0 beyond short-chat smoke only if broader prompt/chat-template, memory/performance, API, and WebUI evidence all land.
 - Broaden quantization support beyond Q8_0 with tests, docs, and exact-row evidence.
 - Expand tokenizer and chat-template coverage for additional supported rows.
 - Extend correctness checks into longer prompt and context buckets.
@@ -82,8 +83,8 @@ Broaden the product surface only after correctness and release discipline are st
 | Milestone | Status | What must be true |
 | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 supported gate | Complete | End-to-end generation parity artifacts exist and docs/API/frontend agree. |
-| Llama 3.2 1B Instruct Q8_0 evidence lane | In progress / evidence only | Narrow deterministic evidence exists, but no support promotion is implied. |
-| Llama 3.2 3B Instruct Q8_0 WebUI acceptance | Blocked | Exact GGUF loads safely and produces bounded prompt-token and generated-token evidence with WebUI/API confirmation. |
+| Llama 3.2 1B Instruct Q8_0 exact-row smoke | Complete / narrow support | Compact parity, broader prompt-pack parity, API smoke, and frontend smoke agree for this exact 1B Q8_0 row. |
+| Llama 3.2 3B Instruct Q8_0 exact-row smoke | Complete / narrow support | Exact GGUF load, compact prompt-token/1-token/5-token/50-token parity, API smoke, and frontend smoke agree for this exact 3B Q8_0 row. |
 | Llama 3 8B Instruct Q8_0 bounded evidence expansion | In progress | Repeat bounded backend-only first-token evidence, raw `hello` prompt-token parity, a short deterministic 5-token backend slice, basic API smoke, and bounded memory evidence exist for the exact tracked row; next gate is broader prompt/chat-template parity plus WebUI/performance evidence without widening support language early. |
 | Quantization breadth beyond Q8_0 | Planned | Each quant format has loader/runtime tests, docs, and at least one row-specific real-model artifact. |
 | Longer-context correctness | Planned | Context-length claims are backed by model-specific audits and documented limits. |
@@ -98,9 +99,9 @@ Broaden the product surface only after correctness and release discipline are st
 
 Current required discipline:
 
-- TinyLlama 1.1B Chat Q8_0 remains the only supported generation gate.
-- Llama 3.2 1B Q8_0 remains evidence-only.
-- Llama 3.2 3B Q8_0 remains blocked until its own bounded artifacts exist.
+- TinyLlama 1.1B Chat Q8_0 remains a supported generation gate.
+- Llama 3.2 1B Q8_0 is supported only as an exact-row short-chat smoke lane.
+- Llama 3.2 3B Q8_0 is supported only as an exact-row short-chat smoke lane until broader prompt-pack evidence lands.
 - Llama 3 8B Q8_0 remains groundwork-only in release terms even after repeat bounded backend-only first-token, raw prompt-token, short-generation, API-smoke, and memory evidence; docs and capability language must stay conservative until broader parity/readiness evidence lands.
 - Frontend readiness must remain exact-row and exact-quant aware.
 

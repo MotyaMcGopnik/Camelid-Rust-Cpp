@@ -112,22 +112,26 @@ export default function ChatWorkspace({
   const apiFeatures = capabilities?.api_features || []
   const chatFeature = apiFeatures.find((feature) => feature.id === 'openai_chat_completions')
   const currentCompatibilityTarget = getCurrentCompatibilityTarget(capabilities)
+  const supportedCompatibilityRows = (capabilities?.model_compatibility || []).filter((target) => isSupportedCapabilityStatus(target.status))
+  const supportedCompatibilitySummary = supportedCompatibilityRows.map((target) => target.id).join(' · ')
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
   const selectedCompatibilityTarget = selectedCompatibilityHint?.kind === 'compatibility' ? selectedCompatibilityHint.target : null
   const selectedCompatibilitySupported = selectedCompatibilityTarget ? isSupportedCapabilityStatus(selectedCompatibilityTarget.status) : false
   const capabilityGate = supportContract?.current_gate || 'No /api/capabilities contract'
-  const compatibilityLabel = currentCompatibilityTarget
+  const compatibilityLabel = supportedCompatibilitySummary || (currentCompatibilityTarget
     ? `${currentCompatibilityTarget.id} · ${formatCapabilityStatus(currentCompatibilityTarget.status)}`
-    : 'No compatibility target advertised'
+    : 'No compatibility target advertised')
   const selectedCompatibilityLabel = selectedModel
     ? compatibilityHintLabel(selectedCompatibilityHint, 'No matching COMPATIBILITY.md row')
     : 'No model selected'
   const selectedCompatibilityCopy = selectedModel
     ? compatibilityHintCopy(selectedCompatibilityHint)
     : 'Choose a model before inferring any support boundary. Camelid will not promote filenames or saved paths into compatibility claims.'
-  const compatibilityEvidence = currentCompatibilityTarget
-    ? currentCompatibilityTarget.evidence || currentCompatibilityTarget.next_step
-    : 'Camelid will not infer model-family or quantization support from filenames or saved browser paths.'
+  const compatibilityEvidence = supportedCompatibilitySummary
+    ? `Supported rows: ${supportedCompatibilitySummary}. Runtime loaded_now=true and generation_ready=true are still required.`
+    : currentCompatibilityTarget
+      ? currentCompatibilityTarget.evidence || currentCompatibilityTarget.next_step
+      : 'Camelid will not infer model-family or quantization support from filenames or saved browser paths.'
   const chatFeatureCopy = chatFeature
     ? `${formatCapabilityStatus(chatFeature.status)} · ${chatFeature.notes}`
     : 'Chat capability was not advertised; health and typed backend errors remain the source of truth.'
@@ -143,7 +147,7 @@ export default function ChatWorkspace({
       <div>
         <span>Chat unlock</span>
         <strong>{selectedModelRunnable ? (selectedModelGuardedLlamaEvaluation ? 'guarded Llama evaluation ready' : 'generation_ready=true + supported row') : supportBlocked ? 'Blocked by compatibility contract' : 'Blocked until health is ready'}</strong>
-        <small>loaded_now={runtime?.loaded_now ? 'true' : 'false'} · generation_ready={runtime?.generation_ready ? 'true' : 'false'}; chat requires either an exact supported row or an exact tracked Llama evaluation row.</small>
+        <small>loaded_now={runtime?.loaded_now ? 'true' : 'false'} · generation_ready={runtime?.generation_ready ? 'true' : 'false'}; chat requires an exact supported row, except guarded evaluation rows stay explicitly labeled.</small>
       </div>
       <div>
         <span>API guardrails</span>

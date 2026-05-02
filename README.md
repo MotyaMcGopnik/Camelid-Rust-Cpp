@@ -29,11 +29,11 @@ The current product slice includes:
 | Exact lane | Public posture | Evidence today | Still needed |
 | --- | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 | Supported current gate | Five 50-token prompt audits match known-good llama-server prompt token IDs, generated token arrays, and generated text. | No implied support for adjacent TinyLlama quantizations or other model families. |
-| Llama 3.2 1B Instruct Q8_0 | Evidence only | One compact-header `hello` prompt matches llama.cpp on Ubuntu for prompt tokens, generated token IDs, and generated text through the completed bounded run. | Broader prompt coverage and aligned API/WebUI support language before promotion. |
-| Llama 3.2 3B Instruct Q8_0 | Acceptance target with compact parity evidence | Exact GGUF load succeeds; compact-header `hello` matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation. | Broader prompt/chat-template coverage, API smoke, WebUI smoke, and stronger perf evidence. |
+| Llama 3.2 1B Instruct Q8_0 | Supported exact-row smoke | Exact GGUF load, `/v1/completions`, `/v1/chat/completions`, frontend smoke, compact parity, and broader prompt-pack evidence support short local chat for this 1B Instruct Q8_0 row only. | Longer context, broader chat-template behavior, performance/portability evidence, and no implied support for neighboring rows. |
+| Llama 3.2 3B Instruct Q8_0 | Supported exact-row smoke | Exact GGUF load, `/v1/completions`, `/v1/chat/completions`, frontend smoke, and compact prompt-token/1-token/5-token/50-token parity support short local chat for this 3B Instruct Q8_0 row only. | Broader prompt/chat-template coverage, longer context, stronger perf evidence, and no implied support for neighboring rows. |
 | Llama 3 8B Instruct Q8_0 | Groundwork only with compact parity validation | Compact-header `hello` matches llama.cpp for prompt-token, 1-token, 5-token, and bounded 50-token parity, with basic API smoke and bounded-memory evidence. | Broader prompt/chat-template parity, WebUI readiness, performance envelope, and portable packaging evidence. |
 
-TinyLlama is the only supported generation lane today. The Llama 3-family work is real progress, but it is not a support expansion yet. Nothing adjacent inherits support.
+TinyLlama and the exact Llama 3.2 1B/3B Instruct Q8_0 rows are the supported generation lanes today, with the Llama rows intentionally limited to a short local-chat smoke envelope. Broader Llama 3-family support has not been promoted, and nothing adjacent inherits support.
 
 ## Start here
 
@@ -75,13 +75,13 @@ The separate fixed-audit `multiline` row also matches, but it stops at EOS after
 
 ### Adjacent Llama 3-family rows
 
-Every Llama 3-family row remains below supported generation today. These notes are current boundary statements, not near-term promises.
+Camelid now has two exact Llama 3.2 smoke-supported rows. These are deliberately narrow release claims: they require the exact Instruct Q8_0 row, a loaded runtime with `generation_ready=true`, and the short local-chat envelope validated by the API and frontend smoke harnesses.
 
-- **Llama 3.2 1B Instruct Q8_0:** one compact-header `hello` prompt matches llama.cpp on Ubuntu through the full bounded run; prompt token IDs, generated token IDs, and generated text all match. This is still narrow evidence, not a support promotion.
-- **Llama 3.2 3B Instruct Q8_0:** the exact tracked GGUF is present locally, that exact row loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation. The row is still not supported: broader prompt coverage, API evidence, WebUI evidence, and stronger performance follow-up are still required. See [`QA_LLAMA32_3B_Q8_ACCEPTANCE.md`](QA_LLAMA32_3B_Q8_ACCEPTANCE.md) and [`STATUS.md`](STATUS.md) for the exact blocker state.
+- **Llama 3.2 1B Instruct Q8_0:** exact-row load, completions, chat-completions, frontend smoke, compact parity, and the broader prompt pack are validated for this 1B Instruct Q8_0 row. This does not promote neighboring Llama sizes, base variants, other quantizations, longer contexts, or broad chat-template behavior.
+- **Llama 3.2 3B Instruct Q8_0:** exact-row load, completions, chat-completions, frontend smoke, and compact prompt-token/1-token/5-token/50-token parity are validated for this 3B Instruct Q8_0 row. The broader JSON-shaped prompt divergence remains a known follow-up before Camelid widens the row beyond the short smoke envelope. See [`QA_LLAMA32_3B_Q8_ACCEPTANCE.md`](QA_LLAMA32_3B_Q8_ACCEPTANCE.md) and [`STATUS.md`](STATUS.md) for the exact evidence boundary.
 - **Llama 3 8B Instruct Q8_0:** the exact tracked Q8_0 GGUF now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, deterministic 5-token, and bounded 50-token parity, with basic API smoke and bounded-memory evidence on top of the earlier metadata/config/tokenizer/template and lazy/file-backed Q8 groundwork. That is still groundwork, not a support promotion: Camelid does not claim supported generation, broader 8B prompt/chat-template parity, WebUI readiness, a performance envelope, or portable packaging for this row yet.
 
-Fresh tokenizer revalidations and standalone Q8 block benchmarks are seam evidence only. They do not, by themselves, promote a generation-support claim.
+Fresh tokenizer revalidations and standalone Q8 block benchmarks are seam evidence only. They do not, by themselves, expand a generation-support claim.
 
 ## Current product surface
 
@@ -174,7 +174,7 @@ node scripts/small-model-readiness.mjs \
   --markdown-out target/small-model-readiness.md
 ```
 
-The readiness gate inspects each present manifest GGUF with `backendinference inspect`, binds LLaMA metadata/tensor shapes, chooses the current tokenizer/template lane, estimates eager `f32` plus retained-source CPU materialization against `BACKENDINFERENCE_MAX_CPU_WEIGHT_MATERIALIZATION_BYTES`, and reports whether the existing TinyLlama or Llama 3 parity harness is safe to run. A `load_and_generation_candidate` row is only an inventory/readiness result; it still needs target-specific deterministic parity evidence before support changes. The exact 3B WebUI acceptance target is tracked separately in [`QA_LLAMA32_3B_Q8_ACCEPTANCE.md`](QA_LLAMA32_3B_Q8_ACCEPTANCE.md); even with exact-GGUF load success plus compact prompt-token, 1-token, 5-token, and bounded 50-token parity on the `hello` harness, the row remains blocked until broader prompt coverage, API, and WebUI evidence exist.
+The readiness gate inspects each present manifest GGUF with `backendinference inspect`, binds LLaMA metadata/tensor shapes, chooses the current tokenizer/template lane, estimates eager `f32` plus retained-source CPU materialization against `BACKENDINFERENCE_MAX_CPU_WEIGHT_MATERIALIZATION_BYTES`, and reports whether the existing TinyLlama or Llama 3 parity harness is safe to run. A `load_and_generation_candidate` row is only an inventory/readiness result; support still needs target-specific deterministic parity, API, and frontend evidence. The exact 3B WebUI row is tracked separately in [`QA_LLAMA32_3B_Q8_ACCEPTANCE.md`](QA_LLAMA32_3B_Q8_ACCEPTANCE.md); its short local-chat smoke is supported, while broader prompt coverage, longer contexts, performance, and portability remain follow-up gates.
 
 ## Frontend
 

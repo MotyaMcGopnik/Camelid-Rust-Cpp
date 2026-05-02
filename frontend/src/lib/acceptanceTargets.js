@@ -22,8 +22,8 @@ export const LLAMA32_3B_ACCEPTANCE_TARGET = {
   },
 }
 
-export const LLAMA32_3B_ACCEPTANCE_SUMMARY = 'This exact 3B row is the current acceptance target. The exact-row backend record already includes /api/models/load success plus Ubuntu compact-header hello prompt-token, deterministic 1-token, 5-token, and bounded 50-token parity against llama.cpp, but broader prompt/chat-template coverage, exact-row API smoke, WebUI smoke, and stronger memory/perf follow-up are still missing, so any WebUI chat must stay guarded and labeled as evaluation rather than supported release chat.'
+export const LLAMA32_3B_ACCEPTANCE_SUMMARY = 'This exact 3B Q8_0 row is now smoke-supported for short local chat after exact-row /api/models/load, /v1/completions, /v1/chat/completions, frontend smoke, compact parity, and a five-prompt private smoke pack. The claim is intentionally narrow: it does not promote neighboring Llama sizes, other quantizations, the 8B row, longer context, or broad prompt/chat-template behavior.'
 
-export const LLAMA32_3B_ACCEPTANCE_AVAILABILITY = 'This browser/runtime list does not currently show the exact 3B row. That does not erase the existing backend evidence for the row, and it must not be turned into a green frontend state or neighboring-row support claim.'
+export const LLAMA32_3B_ACCEPTANCE_AVAILABILITY = 'This browser/runtime list does not currently show the exact 3B row. That does not erase the existing support evidence for the row, but it also must not be turned into a green frontend state unless the loaded local GGUF exactly matches the supported 3B Q8_0 row.'
 
-export const LLAMA32_3B_ACCEPTANCE_GATING_NOTE = 'Frontend chat can enter guarded evaluation only after Camelid reports loaded_now=true and generation_ready=true for this exact GGUF plus an exact tracked Llama compatibility row; supported release chat still requires /api/capabilities to promote the same 3B Q8_0 row from acceptance target to a supported compatibility row.'
+export const LLAMA32_3B_ACCEPTANCE_GATING_NOTE = 'Frontend chat unlocks only after Camelid reports loaded_now=true and generation_ready=true for this exact GGUF plus an exact supported Llama 3.2 3B Q8_0 compatibility row; same-family, same-tokenizer, or neighboring-size matches remain blocked.'

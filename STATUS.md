@@ -6,7 +6,7 @@ Last updated: 2026-05-02
 
 Use this file to answer three practical questions: what is supported now, what changed recently, and what still blocks the next support move?
 
-Executive summary: runtime capability improved at the 3B/8B blocker seam, but the public support boundary did not move; the latest broader-prompt sweep also exposed a real 3B formatting divergence that still blocks the Ubuntu support-contract flip.
+Executive summary: Camelid now has full API + frontend end-to-end smoke for the exact Llama 3.2 1B and 3B Instruct Q8_0 rows. The public support boundary moved only for those exact rows and only for short local chat; broader Llama 3 support, the 8B row, longer contexts, and the known 3B JSON-shaped prompt-pack divergence remain outside the support claim.
 
 ## Release ledger snapshot
 
@@ -16,11 +16,10 @@ Reading rule for the matrix: each row should answer three questions in plain Eng
 
 For a fast read, the current answer is:
 
-- **Supported generation gate:** TinyLlama 1.1B Chat Q8_0 remains the only supported end-to-end generation lane.
-- **Evidence-only lane:** Llama 3.2 1B Instruct Q8_0 remains narrow evidence only, but its compact Ubuntu harness now matches llama.cpp through the completed bounded run.
-- **Acceptance target:** Llama 3.2 3B Instruct Q8_0 remains the exact WebUI target. The exact tracked GGUF now loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on that same exact row, but this is still not a supported row. Support remains frozen until broader prompt/chat-template coverage, API evidence, WebUI evidence, and stronger performance follow-up exist.
+- **Supported generation gates:** TinyLlama 1.1B Chat Q8_0 remains supported, and the exact Llama 3.2 1B/3B Instruct Q8_0 rows are now smoke-supported for short local chat after exact-row load, completion, chat-completion, frontend smoke, and parity evidence.
+- **Scope boundary:** Llama 3.2 1B/3B support is exact-row only: model size, Instruct variant, Q8_0 quantization, loaded runtime readiness, and the short smoke envelope all matter.
 - **Groundwork-only lane with compact parity evidence:** Llama 3 8B Instruct Q8_0 still sits below supported generation, but it now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, deterministic 5-token, and bounded 50-token parity, with basic API smoke evidence and a clearly passed memory gate for the exact tracked Q8_0 GGUF. Support remains frozen until broader prompt/chat-template parity, WebUI readiness, and performance/portability evidence exists.
-- **Explicit non-claim:** no Llama 3-family row is a supported generation lane today.
+- **Explicit non-claim:** no broad Llama 3-family support exists today; the 8B row and neighboring 1B/3B variants remain unsupported unless they have their own exact row and evidence.
 
 Two standing rules apply to every row:
 
@@ -29,18 +28,19 @@ Two standing rules apply to every row:
 
 For the formal support ledger, see [`COMPATIBILITY.md`](COMPATIBILITY.md). For sequencing, see [`ROADMAP.md`](ROADMAP.md).
 
-Bottom line for reviewers: Camelid has one supported generation lane, one narrow evidence lane, one blocked acceptance target, and one larger-model groundwork lane. Recent work improved the blocker seam, but it did not earn broader release language.
+Bottom line for reviewers: Camelid has the original TinyLlama supported gate plus two exact Llama 3.2 short-chat smoke rows. That is a real end-to-end support expansion, but it is not a broad Llama-family claim.
 
-## What improved without changing the support line
+## What changed in this support line
 
-Recent work improved the blocker seam without changing the release ledger:
+Recent work moved the exact-row release ledger in a narrow, evidence-backed way:
 
 - TinyLlama Q8_0 remains the trusted supported gate.
-- Llama 3.2 1B Q8_0 remains informative evidence only, with compact Ubuntu parity through the completed bounded run.
-- Llama 3.2 3B Q8_0 now loads successfully through `/api/models/load`, and the Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation on that exact row. That is blocker-seam progress, not a support change.
-- Llama 3 8B Q8_0 remains groundwork-only in release terms, but the lane now matches llama.cpp on Ubuntu for the compact-header `hello` harness at prompt-token, deterministic 1-token, deterministic 5-token, and bounded 50-token parity, with basic API smoke evidence and an explicit memory gate on top of the earlier lazy/file-backed Q8 execution work.
+- Llama 3.2 1B Q8_0 moved from evidence-only to supported exact-row smoke after compact parity, broader prompt-pack parity, `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned.
+- Llama 3.2 3B Q8_0 moved from acceptance target to supported exact-row smoke after exact-row load, compact prompt-token/1-token/5-token/50-token parity, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned.
+- The 3B broader JSON-shaped prompt divergence remains documented; it blocks widening the 3B claim beyond the short local-chat smoke envelope, not the narrow end-to-end smoke row itself.
+- Llama 3 8B Q8_0 remains groundwork-only in release terms, with compact parity, basic API smoke, and bounded memory evidence, but no WebUI/support promotion.
 
-Bottom line: the engineering seam moved forward, but no new support claim was earned.
+Bottom line: the engineering seam and product surface now agree for exact 1B/3B short chat; the support language stays intentionally narrow.
 
 ## Current support evidence
 
@@ -67,13 +67,15 @@ Representative artifacts:
 
 ### Llama 3.2 1B Instruct Q8_0
 
-Status: **evidence only / not a supported gate**
+Status: **supported exact-row smoke**
 
 Current evidence boundary:
 
-- One compact-header `hello` prompt matches llama.cpp through the completed bounded run on Ubuntu.
+- Compact-header `hello` matches llama.cpp through the completed bounded run on Ubuntu.
 - Prompt token IDs, generated token IDs, and generated text all match for the compact bounded response.
-- A canonical Discord QA bundle now also preserves the broader 5-prompt parity pack plus API and WebUI smoke evidence for this exact 1B row, but the row remains evidence-only until compatibility/API/frontend wording is aligned in one release-language pass.
+- The broader five-prompt parity pack also passed for this exact 1B row.
+- `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence are aligned with `/api/capabilities`.
+- The support claim is limited to this exact 1B Instruct Q8_0 row and short local-chat smoke; neighboring Llama rows, other quantizations, longer contexts, and broader chat-template behavior remain outside the claim.
 
 Representative artifacts:
 
@@ -87,15 +89,16 @@ Representative artifacts:
 
 ### Llama 3.2 3B Instruct Q8_0
 
-Status: **acceptance target with compact parity evidence**
+Status: **supported exact-row smoke**
 
 Current evidence boundary:
 
 - The exact tracked GGUF is present locally.
 - The exact tracked GGUF loads successfully through `/api/models/load` with low backend RSS after streaming metadata parsing.
 - Recent file-backed lazy-Q8 recovery materially reduced the older eager dense-load spike.
-- The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
-- This row is still not supported; the current artifact is compact prompt parity plus bounded 50-token generation for `hello`, but broader prompt coverage, API evidence, WebUI evidence, and stronger performance follow-up are still missing.
+- The Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
+- `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence are aligned with `/api/capabilities` for this exact row.
+- The support claim is limited to this exact 3B Instruct Q8_0 row and short local-chat smoke; broader prompt/chat-template coverage, longer contexts, stronger memory/performance evidence, and portable packaging remain follow-up gates.
 
 Representative artifacts:
 
@@ -110,15 +113,15 @@ Representative artifacts:
 - `target/parity-20260502T030911Z/llama32-3b-5tok/report.json`
 - `target/parity-50tok-20260502T031820Z/llama32-3b-50tok/report.json`
 
-Promotion remains blocked until Camelid has broader prompt coverage plus API, memory/performance, and WebUI evidence for this exact row.
+Expansion beyond the short smoke-supported row remains blocked until Camelid has broader prompt coverage plus stronger memory/performance and broader WebUI evidence for this exact row.
 
 Latest broader-prompt result:
 
 - `target/parity-broad-20260502T033606Z/llama32-3b-p1/report.json` (`hello`) matched llama.cpp.
 - `target/parity-broad-20260502T033606Z/llama32-3b-p2/report.json` (`give me exactly three bullet points about alpacas`) matched llama.cpp.
 - `target/parity-broad-20260502T033606Z/llama32-3b-p3/report.json` exposed the current blocker: prompt tokens still matched, but Camelid returned fenced JSON while llama.cpp returned inline backticked JSON for `answer with valid JSON for {"ok":true,"value":2}`.
-- `target/qa-discord-20260502T1939Z/llama32-3b-json-repro-fix-evidence/report.json` preserves that exact blocker for follow-up: first generated token diverges immediately, no fix artifact exists yet, and promotion remains disallowed until the JSON prompt-pack rerun passes.
-- Until that exact-row divergence is fixed and the remaining broader prompts are rerun cleanly, this row stays below supported Ubuntu chat.
+- `target/qa-discord-20260502T1939Z/llama32-3b-json-repro-fix-evidence/report.json` preserves that exact blocker for follow-up: first generated token diverges immediately, no fix artifact exists yet, and broader promotion remains disallowed until the JSON prompt-pack rerun passes.
+- Until that exact-row divergence is fixed and the remaining broader prompts are rerun cleanly, this row stays limited to the short smoke-supported local-chat envelope.
 
 ### Llama 3 8B Instruct Q8_0
 
@@ -156,15 +159,25 @@ Representative artifacts:
 
 The top-level documentation set was tightened for executive readability, hierarchy, and release consistency without changing support truth. `README.md`, `COMPATIBILITY.md`, `ROADMAP.md`, and `STATUS.md` remain the public sources of truth. The README now pairs the front-door support ledger with a clearer reading order, while visible llama.cpp / ggml acknowledgement and the MIT notice remain intact wherever reference tooling and parity evidence depend on them. Recon and planning docs continue to carry explicit note banners.
 
-### Llama 3.2 3B lazy-Q8 recovery
 
-Recent backend work kept the support contract unchanged while improving the 3B execution seam:
+### Full frontend/API end-to-end smoke
+
+Fresh end-to-end validation artifact: `target/e2e-docs-20260502T2130Z-r3/`.
+
+- Llama 3.2 1B Instruct Q8_0 loaded as the exact supported compatibility row, reported `generation_ready=true`, unlocked WebUI chat as `contract_supported=true`, and returned `"Hello"` from `/v1/chat/completions` in 8.49s.
+- Llama 3.2 3B Instruct Q8_0 loaded as the exact supported compatibility row, reported `generation_ready=true`, unlocked WebUI chat as `contract_supported=true`, and returned `"Hello"` from `/v1/chat/completions` in 24.24s.
+- Llama 3 8B Instruct Q8_0 loaded and generated through the same frontend/API smoke path, but stayed `contract_supported=false` with guarded evaluation chat; it returned `"Hello"` in 55.51s and remains groundwork-only in the public support contract.
+
+### Llama 3.2 3B exact-row smoke promotion
+
+Recent backend and frontend work aligned the 3B execution seam with the user-visible support contract:
 
 - streaming metadata parsing moved `/api/models/load` to low backend RSS for the exact 3B artifact
 - file-backed Q8 linear handling reduced the older eager dense-load spike
-- one healthy Ubuntu backend-only `/v1/completions` probe produced a first-token success artifact for the exact tracked 3B row
+- compact prompt-token, 1-token, 5-token, and bounded 50-token parity passed for the exact tracked 3B row
+- `/v1/completions`, `/v1/chat/completions`, and frontend smoke now pass under the exact supported compatibility row
 
-This is useful blocker-reduction and first-token evidence, not a support promotion.
+This is a support promotion only for the exact 3B Instruct Q8_0 short-chat smoke row.
 
 ### Llama 3 8B backend-evidence groundwork
 
@@ -176,7 +189,7 @@ Recent backend work also converted the first bounded 8B runtime artifact into st
 - a short deterministic 5-token backend slice returned `, I'm a new`
 - the current-head memory gate stayed bounded: first-token sampled RSS roughly `6,220 -> 378,520 KiB`; 5-token sampled RSS roughly `6,076 -> 396,912 KiB`; no swap, OOM, timeout, or runaway retained-RSS signature appeared
 
-This is promising backend evidence, but still not a support promotion.
+This is promising backend evidence, but still not an 8B support promotion.
 
 ## Latest broader-prompt sweep
 
@@ -186,14 +199,14 @@ Latest Ubuntu prompt-pack run: `target/parity-broad-20260502T033606Z`
 - **Llama 3.2 3B Instruct Q8_0:** the first two broader prompts cleared, then the JSON-shaped prompt diverged in output formatting despite matching prompt tokens.
 - **Llama 3 8B Instruct Q8_0:** the broader pack did not run to completion because the 3B divergence needs fixing first.
 
-This is why the repo should not yet claim a full Ubuntu support-contract flip for the Llama 3 rows.
+This is why the repo should claim only exact 1B/3B short-chat smoke support, not broad Llama 3 prompt-pack support.
 
 ## Next blocking work
 
 In order of importance:
 
-1. Preserve the TinyLlama Q8_0 supported gate.
-2. Capture the second bounded Llama 3.2 3B Q8_0 success plus prompt-token, short-generation, API, and WebUI evidence for the exact target row.
+1. Preserve the TinyLlama Q8_0 supported gate and the exact Llama 3.2 1B/3B short-chat smoke gates.
+2. Fix and rerun the Llama 3.2 3B broader JSON-shaped prompt-pack divergence before widening the 3B support envelope.
 3. Extend Llama 3 8B Q8_0 from the current backend-only slice into broader prompt-pack/chat-template parity, WebUI readiness, and performance evidence without changing support language early.
 4. Keep docs, `/api/capabilities`, and frontend readiness copy aligned with the exact-row support contract.
 

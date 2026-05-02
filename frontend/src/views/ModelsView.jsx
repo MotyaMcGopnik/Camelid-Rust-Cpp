@@ -260,7 +260,9 @@ export default function ModelsView({
   const currentCompatibilityTarget = getCurrentCompatibilityTarget(capabilities)
   const compatibilityRows = capabilities?.model_compatibility || []
   const trackedCompatibilityRows = getTrackedCompatibilityTargets(capabilities)
+  const supportedCompatibilityRows = compatibilityRows.filter((target) => isSupportedCapabilityStatus(target.status))
   const plannedCompatibilityRows = compatibilityRows.filter((target) => !isSupportedCapabilityStatus(target.status))
+  const supportedCompatibilitySummary = supportedCompatibilityRows.map((target) => target.id).join(' · ') || (currentCompatibilityTarget ? currentCompatibilityTarget.id : '')
   const supportedQuantSummary = (capabilities?.supported_quantization || []).map((item) => `${item.id}: ${formatCapabilityStatus(item.status)}`).join(' · ') || 'None advertised'
   const plannedQuantSummary = (capabilities?.planned_quantization || []).map((item) => `${item.id}: ${formatCapabilityStatus(item.status)}`).join(' · ') || 'None advertised'
 
@@ -471,7 +473,7 @@ export default function ModelsView({
           <div>
             <span>/api/capabilities</span>
             <strong>{capabilities ? 'Contract live' : 'Not available'}</strong>
-            <small>{capabilities?.support_contract?.current_gate || 'No support contract returned; planned quant/model lanes stay disabled.'}{currentCompatibilityTarget ? ` Target: ${currentCompatibilityTarget.id}.` : ''}</small>
+            <small>{capabilities?.support_contract?.current_gate || 'No support contract returned; planned quant/model lanes stay disabled.'}{supportedCompatibilitySummary ? ` Rows: ${supportedCompatibilitySummary}.` : ''}</small>
           </div>
           <div>
             <span>Catalog</span>
@@ -488,7 +490,7 @@ export default function ModelsView({
           <div>
             <span>Current supported gate</span>
             <strong>{capabilities?.support_contract?.current_gate || 'No /api/capabilities contract'}</strong>
-            <small>{currentCompatibilityTarget ? `${currentCompatibilityTarget.id}: ${currentCompatibilityTarget.evidence}` : 'The UI will not infer support beyond loaded/model readiness.'}</small>
+            <small>{supportedCompatibilitySummary ? `Supported rows: ${supportedCompatibilitySummary}. Runtime loaded_now=true and generation_ready=true are still required.` : 'The UI will not infer support beyond loaded/model readiness.'}</small>
           </div>
           <div>
             <span>Supported quants</span>
@@ -577,10 +579,10 @@ export default function ModelsView({
       </section>
 
       {showLlama32ThreeBAcceptanceTarget && (
-        <section className="panel models-section-panel" aria-label="Llama 3.2 3B Q8 acceptance target">
+        <section className="panel models-section-panel" aria-label="Llama 3.2 3B Q8 exact supported row">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Acceptance target</p>
+              <p className="panel-kicker">Exact supported row</p>
               <h3>Llama 3.2 3B Instruct Q8_0</h3>
             </div>
             <p className="model-summary">{LLAMA32_3B_ACCEPTANCE_SUMMARY}</p>
@@ -593,15 +595,15 @@ export default function ModelsView({
                   <strong>{LLAMA32_3B_ACCEPTANCE_TARGET.name}</strong>
                   <span>{formatModelMeta(LLAMA32_3B_ACCEPTANCE_TARGET)}</span>
                 </div>
-                <div className="status-pill warm">Acceptance target · chat blocked</div>
+                <div className="status-pill ready">Supported exact-row smoke · runtime required</div>
               </div>
 
               <div className="models-card-tags">
-                <div className="pin-badge">Exact target</div>
+                <div className="pin-badge ready">Exact row only</div>
                 <div className="pin-badge">Q8_0</div>
-                <div className="pin-badge warm">Compact parity exists</div>
-                <div className="pin-badge warm">No 3B API smoke yet</div>
-                <div className="pin-badge warm">No 3B WebUI smoke yet</div>
+                <div className="pin-badge ready">Compact parity exists</div>
+                <div className="pin-badge ready">3B API smoke passed</div>
+                <div className="pin-badge ready">3B WebUI smoke passed</div>
               </div>
 
               <div className="models-card-copy-stack">
@@ -612,7 +614,7 @@ export default function ModelsView({
 
               <CapabilityEvidenceBlock capabilities={capabilities} model={LLAMA32_3B_ACCEPTANCE_TARGET} />
               <ReadinessGrid model={LLAMA32_3B_ACCEPTANCE_TARGET} runtime={runtime} includePath />
-              <p className="model-summary">Do not infer readiness from the evidence-only 1B row or the groundwork-only 8B row; this exact 3B row needs its own runtime-green + supported-row proof before chat unlocks.</p>
+              <p className="model-summary">Do not infer readiness from the 1B row or the groundwork-only 8B row; this exact 3B row still needs runtime-green loaded_now=true + generation_ready=true before chat unlocks.</p>
 
               <div className="models-card-actions">
                 <button className="ghost-button" onClick={fillLlama32ThreeBImport}>Fill import form with exact path</button>
