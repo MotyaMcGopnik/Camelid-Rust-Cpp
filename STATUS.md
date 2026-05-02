@@ -191,6 +191,10 @@ In order of importance:
 3. Extend Llama 3 8B Q8_0 from the current backend-only slice into broader prompt-pack/chat-template parity, WebUI readiness, and performance evidence without changing support language early.
 4. Keep docs, `/api/capabilities`, and frontend readiness copy aligned with the exact-row support contract.
 
+### Qwen prerequisite note
+
+Qwen remains future work, not a runtime-support lane. Before Camelid promotes any Qwen wording beyond planning, the first exact-row prerequisite is one chosen GGUF with tokenizer/chat-template fixtures, llama.cpp token-reference checks, and bounded load plus prompt-token parity evidence on that same row. Until those artifacts exist, Qwen should stay out of support/readiness language and out of runtime-promotion scheduling.
+
 ## Validation note
 
 This file is intentionally a snapshot, not a diary. When a change materially affects support or its blockers:
