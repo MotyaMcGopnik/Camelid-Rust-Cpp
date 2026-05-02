@@ -3359,6 +3359,73 @@ fn output_projection_token_row(
     Ok(dest)
 }
 
+fn output_projection_q8_0_reconstructed_logit(
+    output_norm: &CpuTensor,
+    output_weight: &CpuTensor,
+    hidden_width: usize,
+    token_index: usize,
+    layout: EffectiveOutputProjectionRowLayout,
+) -> Result<Option<f32>> {
+    let Some(backing) = output_weight.q8_0_file_backing.as_ref() else {
+        return Ok(None);
+    };
+    if !output_weight.data.is_empty() {
+        return Ok(None);
+    }
+    if output_weight.source_type != Some(GgufTensorType::Q8_0) {
+        return Ok(None);
+    }
+    if layout != EffectiveOutputProjectionRowLayout::TokenMajorReinterpret
+        && layout != EffectiveOutputProjectionRowLayout::DescriptorOutputInput
+    {
+        return Ok(None);
+    }
+    if !hidden_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection q8_0 diagnostic hidden width {hidden_width} is not block aligned"
+        )));
+    }
+
+    let blocks_per_row = hidden_width / Q8_0_BLOCK_VALUES;
+    let row_block_start = token_index.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "output projection q8_0 diagnostic row block offset overflow".to_string(),
+        )
+    })?;
+    let row_offset = backing
+        .absolute_offset
+        .checked_add((row_block_start * Q8BlockReader::BLOCK_SIZE_BYTES) as u64)
+        .ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "output projection q8_0 diagnostic row byte offset overflow".to_string(),
+            )
+        })?;
+    let row_bytes_len = blocks_per_row
+        .checked_mul(Q8BlockReader::BLOCK_SIZE_BYTES)
+        .ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "output projection q8_0 diagnostic row byte length overflow".to_string(),
+            )
+        })?;
+    let file = File::open(&backing.path).map_err(|source| BackendError::Io {
+        path: backing.path.clone(),
+        source,
+    })?;
+    disable_file_cache_best_effort(&file);
+    let mut row_bytes = vec![0_u8; row_bytes_len];
+    file.read_exact_at(&mut row_bytes, row_offset)
+        .map_err(|err| {
+            BackendError::InvalidTensorData(format!(
+                "output projection q8_0 diagnostic failed to read token row {token_index}: {err}",
+            ))
+        })?;
+    let quantized_output_norm = quantize_q8_0_row(&output_norm.data[..hidden_width]);
+    Ok(Some(dot_q8_0_encoded_row(
+        &quantized_output_norm.blocks,
+        &row_bytes,
+    )))
+}
+
 fn output_projection_token_diagnostic(
     output_norm: &CpuTensor,
     output_weight: &CpuTensor,
@@ -3370,6 +3437,13 @@ fn output_projection_token_diagnostic(
 ) -> Result<LlamaOutputProjectionDiagnostic> {
     let token_index = token_id as usize;
     let output_row = output_projection_token_row(output_weight, hidden_width, token_index, layout)?;
+    let q8_reconstructed_logit = output_projection_q8_0_reconstructed_logit(
+        output_norm,
+        output_weight,
+        hidden_width,
+        token_index,
+        layout,
+    )?;
     let mut reconstructed_logit = 0.0f32;
     let mut norm_sum_sq = 0.0f32;
     let mut row_sum_sq = 0.0f32;
@@ -3443,6 +3517,10 @@ fn output_projection_token_diagnostic(
         .take(8)
         .copied()
         .collect::<Vec<_>>();
+
+    if let Some(q8_reconstructed_logit) = q8_reconstructed_logit {
+        reconstructed_logit = q8_reconstructed_logit;
+    }
 
     let output_norm_rms = (norm_sum_sq / hidden_width as f32).sqrt();
     let output_row_rms = (row_sum_sq / hidden_width as f32).sqrt();
@@ -3910,9 +3988,14 @@ fn quantize_q8_0_row(input: &[f32]) -> QuantizedQ8_0Row {
             let max_abs = block
                 .iter()
                 .fold(0.0_f32, |acc, value| acc.max(value.abs()));
-            let scale_bits = f32_to_f16_bits(max_abs / 127.0);
+            let unrounded_scale = max_abs / 127.0;
+            let scale_bits = f32_to_f16_bits(unrounded_scale);
             let scale = f16_bits_to_f32(scale_bits);
-            let inv_scale = if scale == 0.0 { 0.0 } else { 1.0 / scale };
+            let inv_scale = if unrounded_scale == 0.0 {
+                0.0
+            } else {
+                1.0 / unrounded_scale
+            };
             let mut quants = [0_i8; Q8_0_BLOCK_VALUES];
             for (idx, value) in block.iter().enumerate() {
                 quants[idx] = (value * inv_scale).round().clamp(-128.0, 127.0) as i8;
@@ -3991,43 +4074,66 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                 "q8_0 block-reader row byte count overflow".to_string(),
             )
         })?;
-    let mut row_bytes = vec![0_u8; row_bytes_len];
     let mut output = vec![0.0_f32; rows * output_width];
+    let chunk_rows = q8_0_file_reader_chunk_rows(row_bytes_len, output_width)?;
+    let row_chunk_len = row_bytes_len.checked_mul(chunk_rows).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 block-reader chunk byte count overflow".to_string(),
+        )
+    })?;
+    let mut row_chunk = vec![0_u8; row_chunk_len];
     for row in 0..rows {
         let input_start = row * input_width;
         let input_row = &input.data[input_start..input_start + input_width];
+        let quantized_input = quantize_q8_0_row(input_row);
         let out_start = row * output_width;
-        for output_idx in 0..output_width {
+        let mut output_idx = 0usize;
+        while output_idx < output_width {
+            let rows_this_chunk = chunk_rows.min(output_width - output_idx);
+            let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(
+                    "q8_0 block-reader chunk byte count overflow".to_string(),
+                )
+            })?;
             let block_start = output_idx * blocks_per_row;
-            let row_offset = reader
+            let chunk_offset = reader
                 .offset
                 .checked_add((block_start * Q8BlockReader::BLOCK_SIZE_BYTES) as u64)
                 .ok_or_else(|| {
                     BackendError::RuntimeShapeMismatch(
-                        "q8_0 block-reader row offset overflow".to_string(),
+                        "q8_0 block-reader chunk offset overflow".to_string(),
                     )
                 })?;
-            file.read_exact_at(&mut row_bytes, row_offset)
-                .map_err(|err| {
-                    BackendError::InvalidTensorData(format!(
-                        "q8_0 block-reader failed to read output row {output_idx}: {err}",
-                    ))
-                })?;
-            output[out_start + output_idx] = dot_q8_0_encoded_row(input_row, &row_bytes);
+            let chunk = &mut row_chunk[..chunk_bytes_len];
+            file.read_exact_at(chunk, chunk_offset).map_err(|err| {
+                BackendError::InvalidTensorData(format!(
+                    "q8_0 block-reader failed to read output rows {output_idx}..{}: {err}",
+                    output_idx + rows_this_chunk
+                ))
+            })?;
+            for (local_idx, row_bytes) in chunk.chunks_exact(row_bytes_len).enumerate() {
+                output[out_start + output_idx + local_idx] =
+                    dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+            }
+            output_idx += rows_this_chunk;
         }
     }
     CpuTensor::from_f32(name, vec![rows, output_width], output)
 }
 
-fn dot_q8_0_encoded_row(input_row: &[f32], row_bytes: &[u8]) -> f32 {
+fn dot_q8_0_encoded_row(input: &[Q8_0Block], row_bytes: &[u8]) -> f32 {
     let mut sum = 0.0_f32;
-    let mut input_offset = 0;
-    for block in row_bytes.chunks_exact(Q8BlockReader::BLOCK_SIZE_BYTES) {
+    for (input_block, block) in input
+        .iter()
+        .zip(row_bytes.chunks_exact(Q8BlockReader::BLOCK_SIZE_BYTES))
+    {
         let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+        let mut weight_quants = [0_i8; Q8_0_BLOCK_VALUES];
         for idx in 0..Q8_0_BLOCK_VALUES {
-            sum += f32::from(block[2 + idx] as i8) * scale * input_row[input_offset + idx];
+            weight_quants[idx] = block[2 + idx] as i8;
         }
-        input_offset += Q8_0_BLOCK_VALUES;
+        let int_sum = q8_0_block_int_dot_horizontal_sum(&weight_quants, &input_block.quants);
+        sum += int_sum as f32 * scale * input_block.scale;
     }
     sum
 }
@@ -4267,6 +4373,7 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
         )
     })?;
     let mut row_chunk = vec![0_u8; row_chunk_len];
+    let quantized_input = quantize_q8_0_row(input_row);
     let mut output_start = 0usize;
     while output_start < output.len() {
         let rows_this_chunk = chunk_rows.min(output.len() - output_start);
@@ -4291,7 +4398,8 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
             ))
         })?;
         for (local_idx, row_bytes) in chunk.chunks_exact(row_bytes_len).enumerate() {
-            output[output_start + local_idx] = dot_q8_0_encoded_row(input_row, row_bytes);
+            output[output_start + local_idx] =
+                dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
         }
         output_start += rows_this_chunk;
     }
@@ -5547,6 +5655,25 @@ mod tests {
     }
 
     #[test]
+    fn q8_0_input_quantization_uses_unrounded_scale_for_quants() {
+        let unrounded_scale = 1.0_f32 / 127.0;
+        let mut input_values = vec![0.0; Q8_0_BLOCK_VALUES];
+        input_values[0] = 1.0;
+        input_values[1] = 2.49995 * unrounded_scale;
+
+        let quantized = quantize_q8_0_row(&input_values);
+        let block = &quantized.blocks[0];
+
+        assert_eq!(
+            block.scale,
+            f16_bits_to_f32(f32_to_f16_bits(unrounded_scale))
+        );
+        assert_eq!(block.quants[0], 127);
+        assert_eq!(block.quants[1], 2);
+        assert_eq!((input_values[1] / block.scale).round() as i8, 3);
+    }
+
+    #[test]
     fn q8_0_block_reader_linear_matches_existing_q8_path() {
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         let row0 = Q8_0Block {
@@ -5602,7 +5729,7 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_file_backed_accumulate_matches_dense_linear_across_chunks() {
+    fn q8_0_file_backed_accumulate_matches_q8_block_dot_across_chunks() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
         std::env::set_var(
@@ -5641,7 +5768,7 @@ mod tests {
             rows.clone(),
         )
         .unwrap();
-        let expected = input.matmul_rhs_transposed(&weight, "expected").unwrap();
+        let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
 
         let backing = Q8_0FileBacking {
             path: temp_file.path().to_path_buf(),
