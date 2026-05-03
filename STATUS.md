@@ -34,7 +34,7 @@ Bottom line for reviewers: Camelid has the original TinyLlama supported gate plu
 
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/manifest.json` plus `qa/evidence-bundles/four-row-public-20260503T024327Z/SHA256SUMS` are the committed carry-forward row bundles/checksums for the public smoke boundary.
 - `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json` is the committed Ubuntu perf/portability summary for the current four-row sweep.
-- `qa/evidence-bundles/four-row-current-head-20260503T035707Z-head-e7837a49d3e1/manifest.json` plus its per-row manifests/checksums are the durable current-head citation target for exact rerun tracks, blocker notes, and command files.
+- `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/manifest.json` plus its per-row manifests/checksums are the durable current-head citation target for exact rerun tracks, blocker notes, and command files.
 - Raw `target/` paths below are drill-down artifacts only; they are not the sole public evidence anchor.
 
 ## What changed in this support line
@@ -68,7 +68,7 @@ Representative durable evidence:
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/tinyllama_1_1b_chat_q8_0.bundle.json`
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/manifest.json`
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/SHA256SUMS`
-- `qa/evidence-bundles/four-row-current-head-20260503T035707Z-head-e7837a49d3e1/tinyllama_1_1b_chat_q8_0/manifest.json`
+- `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/tinyllama_1_1b_chat_q8_0/manifest.json`
 
 The older five 50-token source JSONs remain listed under that current-head row manifest's `broader-parity` carry-forward track instead of standing alone as the release citation.
 
@@ -90,7 +90,7 @@ Representative durable evidence:
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/manifest.json`
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/SHA256SUMS`
 - `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json`
-- `qa/evidence-bundles/four-row-current-head-20260503T035707Z-head-e7837a49d3e1/llama32_1b_instruct_q8_0/manifest.json`
+- `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama32_1b_instruct_q8_0/manifest.json`
 
 ### Llama 3.2 3B Instruct Q8_0
 
@@ -111,7 +111,7 @@ Representative durable evidence:
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/manifest.json`
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/SHA256SUMS`
 - `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json`
-- `qa/evidence-bundles/four-row-current-head-20260503T035707Z-head-e7837a49d3e1/llama32_3b_instruct_q8_0/manifest.json`
+- `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama32_3b_instruct_q8_0/manifest.json`
 
 Selected source artifacts recorded by those committed files:
 
@@ -140,7 +140,7 @@ Representative durable evidence:
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/manifest.json`
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/SHA256SUMS`
 - `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json`
-- `qa/evidence-bundles/four-row-current-head-20260503T035707Z-head-e7837a49d3e1/llama3_8b_instruct_q8_0/manifest.json`
+- `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama3_8b_instruct_q8_0/manifest.json`
 - `qa/validation-notes/2026-05-03-ubuntu-toolchain-and-8b-context.md`
 
 Selected source artifacts recorded by those committed files:
@@ -210,7 +210,7 @@ The downloaded-model matrix still disproves a broad inherited “perfect Llama-f
 
 Public evidence packaging note: sanitized carry-forward bundle manifests/checksums for the four-row smoke slices now live under `qa/evidence-bundles/four-row-public-20260503T024327Z/` and `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/`. They intentionally preserve the blocked public-head rerun state instead of overstating it.
 
-Current-head durable execution note: the exact-row normalized rerun scaffold is now checked in at `qa/evidence-bundles/four-row-current-head-20260503T035707Z-head-e7837a49d3e1/`. Its per-row manifests/commands give docs, API, and frontend a stable current-head citation target while the Ubuntu reruns for longer context, broader template coverage, and stronger perf/portability evidence are still outstanding.
+Current-head durable execution note: the exact-row normalized rerun scaffold is now checked in at `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/`. Its per-row manifests/commands give docs, API, and frontend a stable current-head citation target while the Ubuntu reruns for longer context, broader template coverage, and stronger perf/portability evidence are still outstanding.
 
 ## Next blocking work
 
