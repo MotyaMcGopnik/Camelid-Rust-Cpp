@@ -109,6 +109,8 @@ cargo build --release --bin backendinference
 target/release/backendinference serve --addr 127.0.0.1:8181
 ```
 
+Toolchain note: Camelid currently requires Rust/Cargo 1.87+. On Ubuntu hosts that still expose an older distro `cargo` on `/usr/bin`, either source `$HOME/.cargo/env` first or run `scripts/with-rustup-cargo.sh build --release --bin backendinference` so the rustup-managed toolchain is used.
+
 In another shell from the repository root:
 
 ```bash

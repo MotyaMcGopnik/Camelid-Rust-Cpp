@@ -9,12 +9,10 @@ boundaries, and reproducible validation over optimistic claims.
 
 - Keep the support contract honest.
 - Do not broaden support claims without fresh evidence.
-- TinyLlama 1.1B Chat Q8_0 is the only supported end-to-end generation lane today.
-- Llama 3.2 1B Instruct Q8_0 is evidence-only.
-- Llama 3.2 3B Instruct Q8_0 is acceptance target / first-token evidence only.
-- Llama 3 8B Instruct Q8_0 is groundwork-only / first-token evidence only.
-- Llama 3.2 3B / 8B and other model families stay blocked until bounded generation, memory, and
-  parity evidence exists.
+- TinyLlama 1.1B Chat Q8_0 remains the supported current gate.
+- Llama 3.2 1B Instruct Q8_0, Llama 3.2 3B Instruct Q8_0, and Llama 3 8B Instruct Q8_0 are supported exact-row smoke lanes only.
+- No neighboring Llama sizes, base variants, quantizations, longer contexts, or broad chat-template behavior inherit support.
+- Full-support claims still require stronger longer-context, performance/portability, and broader behavior evidence on each exact row.
 - Do not let UI copy, README language, API capability surfaces, or status docs drift out of sync.
 
 ## Before you start
@@ -35,6 +33,8 @@ cd Camelid
 cargo build
 cargo test --all-targets --all-features
 ```
+
+Toolchain note: Camelid currently requires Rust/Cargo 1.87+. On Ubuntu hosts that still expose an older distro `cargo` on `/usr/bin`, either source `$HOME/.cargo/env` first or run `scripts/with-rustup-cargo.sh build` / `scripts/with-rustup-cargo.sh test --all-targets --all-features` so the rustup-managed toolchain is used.
 
 ### Frontend
 

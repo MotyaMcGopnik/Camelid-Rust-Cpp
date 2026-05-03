@@ -2,6 +2,7 @@
 name = "backendinference"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.87"
 description = "Camelid: a Rust-native local GGUF inference backend with evidence-gated model compatibility"
 license = "MIT"
 repository = "https://github.com/timtoole02/Camelid"
