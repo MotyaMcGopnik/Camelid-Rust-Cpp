@@ -385,9 +385,9 @@ function perfCommand(modelFile, modelId, waitMs = 300000) {
     'hostname | tee "ROW_ROOT/perf-rss-portability/hostname.txt"',
     'node --version | tee "ROW_ROOT/perf-rss-portability/node-version.txt"',
     './scripts/with-rustup-cargo.sh --version | tee "ROW_ROOT/perf-rss-portability/cargo-version.txt"',
-    'free -h | tee "ROW_ROOT/perf-rss-portability/free.txt"',
+    portableMemoryCaptureToDir('ROW_ROOT/perf-rss-portability'),
     'df -h / | tee "ROW_ROOT/perf-rss-portability/disk-root.txt"',
-    'shasum -a 256 "$MODEL" | tee "ROW_ROOT/perf-rss-portability/model.sha256.txt"',
+    portableShaToFile('"$MODEL"', 'ROW_ROOT/perf-rss-portability/model.sha256.txt'),
     `node scripts/model-promotion-smoke-bundle.mjs --api ${apiBase} --frontend ${frontendUrl} --model \"${modelDir}/${modelFile}\" --model-id ${modelId} --out-dir \"ROW_ROOT/perf-rss-portability/api-webui-smoke\" --message hello --max-tokens 1 --temperature 0 || true`,
     "pgrep -f 'target/release/backendinference serve' | tail -n 1 | tee \"ROW_ROOT/perf-rss-portability/backend.pid.txt\"",
     "if [ -s \"ROW_ROOT/perf-rss-portability/backend.pid.txt\" ]; then ps -o pid,rss,vsz,etime,command -p \"$(cat \"ROW_ROOT/perf-rss-portability/backend.pid.txt\")\" | tee \"ROW_ROOT/perf-rss-portability/backend.ps.txt\"; fi",
@@ -400,7 +400,7 @@ function modelShaCommand(modelFile) {
     'cd "$REPO_ROOT"',
     `MODEL=\"${modelDir}/${modelFile}\"`,
     'mkdir -p "ROW_ROOT/evidence"',
-    'shasum -a 256 "$MODEL" | tee "ROW_ROOT/evidence/model.sha256.txt"',
+    portableShaToFile('"$MODEL"', 'ROW_ROOT/evidence/model.sha256.txt'),
   ].join('\n')
 }
 
@@ -415,8 +415,49 @@ function hostFactsCommand() {
     'hostname',
     'node --version',
     './scripts/with-rustup-cargo.sh --version',
-    'free -h',
+    portableMemoryFactsStdout(),
     'df -h /',
+  ].join('\n')
+}
+
+function portableShaToFile(inputExpr, outputPath) {
+  return [
+    'if command -v sha256sum >/dev/null 2>&1; then',
+    `  sha256sum ${inputExpr} | tee "${outputPath}"`,
+    'elif command -v shasum >/dev/null 2>&1; then',
+    `  shasum -a 256 ${inputExpr} | tee "${outputPath}"`,
+    'else',
+    '  echo "sha256 tool unavailable" >&2',
+    '  exit 1',
+    'fi',
+  ].join('\n')
+}
+
+function portableMemoryCaptureToDir(dirPath) {
+  return [
+    'if command -v free >/dev/null 2>&1; then',
+    `  free -h | tee "${dirPath}/free.txt"`,
+    'elif command -v vm_stat >/dev/null 2>&1; then',
+    `  vm_stat | tee "${dirPath}/vm_stat.txt"`,
+    `  if command -v sysctl >/dev/null 2>&1; then sysctl hw.memsize 2>/dev/null | tee "${dirPath}/hw.memsize.txt" || true; fi`,
+    `  if command -v memory_pressure >/dev/null 2>&1; then memory_pressure 2>/dev/null | tee "${dirPath}/memory_pressure.txt" || true; fi`,
+    'else',
+    `  echo "memory facts unavailable on this host" | tee "${dirPath}/memory.txt"`,
+    'fi',
+  ].join('\n')
+}
+
+function portableMemoryFactsStdout() {
+  return [
+    'if command -v free >/dev/null 2>&1; then',
+    '  free -h',
+    'elif command -v vm_stat >/dev/null 2>&1; then',
+    '  vm_stat',
+    '  if command -v sysctl >/dev/null 2>&1; then sysctl hw.memsize 2>/dev/null || true; fi',
+    '  if command -v memory_pressure >/dev/null 2>&1; then memory_pressure 2>/dev/null || true; fi',
+    'else',
+    '  echo "memory facts unavailable on this host"',
+    'fi',
   ].join('\n')
 }
 
