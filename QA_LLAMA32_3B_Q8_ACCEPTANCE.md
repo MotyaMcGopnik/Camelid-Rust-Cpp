@@ -19,18 +19,18 @@ QA checklist for the exact Llama 3.2 3B WebUI real-chat acceptance gate.
 - **Earlier HEAD ETag/Xet hash:** `291ce1d4ca0fcef86407b7c6531bf85a1c348c65d5d3c69c57c98fec6483bb1f`
 
 Current state: the exact GGUF is now present at the expected model-dir path, Camelid metadata/API
-load evidence exists, and the Ubuntu compact-header `hello` harness now has prompt-token parity
-plus deterministic 1-token, 5-token, and bounded 50-token generation parity. The blocker has
-moved from artifact presence to broader prompt/chat-template, API, and WebUI acceptance.
+load evidence exists, the Ubuntu compact-header `hello` harness has prompt-token parity plus
+deterministic 1-token, 5-token, and bounded 50-token generation parity, and the broader
+three-prompt 50-token pack now matches llama.cpp. The blocker has moved from parity to longer
+context, stronger performance/portability, and broader chat-template acceptance.
 
 ## Current blocker summary
 
 - `/api/models/load` succeeds for the exact 3B target.
 - The latest file-backed lazy-Q8 recovery materially reduced the earlier eager dense-load spike.
 - The Ubuntu compact-header `hello` harness now matches llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
-- Broader Ubuntu prompt-pack runs continue to uncover a real exact-row divergence on the JSON-shaped prompt `answer with valid JSON for {"ok":true,"value":2}`. The latest downloaded-model matrix (`target/downloaded-llama-matrix-20260502T231000Z/summary.json`) again passed `hello` and the alpacas prompt for 3B, then failed the JSON-shaped prompt at the first generated token despite matching prompt tokens (`\`` vs ``\``, a close logit tie).
-- Therefore the row remains blocked before broader prompt/chat-template coverage, API chat acceptance,
-  WebUI acceptance, and stronger performance follow-up evidence.
+- The former broader JSON-shaped prompt blocker is resolved by the post-Q8-dot clean rerun at `target/camelid-llama32-3b-broad-50-after-q8dot-clean-20260502T233427Z/pack/summary.json`: `hello`, alpacas, and `answer with valid JSON for {"ok":true,"value":2}` all match llama.cpp for prompt tokens, generated token IDs, and generated text.
+- Therefore the row is no longer parity-blocked for the current three-prompt 50-token pack; remaining expansion gates are longer context, stronger performance/portability, and broader chat-template evidence.
 
 ## Disk and memory expectations
 
@@ -57,13 +57,8 @@ Do not mark the 3B row green until all applicable items have artifact paths.
 
 ## Current status
 
-Status: **acceptance target with compact parity evidence**
+Status: **accepted exact-row parity/API/WebUI smoke with broader three-prompt parity evidence**
 
-The exact 3B artifact now exists, and the Ubuntu compact-header `hello` harness now matches
-llama.cpp for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation.
-Follow-on broader prompt-pack runs (`target/parity-broad-20260502T033606Z` and the downloaded-model
-matrix at `target/downloaded-llama-matrix-20260502T231000Z/summary.json`) cleared `hello` and the
-three-bullet alpaca prompt, then failed on the JSON-shaped prompt because Camelid and llama.cpp
-selected different first generated backtick tokens even though prompt tokens still matched. The
-current work is to fix that exact divergence, rerun the broader pack cleanly, and only then widen
-the API/WebUI support contract.
+The exact 3B artifact now exists, and the Ubuntu compact-header `hello` harness matches llama.cpp
+for prompt tokens plus deterministic 1-token, 5-token, and bounded 50-token generation. The former
+JSON-shaped broader prompt blocker is now fixed: `target/camelid-regression-q8dot-20260502T232633Z/llama32-3b-compact/summary.json` passes the compact pack, and `target/camelid-llama32-3b-broad-50-after-q8dot-clean-20260502T233427Z/pack/summary.json` passes the broader three-prompt 50-token pack with prompt tokens, generated token IDs, and generated text all matching llama.cpp. The current work is to preserve that evidence and expand only after longer-context, performance/portability, and broader chat-template gates land.

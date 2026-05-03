@@ -100,7 +100,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_3b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_3b["tested_context"],
-        "short_api_webui_smoke_with_compact_parity"
+        "short_api_webui_smoke_with_broader_prompt_pack_parity"
     );
     let llama3 = compatibility
         .iter()
