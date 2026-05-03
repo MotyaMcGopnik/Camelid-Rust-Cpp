@@ -145,7 +145,8 @@ Representative artifacts:
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/first-token.completion-summary.json`
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/first-token.meminfo-samples.log`
 - `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json`
-- `target/private-four-llama-e2e-20260502T212751Z-head-c5e6d7e/matrix-summary.json`
+- `qa/evidence-bundles/four-row-public-20260503T024327Z/manifest.json`
+- `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json`
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/first-token.required-forward-trace.log`
 - `target/parity-20260502T030911Z/llama3-8b-1tok/report.json`
 - `target/parity-20260502T030911Z/llama3-8b-5tok/report.json`
@@ -189,7 +190,7 @@ Recent backend work converted the 8B runtime artifacts into an exact-row support
 - current-head raw `hello` prompt-token parity matched `[128000, 15339]` for the exact same model SHA
 - a short deterministic 5-token backend slice returned `, I'm a new`
 - the long-timeout Ubuntu three-prompt 5-token parity run passed for `hello`, alpacas, and JSON: `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json`
-- `/v1/completions`, `/v1/chat/completions`, and frontend smoke passed in `target/private-four-llama-e2e-20260502T212751Z-head-c5e6d7e/matrix-summary.json`
+- `/v1/completions`, `/v1/chat/completions`, and frontend smoke are preserved in the sanitized carry-forward bundle at `qa/evidence-bundles/four-row-public-20260503T024327Z/llama3_8b_instruct_q8_0.bundle.json`; that bundle remains a pre-promotion guarded-WebUI slice from source smoke commit `c5e6d7e`, so a fresh current-head contract-supported rerun is still outstanding
 - the current-head memory gate stayed bounded: first-token sampled RSS roughly `6,220 -> 378,520 KiB`; 5-token sampled RSS roughly `6,076 -> 396,912 KiB`; no swap, OOM, timeout, or runaway retained-RSS signature appeared
 
 This is a support promotion only for the exact Llama 3 8B Instruct Q8_0 row and tested short smoke/parity envelope.
@@ -213,6 +214,8 @@ Results:
 - **Llama 3 8B Instruct Q8_0:** the long-timeout rerun at `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json` passed `hello`, alpacas, and JSON for prompt-token, generated-token, and generated-text parity at 5 tokens, clearing the earlier client-timeout blocker for the exact 8B row.
 
 The downloaded-model matrix still disproves a broad inherited “perfect Llama-family parity” claim. Camelid should claim only the exact supported rows and envelopes backed by passing artifacts: TinyLlama Q8_0, Llama 3.2 1B Q8_0, Llama 3.2 3B Q8_0, and Llama 3 8B Q8_0.
+
+Public evidence packaging note: sanitized carry-forward bundle manifests/checksums for the four-row smoke slices now live under `qa/evidence-bundles/four-row-public-20260503T024327Z/` and `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/`. They intentionally preserve the blocked public-head rerun state instead of overstating it.
 
 ## Next blocking work
 

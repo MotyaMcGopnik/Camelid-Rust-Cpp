@@ -44,6 +44,7 @@ A row is **full-support green** only when all of these are green on the exact GG
 - Generate the normalized current-head scaffold first so every row has the same manifest/command shape before Ubuntu reruns: `node scripts/prepare-full-support-bundle.mjs --out-dir target/full-support-$(date -u +%Y%m%dT%H%M%SZ)-head-$(git rev-parse --short=12 HEAD)`.
 - For each row, save: parity report(s), model-promotion smoke bundle, frontend smoke stdout/stderr/summary, memory samples, command lines, current `git rev-parse HEAD`, and model SHA256.
 - If artifacts stay under gitignored `target/`, publish only the exact artifact manifest/checksums in docs; do not pretend reviewers can fetch local paths from GitHub.
+- Current sanitized carry-forward bundle/checksum roots are `qa/evidence-bundles/four-row-public-20260503T024327Z/` and `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/`; they improve reviewability but do **not** replace missing Ubuntu current-head reruns.
 
 ### WP1 — Normalize current-head evidence shape for TinyLlama/1B/3B
 
@@ -80,7 +81,7 @@ Required before widening the public support ledger beyond exact-row smoke:
 
 ## Current repo/artifact observations
 
-- Current public worktree: based on pushed `9d091ce Promote exact Llama 3 8B smoke row`; the guardrails from `713c744` remain preserved in that landed state.
-- The public checkout’s `target/` directory does **not** contain the cited parity/promotion artifacts. That is expected because `/target/` is gitignored, but it means local artifact paths in docs are not reviewable from GitHub by themselves.
+- Current public worktree: `6bdc4b4 Add full-support bundle prep scaffold` is pushed on `origin/main`; the exact-row smoke guardrails from `713c744` and `9d091ce` remain preserved in that landed state.
+- The public checkout’s `target/` directory still does **not** contain the cited raw parity/promotion artifacts. That is expected because `/target/` is gitignored. Sanitized carry-forward manifests/checksums now live under `qa/evidence-bundles/four-row-public-20260503T024327Z/` and `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/`, but reviewers still cannot fetch the private raw target tree itself from GitHub.
 - The older `projects/backendinference` worktree is behind public `origin/main` and locally dirty; use the public `projects/Camelid` worktree for release docs/commits unless deliberately recovering old local artifacts.
 - The earlier Ubuntu rebuild failure was an environment/toolchain-selection issue, not a new Cargo.lock mystery: bare `/usr/bin/cargo` is still `1.75.0`, while current Camelid head now has a verified Rust/Cargo floor of `1.87+`. Use the checked-in rustup wrapper/toolchain files for Ubuntu validation; details are in `qa/validation-notes/2026-05-03-ubuntu-toolchain-and-8b-context.md`.
