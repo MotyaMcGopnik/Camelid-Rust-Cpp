@@ -16,8 +16,7 @@ use crate::{
     gguf::GgufTensorType,
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
     tensor::{
-        disable_file_cache_best_effort, should_parallelize_linear_output, CpuTensor, Q8_0Block,
-        Q8_0FileBacking, TensorStore,
+        should_parallelize_linear_output, CpuTensor, Q8_0Block, Q8_0FileBacking, TensorStore,
     },
     BackendError, Result,
 };
@@ -3020,15 +3019,11 @@ fn matmul_rhs_transposed_with_precision(
         return matmul_rhs_transposed_q8_0_block_dot(input, weight, name);
     }
     if let Some(backing) = q8_0_reader_backing(weight, input_width)? {
-        let file = File::open(&backing.path).map_err(|source| BackendError::Io {
-            path: backing.path.clone(),
-            source,
-        })?;
-        disable_file_cache_best_effort(&file);
+        let file = backing.file()?;
         let mut workspace = InferenceWorkspace::new(input_width);
         return matmul_rhs_transposed_q8_0_block_reader(
             input,
-            &file,
+            file.as_ref(),
             Q8BlockReader::new(backing.absolute_offset, backing.num_blocks),
             weight.dim(0)?,
             name,
@@ -3326,11 +3321,7 @@ fn output_projection_token_row(
         )));
     }
 
-    let file = File::open(&backing.path).map_err(|source| BackendError::Io {
-        path: backing.path.clone(),
-        source,
-    })?;
-    disable_file_cache_best_effort(&file);
+    let file = backing.file()?;
     let blocks_per_row = hidden_width / Q8_0_BLOCK_VALUES;
     let row_block_start = token_index.checked_mul(blocks_per_row).ok_or_else(|| {
         BackendError::RuntimeShapeMismatch(
@@ -3407,13 +3398,10 @@ fn output_projection_q8_0_reconstructed_logit(
                 "output projection q8_0 diagnostic row byte length overflow".to_string(),
             )
         })?;
-    let file = File::open(&backing.path).map_err(|source| BackendError::Io {
-        path: backing.path.clone(),
-        source,
-    })?;
-    disable_file_cache_best_effort(&file);
+    let file = backing.file()?;
     let mut row_bytes = vec![0_u8; row_bytes_len];
-    file.read_exact_at(&mut row_bytes, row_offset)
+    file.as_ref()
+        .read_exact_at(&mut row_bytes, row_offset)
         .map_err(|err| {
             BackendError::InvalidTensorData(format!(
                 "output projection q8_0 diagnostic failed to read token row {token_index}: {err}",
@@ -4354,11 +4342,7 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
 ) -> Result<()> {
     let input_width = input_row.len();
     let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
-    let file = File::open(&backing.path).map_err(|source| BackendError::Io {
-        path: backing.path.clone(),
-        source,
-    })?;
-    disable_file_cache_best_effort(&file);
+    let file = backing.file()?;
     let row_bytes_len = blocks_per_row
         .checked_mul(Q8BlockReader::BLOCK_SIZE_BYTES)
         .ok_or_else(|| {
@@ -4391,12 +4375,14 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
                 )
             })?;
         let chunk = &mut row_chunk[..chunk_bytes_len];
-        file.read_exact_at(chunk, chunk_offset).map_err(|err| {
-            BackendError::InvalidTensorData(format!(
+        file.as_ref()
+            .read_exact_at(chunk, chunk_offset)
+            .map_err(|err| {
+                BackendError::InvalidTensorData(format!(
                 "q8_0 borrowed block-reader failed to read output rows {output_start}..{}: {err}",
                 output_start + rows_this_chunk
             ))
-        })?;
+            })?;
         for (local_idx, row_bytes) in chunk.chunks_exact(row_bytes_len).enumerate() {
             output[output_start + local_idx] =
                 dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
@@ -5770,11 +5756,7 @@ mod tests {
         .unwrap();
         let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
 
-        let backing = Q8_0FileBacking {
-            path: temp_file.path().to_path_buf(),
-            absolute_offset: 0,
-            num_blocks: rows.len(),
-        };
+        let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
         let mut actual = vec![0.0; rows.len()];
         accumulate_transposed_linear_row_q8_0_file_reader(&input_values, &backing, &mut actual)
             .unwrap();
@@ -6514,11 +6496,7 @@ mod tests {
         let output_weight = CpuTensor::q8_0_file_backed_linear(
             "output.weight",
             crate::tensor::TensorShape { dims: vec![32, 2] },
-            Q8_0FileBacking {
-                path: temp_file.path().to_path_buf(),
-                absolute_offset: 0,
-                num_blocks: 2,
-            },
+            Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, 2),
         );
 
         let logits = output_projection_runtime(&input, &output_weight, "logits", false).unwrap();

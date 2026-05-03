@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, sync::Arc};
 
 use backendinference::{
     gguf::{read_metadata, GgufTensorType},
@@ -101,6 +101,10 @@ fn loads_q8_0_file_backed_linear_without_f32_materialization() {
     let backing = tensor.q8_0_file_backing.unwrap();
     assert_eq!(backing.path, path);
     assert_eq!(backing.num_blocks, 2);
+
+    let first = backing.file().unwrap();
+    let second = backing.clone().file().unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
 }
 
 #[test]

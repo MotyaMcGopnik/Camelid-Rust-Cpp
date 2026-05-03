@@ -3,7 +3,9 @@ use std::{
     env,
     fs::File,
     io::{Read, Seek, SeekFrom},
+    os::unix::fs::FileExt,
     path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
 };
 
 const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
@@ -73,12 +75,54 @@ pub struct Q8_0Block {
     pub quants: [i8; 32],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Q8_0FileBacking {
     pub path: PathBuf,
     pub absolute_offset: u64,
     pub num_blocks: usize,
+    file_handle: Arc<OnceLock<Arc<File>>>,
 }
+
+impl Q8_0FileBacking {
+    pub fn new(path: PathBuf, absolute_offset: u64, num_blocks: usize) -> Self {
+        Self {
+            path,
+            absolute_offset,
+            num_blocks,
+            file_handle: Arc::new(OnceLock::new()),
+        }
+    }
+
+    pub fn file(&self) -> Result<Arc<File>> {
+        if let Some(file) = self.file_handle.get() {
+            return Ok(file.clone());
+        }
+        let file = File::open(&self.path).map_err(|source| BackendError::Io {
+            path: self.path.clone(),
+            source,
+        })?;
+        disable_file_cache_best_effort(&file);
+        let file = Arc::new(file);
+        if self.file_handle.set(file.clone()).is_err() {
+            return Ok(self
+                .file_handle
+                .get()
+                .expect("q8_0 file handle must exist after OnceLock set race")
+                .clone());
+        }
+        Ok(file)
+    }
+}
+
+impl PartialEq for Q8_0FileBacking {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.absolute_offset == other.absolute_offset
+            && self.num_blocks == other.num_blocks
+    }
+}
+
+impl Eq for Q8_0FileBacking {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CpuTensor {
@@ -622,11 +666,7 @@ impl CpuTensor {
                 backing.num_blocks
             )));
         }
-        let mut file = File::open(&backing.path).map_err(|source| BackendError::Io {
-            path: backing.path.clone(),
-            source,
-        })?;
-        disable_file_cache_best_effort(&file);
+        let file = backing.file()?;
         let row_bytes = blocks_per_row * Q8_0_BLOCK_BYTES;
         let mut row = vec![0_u8; row_bytes];
         let mut out = Vec::with_capacity(token_ids.len() * width);
@@ -642,12 +682,7 @@ impl CpuTensor {
                 )));
             }
             let offset = backing.absolute_offset + (token_idx * row_bytes) as u64;
-            file.seek(SeekFrom::Start(offset))
-                .map_err(|source| BackendError::Io {
-                    path: backing.path.clone(),
-                    source,
-                })?;
-            file.read_exact(&mut row)
+            file.read_exact_at(&mut row, offset)
                 .map_err(|source| BackendError::Io {
                     path: backing.path.clone(),
                     source,
@@ -835,11 +870,11 @@ impl TensorStore {
         Ok(CpuTensor::q8_0_file_backed_linear(
             name,
             shape,
-            Q8_0FileBacking {
-                path: self.path.clone(),
-                absolute_offset: desc.absolute_offset,
-                num_blocks: expected_elements / 32,
-            },
+            Q8_0FileBacking::new(
+                self.path.clone(),
+                desc.absolute_offset,
+                expected_elements / 32,
+            ),
         ))
     }
 
@@ -863,11 +898,11 @@ impl TensorStore {
                 if retain_q8_0_blocks {
                     q8_0_blocks = Some(decode_q8_0_blocks(name, &bytes, expected_elements)?);
                 } else {
-                    q8_0_file_backing = Some(Q8_0FileBacking {
-                        path: self.path.clone(),
-                        absolute_offset: desc.absolute_offset,
-                        num_blocks: expected_elements / 32,
-                    });
+                    q8_0_file_backing = Some(Q8_0FileBacking::new(
+                        self.path.clone(),
+                        desc.absolute_offset,
+                        expected_elements / 32,
+                    ));
                 }
                 decoded
             }
