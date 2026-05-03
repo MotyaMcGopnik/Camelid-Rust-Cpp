@@ -1,6 +1,8 @@
 {
+  "schema": "camelid.llama3.prompt-pack.v1",
   "pack_id": "llama3-context-512-smoke-v1",
   "description": "First longer-context Llama 3 compact-header parity bucket. The prompt body is intentionally repetitive and bounded so prompt-token and generated-token parity can be compared across exact rows before broader context claims are made.",
+  "target_context_window": 512,
   "defaults": {
     "max_tokens": 5,
     "render_mode": "compact"

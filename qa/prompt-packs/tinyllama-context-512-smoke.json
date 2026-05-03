@@ -1,6 +1,7 @@
 {
   "schema": "camelid.tinyllama.prompt-pack.v1",
   "pack_id": "tinyllama-context-512-smoke-v1",
+  "target_context_window": 512,
   "description": "First bounded TinyLlama longer-context parity bucket. The prompt body stays exact-row and repetitive so prompt-token and generated-token parity can be compared without implying broader family support.",
   "defaults": {
     "max_tokens": 5,

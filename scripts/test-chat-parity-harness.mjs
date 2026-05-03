@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 
-import { renderExpectedPrompt, resolveReferenceContext } from './lib/chat-parity-harness.mjs'
+import { normalizePromptPack, renderExpectedPrompt, resolveReferenceContext } from './lib/chat-parity-harness.mjs'
 
 assert.equal(
   renderExpectedPrompt([
@@ -35,6 +35,44 @@ assert.equal(
     { role: 'assistant', content: 'elid' },
   ], 'tinyllama-marker'),
   '<|user|>\nComplete cam</s>\n<|assistant|>\nelid</s>\n',
+)
+
+const normalizedPack = normalizePromptPack({
+  schema: 'camelid.llama3.prompt-pack.v1',
+  pack_id: 'llama3-context-512-smoke-v1',
+  target_context_window: 512,
+  defaults: {
+    max_tokens: 5,
+    render_mode: 'compact',
+  },
+  prompts: [
+    {
+      id: 'shape-a',
+      messages: [
+        { role: 'system', content: 'Stay brief.' },
+        { role: 'user', content: 'Say blue.' },
+      ],
+    },
+    {
+      id: 'shape-b',
+      message: 'hello',
+      render_mode: 'compact',
+      max_tokens: 7,
+      target_context_window: 640,
+    },
+  ],
+})
+assert.equal(normalizedPack.defaults.max_tokens, 5)
+assert.equal(normalizedPack.defaults.render_mode, 'compact')
+assert.equal(normalizedPack.target_context_window, 512)
+assert.equal(normalizedPack.prompts[0].max_tokens, 5)
+assert.equal(normalizedPack.prompts[0].render_mode, 'compact')
+assert.equal(normalizedPack.prompts[0].target_context_window, 512)
+assert.equal(normalizedPack.prompts[1].max_tokens, 7)
+assert.equal(normalizedPack.prompts[1].target_context_window, 640)
+assert.throws(
+  () => normalizePromptPack({ schema: 'camelid.unknown.prompt-pack.v1', pack_id: 'bad', prompts: [{ message: 'hi' }] }),
+  /unsupported/,
 )
 
 assert.equal(resolveReferenceContext({ promptTokenCount: 120, maxTokens: 5 }), 512)

@@ -82,8 +82,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(tinyllama["generation_runs"], "validated");
     assert_eq!(tinyllama["parity_audited"], "validated");
     assert_eq!(tinyllama["tested_context"], "short_prompt_50_token_gate");
+    assert_eq!(tinyllama["chat_template_renderer"], "tinyllama-marker");
     assert_eq!(tinyllama["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        tinyllama["chat_template_shape_pack_id"],
+        "tinyllama-chat-template-shapes-v1"
+    );
     assert_eq!(tinyllama["bounded_context_512_pack"], "ready_to_run");
+    assert_eq!(
+        tinyllama["bounded_context_512_pack_id"],
+        "tinyllama-context-512-smoke-v1"
+    );
+    assert_eq!(tinyllama["bounded_context_window"], 512);
     let llama32_1b = compatibility
         .iter()
         .find(|item| item["id"] == "llama32_1b_instruct_q8_0")
@@ -96,8 +106,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     assert_eq!(llama32_1b["frontend_load_path_verified"], "validated");
     assert_eq!(llama32_1b["tested_context"], "short_api_webui_smoke");
+    assert_eq!(llama32_1b["chat_template_renderer"], "compact");
     assert_eq!(llama32_1b["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_1b["chat_template_shape_pack_id"],
+        "llama3-chat-template-shapes-v1"
+    );
     assert_eq!(llama32_1b["bounded_context_512_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_1b["bounded_context_512_pack_id"],
+        "llama3-context-512-smoke-v1"
+    );
+    assert_eq!(llama32_1b["bounded_context_window"], 512);
     let llama32_3b = compatibility
         .iter()
         .find(|item| item["id"] == "llama32_3b_instruct_q8_0")
@@ -112,8 +132,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         llama32_3b["tested_context"],
         "short_api_webui_smoke_with_broader_prompt_pack_parity"
     );
+    assert_eq!(llama32_3b["chat_template_renderer"], "compact");
     assert_eq!(llama32_3b["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_3b["chat_template_shape_pack_id"],
+        "llama3-chat-template-shapes-v1"
+    );
     assert_eq!(llama32_3b["bounded_context_512_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_3b["bounded_context_512_pack_id"],
+        "llama3-context-512-smoke-v1"
+    );
+    assert_eq!(llama32_3b["bounded_context_window"], 512);
     let llama3 = compatibility
         .iter()
         .find(|item| item["id"] == "llama3_8b_instruct_q8_0")
@@ -136,8 +166,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         llama3["tested_context"],
         "short_api_webui_smoke_with_5_token_prompt_pack_parity"
     );
+    assert_eq!(llama3["chat_template_renderer"], "compact");
     assert_eq!(llama3["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        llama3["chat_template_shape_pack_id"],
+        "llama3-chat-template-shapes-v1"
+    );
     assert_eq!(llama3["bounded_context_512_pack"], "known_blocker");
+    assert_eq!(
+        llama3["bounded_context_512_pack_id"],
+        "llama3-context-512-smoke-v1"
+    );
+    assert_eq!(llama3["bounded_context_window"], 512);
     let planned_quant = compatibility
         .iter()
         .find(|item| item["id"] == "llama_spm_q4_k_q5_k")
@@ -145,8 +185,12 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(planned_quant["status"], "planned_phase_10");
     assert_eq!(planned_quant["tensors_load"], "unsupported_typed_error");
     assert_eq!(planned_quant["generation_runs"], "blocked_until_dequant");
+    assert_eq!(planned_quant["chat_template_renderer"], "not_selected");
     assert_eq!(planned_quant["chat_template_shape_pack"], "not_started");
+    assert_eq!(planned_quant["chat_template_shape_pack_id"], "not_selected");
     assert_eq!(planned_quant["bounded_context_512_pack"], "not_started");
+    assert_eq!(planned_quant["bounded_context_512_pack_id"], "not_selected");
+    assert_eq!(planned_quant["bounded_context_window"], 512);
 }
 
 #[tokio::test]

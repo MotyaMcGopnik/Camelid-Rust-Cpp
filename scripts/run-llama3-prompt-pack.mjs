@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
+import { normalizePromptPack } from './lib/chat-parity-harness.mjs'
+
 const args = parseArgs(process.argv.slice(2))
 const packPath = args.get('pack')
 const outDirArg = args.get('out-dir') || args.get('output-dir')
@@ -27,23 +29,26 @@ if (!outDirArg) throw new Error('--out-dir is required')
 if (!modelPathArg) throw new Error('--model is required')
 if (!Number.isInteger(waitMs) || waitMs < 1) throw new Error(`--wait-ms must be a positive integer, got ${args.get('wait-ms')}`)
 
-const pack = JSON.parse(await readFile(resolve(packPath), 'utf8'))
-const prompts = Array.isArray(pack.prompts) ? pack.prompts : []
-if (prompts.length === 0) throw new Error(`${packPath} does not contain any prompts[] entries`)
+const pack = normalizePromptPack(JSON.parse(await readFile(resolve(packPath), 'utf8')), {
+  packPath: resolve(packPath),
+})
+const prompts = pack.prompts
 
 const outDir = resolve(outDirArg)
 const modelPath = resolve(modelPathArg)
 await mkdir(outDir, { recursive: true })
 
-const defaultMaxTokens = Number.parseInt(String(pack.defaults?.max_tokens ?? 50), 10)
-const defaultRenderMode = pack.defaults?.render_mode ? String(pack.defaults.render_mode) : 'compact'
 const summary = {
   schema: 'camelid.chat-parity.prompt-pack-run.v1',
   pack: {
-    schema: pack.schema || null,
-    id: pack.pack_id || null,
+    schema: pack.schema,
+    id: pack.pack_id,
     path: resolve(packPath),
+    description: pack.description,
     prompt_count: prompts.length,
+    default_max_tokens: pack.defaults.max_tokens,
+    default_render_mode: pack.defaults.render_mode,
+    target_context_window: pack.target_context_window,
   },
   backend: backendBase,
   llama_server: llamaBase,
@@ -59,7 +64,7 @@ const summary = {
 let hadFailure = false
 for (let index = 0; index < prompts.length; index += 1) {
   const prompt = prompts[index]
-  const promptId = prompt.id || `p${index + 1}`
+  const promptId = prompt.id
   const promptDir = join(outDir, `${prefix}-${promptId}`)
   await mkdir(promptDir, { recursive: true })
 
@@ -68,7 +73,7 @@ for (let index = 0; index < prompts.length; index += 1) {
   const stderrPath = join(promptDir, 'stderr.log')
   const commandPath = join(promptDir, 'command.txt')
   const promptPath = join(promptDir, 'prompt.json')
-  const maxTokens = Number.parseInt(String(prompt.max_tokens ?? defaultMaxTokens), 10)
+  const maxTokens = prompt.max_tokens
   const commandArgs = [
     resolve('scripts/chat-parity-llama3.mjs'),
     '--backend', backendBase,
@@ -79,8 +84,9 @@ for (let index = 0; index < prompts.length; index += 1) {
     '--wait-ms', String(waitMs),
     '--diagnostics-out', diagnosticsPath,
   ]
-  const renderMode = prompt.render_mode ? String(prompt.render_mode) : defaultRenderMode
+  const renderMode = prompt.render_mode
   if (renderMode) commandArgs.push('--render-mode', renderMode)
+  if (prompt.target_context_window) commandArgs.push('--llama-context', String(prompt.target_context_window))
   const hasMessages = Array.isArray(prompt.messages)
   if (hasMessages) {
     commandArgs.push('--messages-json', promptPath)
@@ -117,6 +123,7 @@ for (let index = 0; index < prompts.length; index += 1) {
     render_mode: renderMode,
     note: prompt.note ?? null,
     max_tokens: maxTokens,
+    target_context_window: prompt.target_context_window,
     artifact_dir: promptDir,
     report_path: diagnosticsPath,
     stdout_path: stdoutPath,
@@ -126,6 +133,8 @@ for (let index = 0; index < prompts.length; index += 1) {
     prompt_tokens_match: report?.prompt_tokens_match ?? null,
     generated_tokens_match: report?.generated_tokens_match ?? null,
     generated_text_match: report?.generated_text_match ?? null,
+    reference_prompt_token_count: report?.reference_prompt_token_count ?? null,
+    reference_context: report?.reference_context ?? null,
     first_generated_token_diff_index: report?.first_generated_token_diff_index ?? null,
     first_generated_text_diff_index: report?.first_generated_text_diff_index ?? null,
   }

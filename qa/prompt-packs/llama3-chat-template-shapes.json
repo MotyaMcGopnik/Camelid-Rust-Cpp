@@ -1,4 +1,5 @@
 {
+  "schema": "camelid.llama3.prompt-pack.v1",
   "pack_id": "llama3-chat-template-shapes-v1",
   "description": "Bounded Llama 3 Instruct compact-header chat-template shape coverage. These cases intentionally exercise Camelid's explicit compact renderer rather than arbitrary GGUF tokenizer.chat_template/Jinja execution.",
   "defaults": {
