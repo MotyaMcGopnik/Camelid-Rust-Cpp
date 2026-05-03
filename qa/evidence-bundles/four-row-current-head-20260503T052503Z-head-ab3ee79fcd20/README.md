@@ -1,9 +1,9 @@
 # Full-support current-head execution bundle
 
-Generated: 2026-05-03T05:17:31.572Z
+Generated: 2026-05-03T05:44:18.881Z
 
-Git head: `82d7fde3fe50b218f40ab18ef1123c81a985fc3f`
-Origin/main: `e7837a49d3e1b2eb4f93ed6777b77200fad8307f`
+Git head: `ab3ee79fcd204717955c101569fc3a0871175be8`
+Origin/main: `ab3ee79fcd204717955c101569fc3a0871175be8`
 
 This bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.
 
@@ -23,7 +23,7 @@ Top-level commands:
 Guardrails:
 - Use the canonical Ubuntu validation host for promotion-grade Llama runtime evidence.
 - Keep claims exact-row only unless docs, API, frontend, and artifacts all agree.
-- Preserve known blockers durably instead of deleting them, especially the 8B 512-context timeout.
+- Preserve known blockers durably instead of deleting them, especially the 8B 512-context performance/RSS gap.
 
 Carry-forward public references:
 - `qa/evidence-bundles/four-row-public-20260503T024327Z`

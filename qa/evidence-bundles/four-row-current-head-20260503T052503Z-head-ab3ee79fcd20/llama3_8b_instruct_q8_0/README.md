@@ -1,6 +1,6 @@
 # Llama 3 8B Instruct Q8_0
 
-Public status: supported_exact_row_smoke
+Public status: evidence_backed_validation_lane
 Expected model SHA256: `583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958`
 Carry-forward bundle: `qa/evidence-bundles/four-row-public-20260503T024327Z/llama3_8b_instruct_q8_0.bundle.json`
 
@@ -13,5 +13,5 @@ Tracks:
 - perf-rss-portability: ready_to_run — Capture host facts, versions, model SHA, smoke timing, and backend RSS snapshots in one portable note.
 
 Blockers:
-- 512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.
+- 512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.
 - Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families.

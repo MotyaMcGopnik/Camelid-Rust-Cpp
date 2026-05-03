@@ -44,7 +44,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "TinyLlama Q8_0 plus exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 smoke gates"
+        "TinyLlama Q8_0 current gate; Llama 3.2 1B/3B and Llama 3 8B Q8_0 validation lanes pending normalized full-support evidence"
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -61,7 +61,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .unwrap()
         .iter()
         .any(|item| item["id"] == "llama_bpe_decoder_exact_1b_3b_8b_q8_0"
-            && item["status"] == "supported_exact_row_smoke"));
+            && item["status"] == "evidence_backed_validation_lanes"));
     assert!(body["planned_model_families"]
         .as_array()
         .unwrap()
@@ -88,7 +88,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "llama32_1b_instruct_q8_0")
         .unwrap();
-    assert_eq!(llama32_1b["status"], "supported_exact_row_smoke");
+    assert_eq!(llama32_1b["status"], "evidence_backed_validation_lane");
     assert_eq!(llama32_1b["metadata_parses"], "validated");
     assert_eq!(
         llama32_1b["generation_runs"],
@@ -102,7 +102,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "llama32_3b_instruct_q8_0")
         .unwrap();
-    assert_eq!(llama32_3b["status"], "supported_exact_row_smoke");
+    assert_eq!(llama32_3b["status"], "evidence_backed_validation_lane");
     assert_eq!(
         llama32_3b["generation_runs"],
         "api_completion_and_chat_smoke_plus_five_prompt_api_smoke"
@@ -118,7 +118,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "llama3_8b_instruct_q8_0")
         .unwrap();
-    assert_eq!(llama3["status"], "supported_exact_row_smoke");
+    assert_eq!(llama3["status"], "evidence_backed_validation_lane");
     assert_eq!(
         llama3["metadata_parses"],
         "real_artifact_inspected_and_config_guarded"

@@ -1,24 +1,24 @@
 {
   "row_id": "llama3_8b_instruct_q8_0",
   "display_name": "Llama 3 8B Instruct Q8_0",
-  "public_status": "supported_exact_row_smoke",
+  "public_status": "evidence_backed_validation_lane",
   "model_file": "Meta-Llama-3-8B-Instruct-Q8_0.gguf",
   "model_id": "llama3-8b-q8",
   "model_path_env": "${CAMELID_MODEL_DIR:?set CAMELID_MODEL_DIR to the GGUF directory}/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
   "expected_model_sha256": "583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958",
   "template_family": "llama3_instruct",
   "compatibility_row": "llama3_8b_instruct_q8_0",
-  "expected_compatibility_status": "supported_exact_row_smoke",
-  "expect_contract_supported": true,
-  "expect_webui_chat": "enabled",
-  "row_root": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0",
+  "expected_compatibility_status": "evidence_backed_validation_lane",
+  "expect_contract_supported": false,
+  "expect_webui_chat": "guarded",
+  "row_root": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0",
   "carry_forward_bundle": "qa/evidence-bundles/four-row-public-20260503T024327Z/llama3_8b_instruct_q8_0.bundle.json",
   "notes": [
-    "Short smoke is supported for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.",
-    "The first bounded 512-context pack timed out at /v1/chat/completions after 300000 ms on current head and remains the blocker."
+    "Short validation evidence exists for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.",
+    "The first bounded 512-context pack timed out on current head, so longer-context and performance/RSS evidence remain the blocker."
   ],
   "blockers": [
-    "512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.",
+    "512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.",
     "Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families."
   ],
   "tracks": [
@@ -31,7 +31,7 @@
       "pack_path": null,
       "carry_forward_artifacts": [],
       "notes": [],
-      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0/commands/01-compact-parity.sh"
+      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0/commands/01-compact-parity.sh"
     },
     {
       "index": 2,
@@ -42,7 +42,7 @@
       "pack_path": "qa/prompt-packs/llama3-broader-repro-3prompt.json",
       "carry_forward_artifacts": [],
       "notes": [],
-      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0/commands/02-broader-parity.sh"
+      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0/commands/02-broader-parity.sh"
     },
     {
       "index": 3,
@@ -53,7 +53,7 @@
       "pack_path": "qa/prompt-packs/llama3-chat-template-shapes.json",
       "carry_forward_artifacts": [],
       "notes": [],
-      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0/commands/03-chat-template-shapes.sh"
+      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0/commands/03-chat-template-shapes.sh"
     },
     {
       "index": 4,
@@ -65,9 +65,9 @@
       "carry_forward_artifacts": [],
       "notes": [
         "Known blocker from qa/validation-notes/2026-05-03-ubuntu-toolchain-and-8b-context.md: Camelid timed out at POST /v1/chat/completions after 300000 ms while llama.cpp finished the same 512-context reference prompt + 5-token completion.",
-        "Keep the failure durable inside the new bundle instead of papering over it."
+        "Keep the failure plus performance/RSS evidence durable inside the new bundle instead of papering over it."
       ],
-      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0/commands/04-context-512.sh"
+      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0/commands/04-context-512.sh"
     },
     {
       "index": 5,
@@ -78,7 +78,7 @@
       "pack_path": null,
       "carry_forward_artifacts": [],
       "notes": [],
-      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0/commands/05-api-webui-smoke.sh"
+      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0/commands/05-api-webui-smoke.sh"
     },
     {
       "index": 6,
@@ -89,7 +89,7 @@
       "pack_path": null,
       "carry_forward_artifacts": [],
       "notes": [],
-      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T051731Z-head-82d7fde3fe50/llama3_8b_instruct_q8_0/commands/06-perf-rss-portability.sh"
+      "command_file": "qa/evidence-bundles/four-row-current-head-20260503T052503Z-head-ab3ee79fcd20/llama3_8b_instruct_q8_0/commands/06-perf-rss-portability.sh"
     }
   ]
 }

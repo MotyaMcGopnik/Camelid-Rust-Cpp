@@ -106,18 +106,18 @@ const rows = [
   {
     row_id: 'llama32_1b_instruct_q8_0',
     display_name: 'Llama 3.2 1B Instruct Q8_0',
-    public_status: 'supported_exact_row_smoke',
+    public_status: 'evidence_backed_validation_lane',
     model_file: 'Llama-3.2-1B-Instruct-Q8_0.gguf',
     model_id: 'llama32-1b-q8',
     compatibility_row: 'llama32_1b_instruct_q8_0',
-    expected_compatibility_status: 'supported_exact_row_smoke',
-    expect_contract_supported: true,
-    expect_webui_chat: 'enabled',
+    expected_compatibility_status: 'evidence_backed_validation_lane',
+    expect_contract_supported: false,
+    expect_webui_chat: 'guarded',
     expected_model_sha256: '432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3',
     template_family: 'llama3_instruct',
     carry_forward_bundle: `${qaBundleRoot}/llama32_1b_instruct_q8_0.bundle.json`,
     notes: [
-      'Broader prompt-pack evidence exists, but the public claim remains exact-row short-chat smoke.',
+      'Broader prompt-pack evidence exists, but the row remains validation-only until normalized full-support evidence lands.',
       'Promotion-grade longer-context, broader template coverage, and portability still need Ubuntu current-head reruns.'
     ],
     blockers: [
@@ -128,9 +128,9 @@ const rows = [
       modelFile: 'Llama-3.2-1B-Instruct-Q8_0.gguf',
       modelId: 'llama32-1b-q8',
       compatibilityRow: 'llama32_1b_instruct_q8_0',
-      compatibilityStatus: 'supported_exact_row_smoke',
-      expectContractSupported: true,
-      expectWebUiChat: 'enabled',
+      compatibilityStatus: 'evidence_backed_validation_lane',
+      expectContractSupported: false,
+      expectWebUiChat: 'guarded',
       broaderPack: 'qa/prompt-packs/llama3-broader-repro-3prompt.json',
       contextWaitMs: 180000,
       perfWaitMs: 180000,
@@ -139,13 +139,13 @@ const rows = [
   {
     row_id: 'llama32_3b_instruct_q8_0',
     display_name: 'Llama 3.2 3B Instruct Q8_0',
-    public_status: 'supported_exact_row_smoke',
+    public_status: 'evidence_backed_validation_lane',
     model_file: 'Llama-3.2-3B-Instruct-Q8_0.gguf',
     model_id: 'llama32-3b-q8',
     compatibility_row: 'llama32_3b_instruct_q8_0',
-    expected_compatibility_status: 'supported_exact_row_smoke',
-    expect_contract_supported: true,
-    expect_webui_chat: 'enabled',
+    expected_compatibility_status: 'evidence_backed_validation_lane',
+    expect_contract_supported: false,
+    expect_webui_chat: 'guarded',
     expected_model_sha256: 'b5607b5090a8280063fff2d706bb3408ca6542341b06aab39c3eca0a28575921',
     template_family: 'llama3_instruct',
     carry_forward_bundle: `${qaBundleRoot}/llama32_3b_instruct_q8_0.bundle.json`,
@@ -154,16 +154,16 @@ const rows = [
       'Longer context, broader template behavior, and stronger portability/perf evidence remain the release blocker.'
     ],
     blockers: [
-      'Current public support is still exact-row smoke only.',
+      'Current public posture is validation-only, not full support.',
       'Do not broaden beyond the exact 3B Instruct Q8_0 row without fresh Ubuntu artifacts and synchronized docs/API/frontend changes.'
     ],
     tracks: llamaTracks({
       modelFile: 'Llama-3.2-3B-Instruct-Q8_0.gguf',
       modelId: 'llama32-3b-q8',
       compatibilityRow: 'llama32_3b_instruct_q8_0',
-      compatibilityStatus: 'supported_exact_row_smoke',
-      expectContractSupported: true,
-      expectWebUiChat: 'enabled',
+      compatibilityStatus: 'evidence_backed_validation_lane',
+      expectContractSupported: false,
+      expectWebUiChat: 'guarded',
       broaderPack: 'qa/prompt-packs/llama3-broader-repro-3prompt.json',
       contextWaitMs: 300000,
       perfWaitMs: 300000,
@@ -172,38 +172,38 @@ const rows = [
   {
     row_id: 'llama3_8b_instruct_q8_0',
     display_name: 'Llama 3 8B Instruct Q8_0',
-    public_status: 'supported_exact_row_smoke',
+    public_status: 'evidence_backed_validation_lane',
     model_file: 'Meta-Llama-3-8B-Instruct-Q8_0.gguf',
     model_id: 'llama3-8b-q8',
     compatibility_row: 'llama3_8b_instruct_q8_0',
-    expected_compatibility_status: 'supported_exact_row_smoke',
-    expect_contract_supported: true,
-    expect_webui_chat: 'enabled',
+    expected_compatibility_status: 'evidence_backed_validation_lane',
+    expect_contract_supported: false,
+    expect_webui_chat: 'guarded',
     expected_model_sha256: '583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958',
     template_family: 'llama3_instruct',
     carry_forward_bundle: `${qaBundleRoot}/llama3_8b_instruct_q8_0.bundle.json`,
     notes: [
-      'Short smoke is supported for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.',
-      'The first bounded 512-context pack timed out at /v1/chat/completions after 300000 ms on current head and remains the blocker.'
+      'Short validation evidence exists for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.',
+      'The first bounded 512-context pack timed out on current head, so longer-context and performance/RSS evidence remain the blocker.'
     ],
     blockers: [
-      '512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.',
+      '512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.',
       'Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families.'
     ],
     tracks: llamaTracks({
       modelFile: 'Meta-Llama-3-8B-Instruct-Q8_0.gguf',
       modelId: 'llama3-8b-q8',
       compatibilityRow: 'llama3_8b_instruct_q8_0',
-      compatibilityStatus: 'supported_exact_row_smoke',
-      expectContractSupported: true,
-      expectWebUiChat: 'enabled',
+      compatibilityStatus: 'evidence_backed_validation_lane',
+      expectContractSupported: false,
+      expectWebUiChat: 'guarded',
       broaderPack: 'qa/prompt-packs/llama3-broader-repro-3prompt.json',
       contextWaitMs: 300000,
       perfWaitMs: 1200000,
       contextTrackStatus: 'known_blocker',
       contextTrackNotes: [
         'Known blocker from qa/validation-notes/2026-05-03-ubuntu-toolchain-and-8b-context.md: Camelid timed out at POST /v1/chat/completions after 300000 ms while llama.cpp finished the same 512-context reference prompt + 5-token completion.',
-        'Keep the failure durable inside the new bundle instead of papering over it.'
+        'Keep the failure plus performance/RSS evidence durable inside the new bundle instead of papering over it.'
       ],
     })
   }
@@ -374,23 +374,23 @@ function perfCommand(modelFile, modelId, waitMs = 300000) {
   return [
     'set -euo pipefail',
     'cd "$REPO_ROOT"',
-    'mkdir -p "$ROW_ROOT/perf-rss-portability"',
+    'mkdir -p "ROW_ROOT/perf-rss-portability"',
     `MODEL=\"${modelDir}/${modelFile}\"`,
     `MODEL_ID=\"${modelId}\"`,
     `API_BASE=\"${apiBase}\"`,
     `FRONTEND_URL=\"${frontendUrl}\"`,
     `WAIT_MS=\"${waitMs}\"`,
-    'date -u +%FT%TZ | tee "$ROW_ROOT/perf-rss-portability/captured-at.txt"',
-    'uname -a | tee "$ROW_ROOT/perf-rss-portability/uname.txt"',
-    'hostname | tee "$ROW_ROOT/perf-rss-portability/hostname.txt"',
-    'node --version | tee "$ROW_ROOT/perf-rss-portability/node-version.txt"',
-    './scripts/with-rustup-cargo.sh --version | tee "$ROW_ROOT/perf-rss-portability/cargo-version.txt"',
-    'free -h | tee "$ROW_ROOT/perf-rss-portability/free.txt"',
-    'df -h / | tee "$ROW_ROOT/perf-rss-portability/disk-root.txt"',
-    'shasum -a 256 "$MODEL" | tee "$ROW_ROOT/perf-rss-portability/model.sha256.txt"',
-    `node scripts/model-promotion-smoke-bundle.mjs --api ${apiBase} --frontend ${frontendUrl} --model \"${modelDir}/${modelFile}\" --model-id ${modelId} --out-dir \"$ROW_ROOT/perf-rss-portability/api-webui-smoke\" --message hello --max-tokens 1 --temperature 0 || true`,
-    "pgrep -f 'target/release/backendinference serve' | tail -n 1 | tee \"$ROW_ROOT/perf-rss-portability/backend.pid.txt\"",
-    "if [ -s \"$ROW_ROOT/perf-rss-portability/backend.pid.txt\" ]; then ps -o pid,rss,vsz,etime,command -p \"$(cat \"$ROW_ROOT/perf-rss-portability/backend.pid.txt\")\" | tee \"$ROW_ROOT/perf-rss-portability/backend.ps.txt\"; fi",
+    'date -u +%FT%TZ | tee "ROW_ROOT/perf-rss-portability/captured-at.txt"',
+    'uname -a | tee "ROW_ROOT/perf-rss-portability/uname.txt"',
+    'hostname | tee "ROW_ROOT/perf-rss-portability/hostname.txt"',
+    'node --version | tee "ROW_ROOT/perf-rss-portability/node-version.txt"',
+    './scripts/with-rustup-cargo.sh --version | tee "ROW_ROOT/perf-rss-portability/cargo-version.txt"',
+    'free -h | tee "ROW_ROOT/perf-rss-portability/free.txt"',
+    'df -h / | tee "ROW_ROOT/perf-rss-portability/disk-root.txt"',
+    'shasum -a 256 "$MODEL" | tee "ROW_ROOT/perf-rss-portability/model.sha256.txt"',
+    `node scripts/model-promotion-smoke-bundle.mjs --api ${apiBase} --frontend ${frontendUrl} --model \"${modelDir}/${modelFile}\" --model-id ${modelId} --out-dir \"ROW_ROOT/perf-rss-portability/api-webui-smoke\" --message hello --max-tokens 1 --temperature 0 || true`,
+    "pgrep -f 'target/release/backendinference serve' | tail -n 1 | tee \"ROW_ROOT/perf-rss-portability/backend.pid.txt\"",
+    "if [ -s \"ROW_ROOT/perf-rss-portability/backend.pid.txt\" ]; then ps -o pid,rss,vsz,etime,command -p \"$(cat \"ROW_ROOT/perf-rss-portability/backend.pid.txt\")\" | tee \"ROW_ROOT/perf-rss-portability/backend.ps.txt\"; fi",
   ].join('\n')
 }
 
@@ -399,8 +399,8 @@ function modelShaCommand(modelFile) {
     'set -euo pipefail',
     'cd "$REPO_ROOT"',
     `MODEL=\"${modelDir}/${modelFile}\"`,
-    'mkdir -p "$ROW_ROOT/evidence"',
-    'shasum -a 256 "$MODEL" | tee "$ROW_ROOT/evidence/model.sha256.txt"',
+    'mkdir -p "ROW_ROOT/evidence"',
+    'shasum -a 256 "$MODEL" | tee "ROW_ROOT/evidence/model.sha256.txt"',
   ].join('\n')
 }
 
@@ -435,7 +435,7 @@ function renderRunAll(rows) {
 }
 
 function renderReadme(manifest) {
-  return `# Full-support current-head execution bundle\n\nGenerated: ${manifest.generated_utc}\n\nGit head: \`${manifest.git.head}\`\nOrigin/main: \`${manifest.git.origin_main}\`\n\nThis bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.\n\nRequired tracks per row:\n- compact parity\n- broader parity\n- chat-template shapes\n- 512-context\n- API/WebUI smoke\n- perf/RSS/portability\n\nTop-level commands:\n- \`commands/build-current-head.sh\`\n- \`commands/capture-host-facts.sh\`\n- \`commands/run-all-rows.sh\`\n\nGuardrails:\n- Use the canonical Ubuntu validation host for promotion-grade Llama runtime evidence.\n- Keep claims exact-row only unless docs, API, frontend, and artifacts all agree.\n- Preserve known blockers durably instead of deleting them, especially the 8B 512-context timeout.\n\nCarry-forward public references:\n- \`${manifest.carry_forward_public_refs.normalized_bundle_root}\`\n- \`${manifest.carry_forward_public_refs.perf_portability_envelope}\`\n- \`${manifest.carry_forward_public_refs.validation_note}\`\n`}
+  return `# Full-support current-head execution bundle\n\nGenerated: ${manifest.generated_utc}\n\nGit head: \`${manifest.git.head}\`\nOrigin/main: \`${manifest.git.origin_main}\`\n\nThis bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.\n\nRequired tracks per row:\n- compact parity\n- broader parity\n- chat-template shapes\n- 512-context\n- API/WebUI smoke\n- perf/RSS/portability\n\nTop-level commands:\n- \`commands/build-current-head.sh\`\n- \`commands/capture-host-facts.sh\`\n- \`commands/run-all-rows.sh\`\n\nGuardrails:\n- Use the canonical Ubuntu validation host for promotion-grade Llama runtime evidence.\n- Keep claims exact-row only unless docs, API, frontend, and artifacts all agree.\n- Preserve known blockers durably instead of deleting them, especially the 8B 512-context performance/RSS gap.\n\nCarry-forward public references:\n- \`${manifest.carry_forward_public_refs.normalized_bundle_root}\`\n- \`${manifest.carry_forward_public_refs.perf_portability_envelope}\`\n- \`${manifest.carry_forward_public_refs.validation_note}\`\n`}
 
 function renderRowReadme(row, manifest) {
   const tracks = manifest.tracks.map(track => `- ${track.id}: ${track.status} — ${track.description}`).join('\n')
@@ -467,7 +467,7 @@ function rowShellScript(body) {
     'BUNDLE_ROOT="$(cd -- "$ROW_ROOT/.." && pwd)"',
     'REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"',
     'export ROW_ROOT BUNDLE_ROOT REPO_ROOT',
-    body.replaceAll('ROW_ROOT', '$ROW_ROOT'),
+    body.replaceAll('ROW_ROOT', '$ROW_ROOT').replaceAll('os.environ["$ROW_ROOT"]', 'os.environ["ROW_ROOT"]'),
   ].join('\n'))
 }
 
