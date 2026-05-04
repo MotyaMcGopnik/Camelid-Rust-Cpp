@@ -60,9 +60,9 @@ Verified locally on the current tree:
 - `cargo test --all-targets --all-features`
 - `cargo doc --no-deps --all-features`
 - `bash scripts/check-public-scrub.sh`
-- `cd frontend && npm ci && npm run build`
+- `cd frontend && npm ci && npm run build && npm run smoke:model-state`
 
-Result: all of the above passed locally. The CI workflow was also tightened so the Rust job now enforces clippy and docs generation in addition to format and tests, keeping the GitHub gate aligned with the documented validation contract.
+Result: all of the above passed locally. The CI workflow was also tightened so the Rust job now enforces clippy and docs generation in addition to format and tests, and the frontend job now runs the support-contract/model-state smoke gate that protects exact-row chat unlock behavior. This keeps the GitHub gate aligned with the documented validation contract.
 
 ## Current support evidence
 

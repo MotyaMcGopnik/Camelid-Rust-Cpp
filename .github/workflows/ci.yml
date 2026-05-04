@@ -65,3 +65,6 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+      - name: Frontend support-contract smoke
+        run: npm run smoke:model-state
