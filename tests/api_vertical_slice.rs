@@ -107,12 +107,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_1b["frontend_load_path_verified"], "validated");
     assert_eq!(llama32_1b["tested_context"], "short_api_webui_smoke");
     assert_eq!(llama32_1b["chat_template_renderer"], "compact");
-    assert_eq!(llama32_1b["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_1b["chat_template_shape_pack"],
+        "blocked_by_validation_host_shutdown"
+    );
     assert_eq!(
         llama32_1b["chat_template_shape_pack_id"],
         "llama3-chat-template-shapes-v1"
     );
-    assert_eq!(llama32_1b["bounded_context_512_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_1b["bounded_context_512_pack"],
+        "blocked_by_validation_host_shutdown"
+    );
     assert_eq!(
         llama32_1b["bounded_context_512_pack_id"],
         "llama3-context-512-smoke-v1"
@@ -133,12 +139,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "short_api_webui_smoke_with_broader_prompt_pack_parity"
     );
     assert_eq!(llama32_3b["chat_template_renderer"], "compact");
-    assert_eq!(llama32_3b["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_3b["chat_template_shape_pack"],
+        "blocked_by_validation_host_shutdown"
+    );
     assert_eq!(
         llama32_3b["chat_template_shape_pack_id"],
         "llama3-chat-template-shapes-v1"
     );
-    assert_eq!(llama32_3b["bounded_context_512_pack"], "ready_to_run");
+    assert_eq!(
+        llama32_3b["bounded_context_512_pack"],
+        "blocked_by_validation_host_shutdown"
+    );
     assert_eq!(
         llama32_3b["bounded_context_512_pack_id"],
         "llama3-context-512-smoke-v1"
@@ -167,12 +179,18 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "short_api_webui_smoke_with_5_token_prompt_pack_parity"
     );
     assert_eq!(llama3["chat_template_renderer"], "compact");
-    assert_eq!(llama3["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        llama3["chat_template_shape_pack"],
+        "blocked_by_validation_host_shutdown"
+    );
     assert_eq!(
         llama3["chat_template_shape_pack_id"],
         "llama3-chat-template-shapes-v1"
     );
-    assert_eq!(llama3["bounded_context_512_pack"], "known_blocker");
+    assert_eq!(
+        llama3["bounded_context_512_pack"],
+        "known_blocker_and_validation_host_shutdown"
+    );
     assert_eq!(
         llama3["bounded_context_512_pack_id"],
         "llama3-context-512-smoke-v1"
