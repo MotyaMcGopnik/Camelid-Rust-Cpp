@@ -237,6 +237,8 @@ In order of importance:
 4. Preserve the Llama 3 8B exact-row promotion in docs, API, frontend readiness, and regression evidence without lending it to neighboring rows.
 5. Keep docs, `/api/capabilities`, and frontend readiness copy aligned with the exact-row support contract.
 
+Current operator blocker: Tim has intentionally shut down the Ubuntu validation host. Until Tim explicitly says that runtime lane is back, promotion-grade Llama-family reruns for 1B/3B/8B are blocked, and the 8B 512-context/performance lane remains blocked rather than merely pending. Local work should stay limited to repo-safe docs, API/frontend contract alignment, evidence normalization, privacy scrubs, and harness preparation; do not substitute local Mac llama-server/reference workloads for the paused remote lane. See `qa/validation-notes/2026-05-04-local-checkmark-lane.md`.
+
 ### Qwen prerequisite note
 
 Qwen remains future work, not a runtime-support lane. Before Camelid promotes any Qwen wording beyond planning, the first exact-row prerequisite is one chosen GGUF with tokenizer/chat-template fixtures, llama.cpp token-reference checks, and bounded load plus prompt-token parity evidence on that same row. Until those artifacts exist, Qwen should stay out of support/readiness language and out of runtime-promotion scheduling.

@@ -664,7 +664,7 @@ async fn capabilities() -> Json<CapabilitiesResponse> {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke, with broader/full support still pending normalized evidence",
+            current_gate: "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support and 8B 512-context reruns are blocked while the Ubuntu validation host is shut down",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
