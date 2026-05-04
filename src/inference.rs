@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     env,
     fs::File,
@@ -4069,43 +4070,46 @@ fn matmul_rhs_transposed_q8_0_block_reader(
             "q8_0 block-reader chunk byte count overflow".to_string(),
         )
     })?;
-    let mut row_chunk = vec![0_u8; row_chunk_len];
-    for row in 0..rows {
-        let input_start = row * input_width;
-        let input_row = &input.data[input_start..input_start + input_width];
-        let quantized_input = quantize_q8_0_row(input_row);
-        let out_start = row * output_width;
-        let mut output_idx = 0usize;
-        while output_idx < output_width {
-            let rows_this_chunk = chunk_rows.min(output_width - output_idx);
-            let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
-                BackendError::RuntimeShapeMismatch(
-                    "q8_0 block-reader chunk byte count overflow".to_string(),
-                )
-            })?;
-            let block_start = output_idx * blocks_per_row;
-            let chunk_offset = reader
-                .offset
-                .checked_add((block_start * Q8BlockReader::BLOCK_SIZE_BYTES) as u64)
-                .ok_or_else(|| {
-                    BackendError::RuntimeShapeMismatch(
-                        "q8_0 block-reader chunk offset overflow".to_string(),
-                    )
+    with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
+        for row in 0..rows {
+            let input_start = row * input_width;
+            let input_row = &input.data[input_start..input_start + input_width];
+            let quantized_input = quantize_q8_0_row(input_row);
+            let out_start = row * output_width;
+            let mut output_idx = 0usize;
+            while output_idx < output_width {
+                let rows_this_chunk = chunk_rows.min(output_width - output_idx);
+                let chunk_bytes_len =
+                    row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
+                        BackendError::RuntimeShapeMismatch(
+                            "q8_0 block-reader chunk byte count overflow".to_string(),
+                        )
+                    })?;
+                let block_start = output_idx * blocks_per_row;
+                let chunk_offset = reader
+                    .offset
+                    .checked_add((block_start * Q8BlockReader::BLOCK_SIZE_BYTES) as u64)
+                    .ok_or_else(|| {
+                        BackendError::RuntimeShapeMismatch(
+                            "q8_0 block-reader chunk offset overflow".to_string(),
+                        )
+                    })?;
+                let chunk = &mut row_chunk[..chunk_bytes_len];
+                file.read_exact_at(chunk, chunk_offset).map_err(|err| {
+                    BackendError::InvalidTensorData(format!(
+                        "q8_0 block-reader failed to read output rows {output_idx}..{}: {err}",
+                        output_idx + rows_this_chunk
+                    ))
                 })?;
-            let chunk = &mut row_chunk[..chunk_bytes_len];
-            file.read_exact_at(chunk, chunk_offset).map_err(|err| {
-                BackendError::InvalidTensorData(format!(
-                    "q8_0 block-reader failed to read output rows {output_idx}..{}: {err}",
-                    output_idx + rows_this_chunk
-                ))
-            })?;
-            for (local_idx, row_bytes) in chunk.chunks_exact(row_bytes_len).enumerate() {
-                output[out_start + output_idx + local_idx] =
-                    dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                for (local_idx, row_bytes) in chunk.chunks_exact(row_bytes_len).enumerate() {
+                    output[out_start + output_idx + local_idx] =
+                        dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                }
+                output_idx += rows_this_chunk;
             }
-            output_idx += rows_this_chunk;
         }
-    }
+        Ok(())
+    })?;
     CpuTensor::from_f32(name, vec![rows, output_width], output)
 }
 
@@ -4373,54 +4377,72 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
             "q8_0 borrowed block-reader chunk byte count overflow".to_string(),
         )
     })?;
-    let mut row_chunk = vec![0_u8; row_chunk_len];
     let quantized_input = quantize_q8_0_row(input_row);
     let output_width = output.len();
-    let mut output_start = 0usize;
-    while output_start < output_width {
-        let rows_this_chunk = chunk_rows.min(output.len() - output_start);
-        let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
-            BackendError::RuntimeShapeMismatch(
-                "q8_0 borrowed block-reader chunk byte count overflow".to_string(),
-            )
-        })?;
-        let chunk_offset = backing
-            .absolute_offset
-            .checked_add((output_start * row_bytes_len) as u64)
-            .ok_or_else(|| {
+    with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
+        let mut output_start = 0usize;
+        while output_start < output_width {
+            let rows_this_chunk = chunk_rows.min(output.len() - output_start);
+            let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
                 BackendError::RuntimeShapeMismatch(
-                    "q8_0 borrowed block-reader chunk offset overflow".to_string(),
+                    "q8_0 borrowed block-reader chunk byte count overflow".to_string(),
                 )
             })?;
-        let chunk = &mut row_chunk[..chunk_bytes_len];
-        file.as_ref()
-            .read_exact_at(chunk, chunk_offset)
-            .map_err(|err| {
-                BackendError::InvalidTensorData(format!(
-                "q8_0 borrowed block-reader failed to read output rows {output_start}..{}: {err}",
-                output_start + rows_this_chunk
-            ))
-            })?;
-        let output_end = output_start + rows_this_chunk;
-        let output_chunk = &mut output[output_start..output_end];
-        if should_parallelize_linear_output(output_width) {
-            output_chunk
-                .par_iter_mut()
-                .zip(chunk.par_chunks_exact(row_bytes_len))
-                .for_each(|(out_value, row_bytes)| {
+            let chunk_offset = backing
+                .absolute_offset
+                .checked_add((output_start * row_bytes_len) as u64)
+                .ok_or_else(|| {
+                    BackendError::RuntimeShapeMismatch(
+                        "q8_0 borrowed block-reader chunk offset overflow".to_string(),
+                    )
+                })?;
+            let chunk = &mut row_chunk[..chunk_bytes_len];
+            file.as_ref()
+                .read_exact_at(chunk, chunk_offset)
+                .map_err(|err| {
+                    BackendError::InvalidTensorData(format!(
+                    "q8_0 borrowed block-reader failed to read output rows {output_start}..{}: {err}",
+                    output_start + rows_this_chunk
+                ))
+                })?;
+            let output_end = output_start + rows_this_chunk;
+            let output_chunk = &mut output[output_start..output_end];
+            if should_parallelize_linear_output(output_width) {
+                output_chunk
+                    .par_iter_mut()
+                    .zip(chunk.par_chunks_exact(row_bytes_len))
+                    .for_each(|(out_value, row_bytes)| {
+                        *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                    });
+            } else {
+                for (out_value, row_bytes) in output_chunk
+                    .iter_mut()
+                    .zip(chunk.chunks_exact(row_bytes_len))
+                {
                     *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
-                });
-        } else {
-            for (out_value, row_bytes) in output_chunk
-                .iter_mut()
-                .zip(chunk.chunks_exact(row_bytes_len))
-            {
-                *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                }
             }
+            output_start += rows_this_chunk;
         }
-        output_start += rows_this_chunk;
-    }
-    Ok(())
+        Ok(())
+    })
+}
+
+thread_local! {
+    static Q8_0_FILE_READER_ROW_CHUNK: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+fn with_q8_0_file_reader_row_chunk<T>(
+    len: usize,
+    f: impl FnOnce(&mut [u8]) -> Result<T>,
+) -> Result<T> {
+    Q8_0_FILE_READER_ROW_CHUNK.with(|cell| {
+        let mut row_chunk = cell.borrow_mut();
+        if row_chunk.len() < len {
+            row_chunk.resize(len, 0);
+        }
+        f(&mut row_chunk[..len])
+    })
 }
 
 fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Result<usize> {

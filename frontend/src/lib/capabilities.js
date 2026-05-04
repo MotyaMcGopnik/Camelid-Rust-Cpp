@@ -84,7 +84,9 @@ const EXACT_LLAMA_PROMOTION_ROWS = [
 function detectLlamaBpeTarget(subject) {
   if (!/llama[\s._-]*3|meta[\s._-]*llama[\s._-]*3/.test(subject)) return null
   const sizeMatch = subject.match(/(?:^|[^a-z0-9])([138])\s*b(?:[^a-z0-9]|$)/i)
-  const versionKey = /llama[\s._-]*3(?:[._-]\s*2|2)/.test(subject) ? '3.2' : '3'
+  const minorVersionMatch = subject.match(/llama[\s._-]*3[._]\s*(\d+)\b/) || subject.match(/\bllama3(\d+)\b/)
+  const versionKey = minorVersionMatch ? (minorVersionMatch[1] === '2' ? '3.2' : null) : '3'
+  if (!versionKey) return null
   return {
     family: 'llama_bpe_decoder',
     sizeKey: sizeMatch ? `${sizeMatch[1]}B` : null,

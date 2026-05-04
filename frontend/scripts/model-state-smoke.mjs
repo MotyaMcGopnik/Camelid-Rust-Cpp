@@ -207,6 +207,8 @@ assert.equal(
 )
 const llama3EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama3EightBHint.target.id, 'llama3_8b_instruct_q8_0', 'Llama 3 8B must match its exact supported row')
+const llama3HyphenEightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta-Llama-3-8B-Instruct-Q8_0', quant: 'Q8_0' })
+assert.equal(llama3HyphenEightBHint.target.id, 'llama3_8b_instruct_q8_0', 'Llama-3-8B filenames should match the exact Llama 3 8B row')
 const llama3EightBQuantMissingHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct' })
 assert.equal(llama3EightBQuantMissingHint.kind, 'quant_missing', 'Llama 3 8B must not unlock from a size/instruct match without Q8_0 evidence')
 assert.equal(compatibilityHintLabel(llama3EightBQuantMissingHint), 'llama3_8b_instruct_q8_0: quant not verified')
@@ -215,6 +217,10 @@ assert.equal(
   true,
   'Llama 3 8B exact rows should unlock supported WebUI chat when runtime-green',
 )
+const llama31EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3.1 8B Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(llama31EightBHint, null, 'Llama 3.1 8B must not inherit the Llama 3 8B row')
+const llama33EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3.3 8B Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(llama33EightBHint, null, 'Llama 3.3 8B must not inherit the Llama 3 8B row')
 const llama32NoSizeHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama32NoSizeHint, null, 'Llama 3.2 names without exact 1B/3B size must not inherit a tracked row or family readiness hint')
 const llama32EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 8B Instruct Q8_0', quant: 'Q8_0' })
