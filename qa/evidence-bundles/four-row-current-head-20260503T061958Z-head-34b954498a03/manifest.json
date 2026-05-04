@@ -149,20 +149,20 @@
     {
       "row_id": "llama32_1b_instruct_q8_0",
       "display_name": "Llama 3.2 1B Instruct Q8_0",
-      "public_status": "evidence_backed_validation_lane",
+      "public_status": "supported_exact_row_smoke",
       "model_file": "Llama-3.2-1B-Instruct-Q8_0.gguf",
       "model_id": "llama32-1b-q8",
       "model_path_env": "${CAMELID_MODEL_DIR:?set CAMELID_MODEL_DIR to the GGUF directory}/Llama-3.2-1B-Instruct-Q8_0.gguf",
       "expected_model_sha256": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3",
       "template_family": "llama3_instruct",
       "compatibility_row": "llama32_1b_instruct_q8_0",
-      "expected_compatibility_status": "evidence_backed_validation_lane",
-      "expect_contract_supported": false,
-      "expect_webui_chat": "guarded",
+      "expected_compatibility_status": "supported_exact_row_smoke",
+      "expect_contract_supported": true,
+      "expect_webui_chat": "enabled",
       "row_root": "qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama32_1b_instruct_q8_0",
       "carry_forward_bundle": "qa/evidence-bundles/four-row-public-20260503T024327Z/llama32_1b_instruct_q8_0.bundle.json",
       "notes": [
-        "Broader prompt-pack evidence exists, but the row remains validation-only until normalized full-support evidence lands.",
+        "Broader prompt-pack evidence exists, but the public claim remains exact-row short-chat smoke.",
         "Promotion-grade longer-context, broader template coverage, and portability still need Ubuntu current-head reruns."
       ],
       "blockers": [
@@ -241,16 +241,16 @@
     {
       "row_id": "llama32_3b_instruct_q8_0",
       "display_name": "Llama 3.2 3B Instruct Q8_0",
-      "public_status": "evidence_backed_validation_lane",
+      "public_status": "supported_exact_row_smoke",
       "model_file": "Llama-3.2-3B-Instruct-Q8_0.gguf",
       "model_id": "llama32-3b-q8",
       "model_path_env": "${CAMELID_MODEL_DIR:?set CAMELID_MODEL_DIR to the GGUF directory}/Llama-3.2-3B-Instruct-Q8_0.gguf",
       "expected_model_sha256": "b5607b5090a8280063fff2d706bb3408ca6542341b06aab39c3eca0a28575921",
       "template_family": "llama3_instruct",
       "compatibility_row": "llama32_3b_instruct_q8_0",
-      "expected_compatibility_status": "evidence_backed_validation_lane",
-      "expect_contract_supported": false,
-      "expect_webui_chat": "guarded",
+      "expected_compatibility_status": "supported_exact_row_smoke",
+      "expect_contract_supported": true,
+      "expect_webui_chat": "enabled",
       "row_root": "qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama32_3b_instruct_q8_0",
       "carry_forward_bundle": "qa/evidence-bundles/four-row-public-20260503T024327Z/llama32_3b_instruct_q8_0.bundle.json",
       "notes": [
@@ -258,7 +258,7 @@
         "Longer context, broader template behavior, and stronger portability/perf evidence remain the release blocker."
       ],
       "blockers": [
-        "Current public posture is validation-only, not full support.",
+        "Current public support is still exact-row smoke only.",
         "Do not broaden beyond the exact 3B Instruct Q8_0 row without fresh Ubuntu artifacts and synchronized docs/API/frontend changes."
       ],
       "tracks": [
@@ -333,24 +333,24 @@
     {
       "row_id": "llama3_8b_instruct_q8_0",
       "display_name": "Llama 3 8B Instruct Q8_0",
-      "public_status": "evidence_backed_validation_lane",
+      "public_status": "supported_exact_row_smoke",
       "model_file": "Meta-Llama-3-8B-Instruct-Q8_0.gguf",
       "model_id": "llama3-8b-q8",
       "model_path_env": "${CAMELID_MODEL_DIR:?set CAMELID_MODEL_DIR to the GGUF directory}/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
       "expected_model_sha256": "583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958",
       "template_family": "llama3_instruct",
       "compatibility_row": "llama3_8b_instruct_q8_0",
-      "expected_compatibility_status": "evidence_backed_validation_lane",
-      "expect_contract_supported": false,
-      "expect_webui_chat": "guarded",
+      "expected_compatibility_status": "supported_exact_row_smoke",
+      "expect_contract_supported": true,
+      "expect_webui_chat": "enabled",
       "row_root": "qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama3_8b_instruct_q8_0",
       "carry_forward_bundle": "qa/evidence-bundles/four-row-public-20260503T024327Z/llama3_8b_instruct_q8_0.bundle.json",
       "notes": [
-        "Short validation evidence exists for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.",
-        "The first bounded 512-context pack timed out on current head, so longer-context and performance/RSS evidence remain the blocker."
+        "Short smoke is supported for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.",
+        "The first bounded 512-context pack timed out at /v1/chat/completions after 300000 ms on current head and remains the blocker."
       ],
       "blockers": [
-        "512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.",
+        "512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.",
         "Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families."
       ],
       "tracks": [

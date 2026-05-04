@@ -1,6 +1,6 @@
 # Llama 3.2 3B Instruct Q8_0
 
-Public status: evidence_backed_validation_lane
+Public status: supported_exact_row_smoke
 Expected model SHA256: `b5607b5090a8280063fff2d706bb3408ca6542341b06aab39c3eca0a28575921`
 Carry-forward bundle: `qa/evidence-bundles/four-row-public-20260503T024327Z/llama32_3b_instruct_q8_0.bundle.json`
 
@@ -13,5 +13,5 @@ Tracks:
 - perf-rss-portability: ready_to_run — Capture host facts, versions, model SHA, smoke timing, and backend RSS snapshots in one portable note.
 
 Blockers:
-- Current public posture is validation-only, not full support.
+- Current public support is still exact-row smoke only.
 - Do not broaden beyond the exact 3B Instruct Q8_0 row without fresh Ubuntu artifacts and synchronized docs/API/frontend changes.

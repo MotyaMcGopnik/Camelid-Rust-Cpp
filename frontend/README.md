@@ -111,7 +111,7 @@ npm run smoke -- --model '$CAMELID_MODEL_DIR/Llama-3.2-1B-Instruct-Q8_0.gguf' --
 
 npm run smoke -- --model '$CAMELID_MODEL_DIR/Llama-3.2-3B-Instruct-Q8_0.gguf' --model-id llama-3.2-3b-instruct-q8 --require-generation --expect-compatibility-row llama32_3b_instruct_q8_0 --expect-compatibility-status supported_exact_row_smoke --expect-contract-supported true --expect-webui-chat enabled
 
-npm run smoke -- --model '$CAMELID_MODEL_DIR/Meta-Llama-3-8B-Instruct-Q8_0.gguf' --model-id llama-3-8b-instruct-q8 --require-generation --expect-compatibility-row llama3_8b_instruct_gguf --expect-compatibility-status supported_exact_row_smoke --expect-contract-supported true --expect-webui-chat enabled
+npm run smoke -- --model '$CAMELID_MODEL_DIR/Meta-Llama-3-8B-Instruct-Q8_0.gguf' --model-id llama-3-8b-instruct-q8 --require-generation --expect-compatibility-row llama3_8b_instruct_q8_0 --expect-compatibility-status supported_exact_row_smoke --expect-contract-supported true --expect-webui-chat enabled
 ```
 
 These commands must still fail closed if the loaded model is the wrong row, lacks Q8_0 metadata, is not `generation_ready`, or is outside the exact supported `/api/capabilities` row. That is intentional: the UI supports only the exact 1B/3B/8B smoke rows without making a broad Llama-family claim.

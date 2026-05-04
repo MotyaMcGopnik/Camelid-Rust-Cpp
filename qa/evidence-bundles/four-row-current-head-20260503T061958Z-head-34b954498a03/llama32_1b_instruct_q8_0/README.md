@@ -1,6 +1,6 @@
 # Llama 3.2 1B Instruct Q8_0
 
-Public status: evidence_backed_validation_lane
+Public status: supported_exact_row_smoke
 Expected model SHA256: `432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3`
 Carry-forward bundle: `qa/evidence-bundles/four-row-public-20260503T024327Z/llama32_1b_instruct_q8_0.bundle.json`
 

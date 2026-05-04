@@ -1,24 +1,24 @@
 {
   "row_id": "llama3_8b_instruct_q8_0",
   "display_name": "Llama 3 8B Instruct Q8_0",
-  "public_status": "evidence_backed_validation_lane",
+  "public_status": "supported_exact_row_smoke",
   "model_file": "Meta-Llama-3-8B-Instruct-Q8_0.gguf",
   "model_id": "llama3-8b-q8",
   "model_path_env": "${CAMELID_MODEL_DIR:?set CAMELID_MODEL_DIR to the GGUF directory}/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
   "expected_model_sha256": "583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958",
   "template_family": "llama3_instruct",
   "compatibility_row": "llama3_8b_instruct_q8_0",
-  "expected_compatibility_status": "evidence_backed_validation_lane",
-  "expect_contract_supported": false,
-  "expect_webui_chat": "guarded",
+  "expected_compatibility_status": "supported_exact_row_smoke",
+  "expect_contract_supported": true,
+  "expect_webui_chat": "enabled",
   "row_root": "qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama3_8b_instruct_q8_0",
   "carry_forward_bundle": "qa/evidence-bundles/four-row-public-20260503T024327Z/llama3_8b_instruct_q8_0.bundle.json",
   "notes": [
-    "Short validation evidence exists for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.",
-    "The first bounded 512-context pack timed out on current head, so longer-context and performance/RSS evidence remain the blocker."
+    "Short smoke is supported for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.",
+    "The first bounded 512-context pack timed out at /v1/chat/completions after 300000 ms on current head and remains the blocker."
   ],
   "blockers": [
-    "512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.",
+    "512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.",
     "Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families."
   ],
   "tracks": [

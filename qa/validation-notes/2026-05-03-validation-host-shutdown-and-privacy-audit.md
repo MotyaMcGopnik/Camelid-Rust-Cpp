@@ -37,11 +37,11 @@ Initial audit summary:
 - `276` findings before scrub: 110 + 128 + 38 across those three ignored raw roots
 - the current rerun output path is `target/evidence-bundle-privacy-audit-20260503.json`, and it now reports `0` findings after the local scrub pass
 
-Representative leaked strings included:
+Representative leaked strings included validation-home absolute paths such as:
 
-- `/home/ubuntu/work/Camelid/target/private-four-llama-e2e-20260502T212751Z-head-c5e6d7e/...`
-- `/home/ubuntu/.nvm/versions/node/v22.22.2/bin/node`
-- `/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf`
+- `<validation-home>/work/Camelid/target/private-four-llama-e2e-20260502T212751Z-head-c5e6d7e/...`
+- `<validation-home>/.nvm/versions/node/v22.22.2/bin/node`
+- `<validation-home>/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf`
 
 The committed public-safe citation roots remain:
 
