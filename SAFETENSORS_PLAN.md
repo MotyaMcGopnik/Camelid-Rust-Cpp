@@ -168,14 +168,28 @@ Fresh inspection on `main` at `96719418a03b` after the latest public evidence/do
 
 The next SafeTensors implementation slice should therefore remain local, test-first, and non-generating: introduce `ModelSourceManifest` / `ModelSourceReadiness`, detect Hugging Face-style directories, parse `config.json` plus SafeTensors shard headers into descriptors, and keep `/api/models/load` behavior for existing GGUF files unchanged. `generation_ready` must stay false until tokenizer parity, tensor orientation, dtype decode, and a tiny one-token dense fixture all pass.
 
+## 2026-05-05 09:20 PT Current-Head Check
+
+Fresh inspection on `main` at `81a45c42aa6e` after the 1024/2048 context-capability guardrail work keeps the SafeTensors lane in the same architecture/readiness box. The new `/api/capabilities` tests now explicitly protect per-model context-pack boundaries: exact GGUF rows can advertise different 1024/2048 evidence states while unsupported or not-yet-promoted rows stay blocked or ready-to-run-only. That is useful for SafeTensors because it proves Camelid already has a public contract shape for honest readiness reporting without pretending every parsed source is generation-ready.
+
+Architectural implications for the first SafeTensors slice:
+
+- Treat `ModelSourceReadiness` as the same kind of evidence contract as the current capability rows: source detection, metadata, tokenizer assets, weights, and generation must be separate fields, not one broad support flag.
+- Keep the current `LoadedModel` GGUF path unchanged. A Hugging Face SafeTensors directory should be able to produce a manifest/readiness summary while `/v1/completions` and chat paths continue to reject it until the runtime gates pass.
+- Reuse the capability-boundary testing style for SafeTensors fixtures: one complete local-directory fixture, one missing-tokenizer fixture, one missing/invalid shard-index fixture, and one unsupported-config fixture. Tests should assert the exact blocker strings so future docs/API changes cannot silently promote support.
+- Keep context-window claims out of the SafeTensors manifest until HF `config.json` parsing, RoPE fields, tokenizer/chat-template parity, and a bounded prompt-pack run all agree. `max_position_embeddings` alone is metadata, not validated context support.
+- Preserve the no-network default. The local Ubuntu validation tree has active unrelated dirty work, so SafeTensors architecture work should avoid remote mutation and remain local/docs/test-first unless a dedicated implementation branch is opened.
+
+Recommended next code seam is now slightly sharper: add `src/source.rs` (or `src/model_source.rs`) with owned manifest/readiness structs and descriptor-only tests, then have the existing GGUF file path populate that struct internally before any Hugging Face directory path is exposed through API responses.
+
 ## Recommended Rust Crates / APIs
 
 - `safetensors` (`0.7.0` current crates.io default as of 2026-04-28): use `safetensors::SafeTensors::deserialize` / tensor views for safe header parsing and per-tensor byte slices. Prefer read-only mmap-backed byte storage for large files; copy/decode into Camelid CPU tensors only at the runtime boundary.
-- `memmap2`: mmap local `.safetensors` shards and avoid eagerly reading multi-GB weights into intermediate buffers.
+- `memmap2` (`0.9.10` current crates.io default as of 2026-05-05): mmap local `.safetensors` shards and avoid eagerly reading multi-GB weights into intermediate buffers.
 - `serde` / `serde_json`: parse Hugging Face sidecars (`config.json`, `tokenizer_config.json`, `generation_config.json`, `special_tokens_map.json`) into Camelid-owned structs.
 - `tokenizers` (`0.23.1` current crates.io default as of 2026-04-28): use behind a feature flag or adapter for `tokenizer.json` parity instead of stretching the current GGUF-only SPM parser to cover BPE/Unigram/WordPiece variants.
 - `hf-hub` (`1.0.0-rc.0` is the current crates.io default as of 2026-05-05): optional future download/cache layer. Keep it out of the core loader initially; gated model access and license acceptance are product/approval-sensitive, and an eventual adoption should pin deliberately rather than entering the first local-directory path by accident.
-- `half`: decode F16/BF16 tensors when SafeTensors dtype views are materialized into Camelid `f32` CPU tensors.
+- `half` (`2.7.1` current crates.io default as of 2026-05-05): decode F16/BF16 tensors when SafeTensors dtype views are materialized into Camelid `f32` CPU tensors.
 
 Avoid pulling in a full inference framework just to read SafeTensors. Camelid should own the config mapping, tensor binding, and runtime semantics.
 
