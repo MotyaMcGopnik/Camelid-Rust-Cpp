@@ -5,12 +5,16 @@ use std::{
     io::{Read, Seek, SeekFrom},
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, OnceLock,
+    },
 };
 
 const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
 
 use rayon::prelude::*;
+use serde::Serialize;
 
 use crate::{
     gguf::{GgufFile, GgufTensorDescriptor, GgufTensorType},
@@ -111,6 +115,10 @@ impl Q8_0FileBacking {
                 .clone());
         }
         Ok(file)
+    }
+
+    pub fn file_handle_cached(&self) -> bool {
+        self.file_handle.get().is_some()
     }
 }
 
@@ -687,6 +695,7 @@ impl CpuTensor {
                     path: backing.path.clone(),
                     source,
                 })?;
+            record_q8_0_file_read(row.len());
             for block in row.chunks_exact(Q8_0_BLOCK_BYTES) {
                 let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
                 out.extend(block[2..].iter().map(|q| scale * f32::from(*q as i8)));
@@ -760,6 +769,36 @@ fn dot_product(lhs: &[f32], rhs: &[f32]) -> f32 {
     sum
 }
 const DEFAULT_PARALLEL_LINEAR_MIN_OUTPUTS: usize = 1024;
+
+static Q8_0_FILE_READ_CALLS: AtomicU64 = AtomicU64::new(0);
+static Q8_0_FILE_READ_BYTES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Default, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct Q8_0FileReadStats {
+    pub read_calls: u64,
+    pub read_bytes: u64,
+}
+
+impl Q8_0FileReadStats {
+    pub fn saturating_delta_since(self, start: Self) -> Self {
+        Self {
+            read_calls: self.read_calls.saturating_sub(start.read_calls),
+            read_bytes: self.read_bytes.saturating_sub(start.read_bytes),
+        }
+    }
+}
+
+pub(crate) fn record_q8_0_file_read(bytes: usize) {
+    Q8_0_FILE_READ_CALLS.fetch_add(1, Ordering::Relaxed);
+    Q8_0_FILE_READ_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+}
+
+pub fn q8_0_file_read_stats() -> Q8_0FileReadStats {
+    Q8_0FileReadStats {
+        read_calls: Q8_0_FILE_READ_CALLS.load(Ordering::Relaxed),
+        read_bytes: Q8_0_FILE_READ_BYTES.load(Ordering::Relaxed),
+    }
+}
 
 pub(crate) fn should_parallelize_linear_output(output_width: usize) -> bool {
     parallel_linear_enabled()

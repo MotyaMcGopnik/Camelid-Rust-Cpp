@@ -29,7 +29,8 @@ use crate::{
         diagnostic_rope_position_mode, diagnostic_square_linear_layout,
         diagnostic_zero_delta_selector, output_projection_diagnostics, DeltaZeroTarget,
         LlamaForwardDiagnostics, LlamaForwardTimings, LlamaGenerationStep, LlamaInferenceSession,
-        LlamaLoadedWeights, LlamaOutputProjectionDiagnostic, LlamaSampler, SamplingConfig,
+        LlamaLayerMemoryTimings, LlamaLoadedWeights, LlamaOutputProjectionDiagnostic, LlamaSampler,
+        SamplingConfig,
     },
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
     tensor::{CpuTensor, Q8_0Block, TensorStore},
@@ -444,6 +445,8 @@ pub struct GenerationTimings {
     pub generate: u128,
     pub generation: GenerationPhaseTimings,
     pub layers: Vec<GenerationLayerTimings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::inference::LlamaForwardMemoryTimings>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -475,6 +478,8 @@ pub struct GenerationLayerTimings {
     pub ffn_activation: f64,
     pub ffn_down: f64,
     pub ffn_residual: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<LlamaLayerMemoryTimings>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2504,8 +2509,10 @@ fn generate_token_ids(
             ffn_activation: micros_to_ms(layer.ffn_activation),
             ffn_down: micros_to_ms(layer.ffn_down),
             ffn_residual: micros_to_ms(layer.ffn_residual),
+            memory: layer.memory,
         })
         .collect();
+    prepared.timings.memory = forward_timings.memory;
 
     Ok(GeneratedTokens {
         prompt_token_ids: prepared.token_ids,

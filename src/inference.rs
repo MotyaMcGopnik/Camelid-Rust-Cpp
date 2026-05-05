@@ -17,7 +17,8 @@ use crate::{
     gguf::GgufTensorType,
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
     tensor::{
-        should_parallelize_linear_output, CpuTensor, Q8_0Block, Q8_0FileBacking, TensorStore,
+        q8_0_file_read_stats, record_q8_0_file_read, should_parallelize_linear_output, CpuTensor,
+        Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, TensorStore,
     },
     BackendError, Result,
 };
@@ -99,6 +100,14 @@ impl LlamaKvCache {
         self.allocated_sequence_length = required_sequence_length;
         Ok(())
     }
+
+    pub fn allocated_elements(&self) -> usize {
+        self.keys.len() + self.values.len()
+    }
+
+    pub fn allocated_bytes(&self) -> u64 {
+        (self.allocated_elements() as u64) * (std::mem::size_of::<f32>() as u64)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +174,7 @@ impl Q8BlockReader {
             .ok_or_else(|| IoError::new(ErrorKind::InvalidInput, "block offset overflow"))?;
         let mut block_data = [0u8; Self::BLOCK_SIZE_BYTES];
         file.read_exact_at(&mut block_data, block_offset)?;
+        record_q8_0_file_read(block_data.len());
 
         let scale_bits = u16::from_le_bytes(block_data[0..2].try_into().expect("2-byte scale"));
         let scale = f16_bits_to_f32(scale_bits);
@@ -1086,6 +1096,7 @@ pub struct LlamaForwardTimings {
     pub final_norm: u128,
     pub logits: u128,
     pub layers: Vec<LlamaLayerTimings>,
+    pub memory: Option<LlamaForwardMemoryTimings>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1107,6 +1118,96 @@ pub struct LlamaLayerTimings {
     pub ffn_activation: u128,
     pub ffn_down: u128,
     pub ffn_residual: u128,
+    pub memory: Option<LlamaLayerMemoryTimings>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LlamaForwardMemoryTimings {
+    pub forward_passes: usize,
+    pub materialization: LlamaWeightMaterializationStats,
+    pub q8_file_reads: Q8_0FileReadStats,
+    #[serde(skip)]
+    q8_file_read_start: Q8_0FileReadStats,
+    pub start: LlamaMemorySample,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_embedding: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_layers: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_final_norm: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_logits: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_rss_kib: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_phase: Option<String>,
+    pub layers: Vec<LlamaLayerMemoryTimings>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LlamaLayerMemoryTimings {
+    pub layer_index: usize,
+    pub forward_passes: usize,
+    pub start: LlamaMemorySample,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_norm: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_q: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_k: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_rope: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_v: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_kv_cache_write: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_context: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_output: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_attention_residual: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_ffn_norm: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_ffn_activation: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_ffn_down: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_ffn_residual: Option<LlamaMemorySample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_rss_kib: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_phase: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LlamaMemorySample {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rss_kib: Option<u64>,
+    pub kv_cache_position: usize,
+    pub kv_cache_allocated_sequence_length: usize,
+    pub kv_cache_allocated_elements: usize,
+    pub kv_cache_allocated_bytes: u64,
+}
+
+#[derive(Debug, Default, Clone, Serialize, PartialEq, Eq)]
+pub struct LlamaWeightMaterializationStats {
+    pub tensor_count: usize,
+    pub dense_f32_tensor_count: usize,
+    pub dense_f32_bytes: u64,
+    pub q8_0_source_tensor_count: usize,
+    pub q8_0_f32_materialized_tensor_count: usize,
+    pub q8_0_f32_materialized_bytes: u64,
+    pub q8_0_file_backed_tensor_count: usize,
+    pub q8_0_file_handle_cached_count: usize,
+    pub q8_0_retained_block_tensor_count: usize,
+    pub q8_0_retained_block_bytes: u64,
+    pub has_q8_0_f32_materialization: bool,
+    pub has_lazy_q8_0_file_backing: bool,
+    pub has_retained_q8_0_blocks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1221,12 +1322,22 @@ impl LlamaInferenceSession {
         }
 
         let total_started = Instant::now();
+        let mut memory = structured_forward_memory_enabled().then(|| {
+            LlamaForwardMemoryTimings::new(
+                capture_memory_sample(&self.kv_cache),
+                collect_weight_materialization_stats(&self.weights),
+                q8_0_file_read_stats(),
+            )
+        });
         trace_forward_memory("forward_start");
         let embedding_started = Instant::now();
         let mut hidden = self
             .weights
             .token_embedding
             .embedding_lookup(&[token_id], "token_embedding")?;
+        if let Some(memory) = &mut memory {
+            memory.record_after_embedding(capture_memory_sample(&self.kv_cache));
+        }
         trace_forward_memory("embedding_done");
         let embedding_stats = collect_diagnostics
             .then(|| LlamaTensorStats::from_tensor(&hidden))
@@ -1255,6 +1366,9 @@ impl LlamaInferenceSession {
             )?;
             hidden = timed.output;
             trace_forward_memory(&format!("layer_{layer_idx}_done"));
+            if let (Some(memory), Some(layer_memory)) = (&mut memory, &timed.timings.memory) {
+                memory.record_layer(layer_memory.clone());
+            }
             timings.layers.push(timed.timings);
             if let (Some(layer_diagnostics), Some(diagnostics)) =
                 (&mut layer_diagnostics, timed.diagnostics)
@@ -1263,6 +1377,9 @@ impl LlamaInferenceSession {
             }
         }
         timings.layers_total = layers_started.elapsed().as_micros();
+        if let Some(memory) = &mut memory {
+            memory.record_after_layers(capture_memory_sample(&self.kv_cache));
+        }
         let final_hidden_stats = collect_diagnostics
             .then(|| LlamaTensorStats::from_tensor(&hidden))
             .transpose()?;
@@ -1286,6 +1403,9 @@ impl LlamaInferenceSession {
                     .then(|| LlamaTensorStats::from_tensor(&norm))
                     .transpose()?;
                 timings.final_norm = final_norm_started.elapsed().as_micros();
+                if let Some(memory) = &mut memory {
+                    memory.record_after_final_norm(capture_memory_sample(&self.kv_cache));
+                }
                 let logits_started = Instant::now();
                 let logits = output_projection_runtime(
                     &norm,
@@ -1298,6 +1418,9 @@ impl LlamaInferenceSession {
                     .then(|| LlamaTensorStats::from_tensor(&logits))
                     .transpose()?;
                 timings.logits = logits_started.elapsed().as_micros();
+                if let Some(memory) = &mut memory {
+                    memory.record_after_logits(capture_memory_sample(&self.kv_cache));
+                }
                 (
                     norm,
                     logits,
@@ -1317,6 +1440,10 @@ impl LlamaInferenceSession {
             };
         self.kv_cache.position += 1;
         timings.total = total_started.elapsed().as_micros();
+        if let Some(memory) = &mut memory {
+            memory.record_end(capture_memory_sample(&self.kv_cache));
+        }
+        timings.memory = memory;
         let diagnostics = if collect_diagnostics {
             Some(LlamaForwardDiagnostics {
                 embedding: embedding_stats.expect("embedding diagnostics collected"),
@@ -1419,9 +1546,17 @@ impl LlamaInferenceSession {
 }
 
 fn forward_memory_trace_enabled() -> bool {
+    env_flag_enabled("BACKENDINFERENCE_FORWARD_MEMORY_TRACE")
+}
+
+fn structured_forward_memory_enabled() -> bool {
+    env_flag_enabled("BACKENDINFERENCE_FORWARD_RSS_TIMINGS") || forward_memory_trace_enabled()
+}
+
+fn env_flag_enabled(key: &str) -> bool {
     matches!(
-        env::var("BACKENDINFERENCE_FORWARD_MEMORY_TRACE").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        env::var(key).as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
     )
 }
 
@@ -1464,7 +1599,97 @@ fn trace_forward_layer_memory(layer_idx: usize, phase: &str) {
     }
 }
 
+fn capture_memory_sample(kv_cache: &LlamaKvCache) -> LlamaMemorySample {
+    LlamaMemorySample {
+        rss_kib: current_process_rss_kib(),
+        kv_cache_position: kv_cache.position,
+        kv_cache_allocated_sequence_length: kv_cache.allocated_sequence_length,
+        kv_cache_allocated_elements: kv_cache.allocated_elements(),
+        kv_cache_allocated_bytes: kv_cache.allocated_bytes(),
+    }
+}
+
+fn collect_weight_materialization_stats(
+    weights: &LlamaLoadedWeights,
+) -> LlamaWeightMaterializationStats {
+    let mut stats = LlamaWeightMaterializationStats::default();
+    record_tensor_materialization(&mut stats, &weights.token_embedding);
+    record_tensor_materialization(&mut stats, &weights.output_norm);
+    if let Some(output) = &weights.output {
+        record_tensor_materialization(&mut stats, output);
+    }
+    if let Some(rope_freqs) = &weights.rope_freqs {
+        record_tensor_materialization(&mut stats, rope_freqs);
+    }
+    for layer in &weights.layers {
+        record_tensor_materialization(&mut stats, &layer.attention_norm);
+        record_tensor_materialization(&mut stats, &layer.attention_q);
+        record_tensor_materialization(&mut stats, &layer.attention_k);
+        record_tensor_materialization(&mut stats, &layer.attention_v);
+        record_tensor_materialization(&mut stats, &layer.attention_output);
+        record_tensor_materialization(&mut stats, &layer.ffn_norm);
+        record_tensor_materialization(&mut stats, &layer.ffn_gate);
+        record_tensor_materialization(&mut stats, &layer.ffn_up);
+        record_tensor_materialization(&mut stats, &layer.ffn_down);
+    }
+    stats.has_q8_0_f32_materialization = stats.q8_0_f32_materialized_tensor_count > 0;
+    stats.has_lazy_q8_0_file_backing = stats.q8_0_file_backed_tensor_count > 0;
+    stats.has_retained_q8_0_blocks = stats.q8_0_retained_block_tensor_count > 0;
+    stats
+}
+
+fn record_tensor_materialization(stats: &mut LlamaWeightMaterializationStats, tensor: &CpuTensor) {
+    stats.tensor_count += 1;
+    let f32_bytes = (tensor.data.len() as u64) * (std::mem::size_of::<f32>() as u64);
+    if !tensor.data.is_empty() {
+        stats.dense_f32_tensor_count += 1;
+        stats.dense_f32_bytes = stats.dense_f32_bytes.saturating_add(f32_bytes);
+    }
+    if tensor.source_type == Some(GgufTensorType::Q8_0) {
+        stats.q8_0_source_tensor_count += 1;
+        if !tensor.data.is_empty() {
+            stats.q8_0_f32_materialized_tensor_count += 1;
+            stats.q8_0_f32_materialized_bytes =
+                stats.q8_0_f32_materialized_bytes.saturating_add(f32_bytes);
+        }
+        if let Some(backing) = &tensor.q8_0_file_backing {
+            stats.q8_0_file_backed_tensor_count += 1;
+            if backing.file_handle_cached() {
+                stats.q8_0_file_handle_cached_count += 1;
+            }
+        }
+        if let Some(blocks) = &tensor.q8_0_blocks {
+            stats.q8_0_retained_block_tensor_count += 1;
+            stats.q8_0_retained_block_bytes = stats
+                .q8_0_retained_block_bytes
+                .saturating_add((blocks.len() as u64) * (std::mem::size_of::<Q8_0Block>() as u64));
+        }
+    }
+}
+
 fn current_process_rss_kib() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    if let Some(rss) = linux_current_process_rss_kib() {
+        return Some(rss);
+    }
+
+    current_process_rss_kib_via_ps()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_current_process_rss_kib() -> Option<u64> {
+    parse_proc_status_rss_kib(&std::fs::read_to_string("/proc/self/status").ok()?)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_status_rss_kib(text: &str) -> Option<u64> {
+    let line = text.lines().find(|line| line.starts_with("VmRSS:"))?;
+    let mut fields = line.split_whitespace();
+    let _label = fields.next()?;
+    fields.next()?.parse::<u64>().ok()
+}
+
+fn current_process_rss_kib_via_ps() -> Option<u64> {
     let output = Command::new("ps")
         .args(["-o", "rss=", "-p", &std::process::id().to_string()])
         .output()
@@ -1476,6 +1701,277 @@ fn current_process_rss_kib() -> Option<u64> {
         .trim()
         .parse::<u64>()
         .ok()
+}
+
+impl LlamaForwardMemoryTimings {
+    fn new(
+        start: LlamaMemorySample,
+        materialization: LlamaWeightMaterializationStats,
+        q8_file_read_start: Q8_0FileReadStats,
+    ) -> Self {
+        let mut memory = Self {
+            forward_passes: 1,
+            materialization,
+            q8_file_reads: Q8_0FileReadStats::default(),
+            q8_file_read_start,
+            peak_rss_kib: None,
+            peak_phase: None,
+            start,
+            after_embedding: None,
+            after_layers: None,
+            after_final_norm: None,
+            after_logits: None,
+            end: None,
+            layers: Vec::new(),
+        };
+        memory.consider_peak_sample("forward_start", &memory.start.clone());
+        memory
+    }
+
+    fn record_after_embedding(&mut self, sample: LlamaMemorySample) {
+        self.record("embedding_done", sample, |this, sample| {
+            this.after_embedding = Some(sample)
+        });
+    }
+
+    fn record_after_layers(&mut self, sample: LlamaMemorySample) {
+        self.record("layers_done", sample, |this, sample| {
+            this.after_layers = Some(sample)
+        });
+    }
+
+    fn record_after_final_norm(&mut self, sample: LlamaMemorySample) {
+        self.record("final_norm_done", sample, |this, sample| {
+            this.after_final_norm = Some(sample)
+        });
+    }
+
+    fn record_after_logits(&mut self, sample: LlamaMemorySample) {
+        self.record("logits_done", sample, |this, sample| {
+            this.after_logits = Some(sample)
+        });
+    }
+
+    fn record_end(&mut self, sample: LlamaMemorySample) {
+        self.q8_file_reads = q8_0_file_read_stats().saturating_delta_since(self.q8_file_read_start);
+        self.record("forward_end", sample, |this, sample| {
+            this.end = Some(sample)
+        });
+    }
+
+    fn record_layer(&mut self, layer: LlamaLayerMemoryTimings) {
+        let layer_index = layer.layer_index;
+        if let Some(rss) = layer.peak_rss_kib {
+            let phase = layer.peak_phase.as_deref().unwrap_or("layer_peak");
+            self.consider_peak_rss(&format!("layers.{layer_index}.{phase}"), rss);
+        }
+        if self.layers.len() <= layer_index {
+            self.layers.resize_with(layer_index + 1, || layer.clone());
+        }
+        self.layers[layer_index] = layer;
+    }
+
+    fn record(
+        &mut self,
+        phase: &str,
+        sample: LlamaMemorySample,
+        set: impl FnOnce(&mut Self, LlamaMemorySample),
+    ) {
+        self.consider_peak_sample(phase, &sample);
+        set(self, sample);
+    }
+
+    fn consider_peak_sample(&mut self, phase: &str, sample: &LlamaMemorySample) {
+        if let Some(rss) = sample.rss_kib {
+            self.consider_peak_rss(phase, rss);
+        }
+    }
+
+    fn consider_peak_rss(&mut self, phase: &str, rss: u64) {
+        if self.peak_rss_kib.is_none_or(|peak| rss > peak) {
+            self.peak_rss_kib = Some(rss);
+            self.peak_phase = Some(phase.to_string());
+        }
+    }
+
+    fn merge_assign(&mut self, other: &Self) {
+        self.forward_passes += other.forward_passes;
+        self.materialization = other.materialization.clone();
+        self.q8_file_reads.read_calls = self
+            .q8_file_reads
+            .read_calls
+            .saturating_add(other.q8_file_reads.read_calls);
+        self.q8_file_reads.read_bytes = self
+            .q8_file_reads
+            .read_bytes
+            .saturating_add(other.q8_file_reads.read_bytes);
+        self.after_embedding = other.after_embedding.clone();
+        self.after_layers = other.after_layers.clone();
+        self.after_final_norm = other.after_final_norm.clone();
+        self.after_logits = other.after_logits.clone();
+        self.end = other.end.clone();
+        if let (Some(phase), Some(rss)) = (&other.peak_phase, other.peak_rss_kib) {
+            self.consider_peak_rss(phase, rss);
+        }
+        if self.layers.len() < other.layers.len() {
+            self.layers
+                .resize_with(other.layers.len(), || other.layers[0].clone());
+        }
+        for (idx, source) in other.layers.iter().enumerate() {
+            if self.layers[idx].layer_index == source.layer_index {
+                self.layers[idx].merge_assign(source);
+            } else {
+                self.layers[idx] = source.clone();
+            }
+        }
+    }
+}
+
+impl LlamaLayerMemoryTimings {
+    fn new(layer_index: usize, start: LlamaMemorySample) -> Self {
+        let mut memory = Self {
+            layer_index,
+            forward_passes: 1,
+            peak_rss_kib: None,
+            peak_phase: None,
+            start,
+            after_attention_norm: None,
+            after_attention_q: None,
+            after_attention_k: None,
+            after_attention_rope: None,
+            after_attention_v: None,
+            after_kv_cache_write: None,
+            after_attention_context: None,
+            after_attention_output: None,
+            after_attention_residual: None,
+            after_ffn_norm: None,
+            after_ffn_activation: None,
+            after_ffn_down: None,
+            after_ffn_residual: None,
+        };
+        memory.consider_peak("layer_start", &memory.start.clone());
+        memory
+    }
+
+    fn record_after_attention_norm(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_norm_done", sample, |this, sample| {
+            this.after_attention_norm = Some(sample)
+        });
+    }
+
+    fn record_after_attention_q(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_q_done", sample, |this, sample| {
+            this.after_attention_q = Some(sample)
+        });
+    }
+
+    fn record_after_attention_k(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_k_done", sample, |this, sample| {
+            this.after_attention_k = Some(sample)
+        });
+    }
+
+    fn record_after_attention_rope(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_rope_done", sample, |this, sample| {
+            this.after_attention_rope = Some(sample)
+        });
+    }
+
+    fn record_after_attention_v(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_v_done", sample, |this, sample| {
+            this.after_attention_v = Some(sample)
+        });
+    }
+
+    fn record_after_kv_cache_write(&mut self, sample: LlamaMemorySample) {
+        self.record("kv_cache_write_done", sample, |this, sample| {
+            this.after_kv_cache_write = Some(sample)
+        });
+    }
+
+    fn record_after_attention_context(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_context_done", sample, |this, sample| {
+            this.after_attention_context = Some(sample)
+        });
+    }
+
+    fn record_after_attention_output(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_output_done", sample, |this, sample| {
+            this.after_attention_output = Some(sample)
+        });
+    }
+
+    fn record_after_attention_residual(&mut self, sample: LlamaMemorySample) {
+        self.record("attention_residual_done", sample, |this, sample| {
+            this.after_attention_residual = Some(sample)
+        });
+    }
+
+    fn record_after_ffn_norm(&mut self, sample: LlamaMemorySample) {
+        self.record("ffn_norm_done", sample, |this, sample| {
+            this.after_ffn_norm = Some(sample)
+        });
+    }
+
+    fn record_after_ffn_activation(&mut self, sample: LlamaMemorySample) {
+        self.record("ffn_activation_done", sample, |this, sample| {
+            this.after_ffn_activation = Some(sample)
+        });
+    }
+
+    fn record_after_ffn_down(&mut self, sample: LlamaMemorySample) {
+        self.record("ffn_down_done", sample, |this, sample| {
+            this.after_ffn_down = Some(sample)
+        });
+    }
+
+    fn record_after_ffn_residual(&mut self, sample: LlamaMemorySample) {
+        self.record("ffn_residual_done", sample, |this, sample| {
+            this.after_ffn_residual = Some(sample)
+        });
+    }
+
+    fn record(
+        &mut self,
+        phase: &str,
+        sample: LlamaMemorySample,
+        set: impl FnOnce(&mut Self, LlamaMemorySample),
+    ) {
+        self.consider_peak(phase, &sample);
+        set(self, sample);
+    }
+
+    fn consider_peak(&mut self, phase: &str, sample: &LlamaMemorySample) {
+        if let Some(rss) = sample.rss_kib {
+            if self.peak_rss_kib.is_none_or(|peak| rss > peak) {
+                self.peak_rss_kib = Some(rss);
+                self.peak_phase = Some(phase.to_string());
+            }
+        }
+    }
+
+    fn merge_assign(&mut self, other: &Self) {
+        self.forward_passes += other.forward_passes;
+        self.after_attention_norm = other.after_attention_norm.clone();
+        self.after_attention_q = other.after_attention_q.clone();
+        self.after_attention_k = other.after_attention_k.clone();
+        self.after_attention_rope = other.after_attention_rope.clone();
+        self.after_attention_v = other.after_attention_v.clone();
+        self.after_kv_cache_write = other.after_kv_cache_write.clone();
+        self.after_attention_context = other.after_attention_context.clone();
+        self.after_attention_output = other.after_attention_output.clone();
+        self.after_attention_residual = other.after_attention_residual.clone();
+        self.after_ffn_norm = other.after_ffn_norm.clone();
+        self.after_ffn_activation = other.after_ffn_activation.clone();
+        self.after_ffn_down = other.after_ffn_down.clone();
+        self.after_ffn_residual = other.after_ffn_residual.clone();
+        if let (Some(phase), Some(rss)) = (&other.peak_phase, other.peak_rss_kib) {
+            if self.peak_rss_kib.is_none_or(|peak| rss > peak) {
+                self.peak_rss_kib = Some(rss);
+                self.peak_phase = Some(phase.clone());
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1534,6 +2030,11 @@ impl LlamaForwardTimings {
         for (target, source) in self.layers.iter_mut().zip(&other.layers) {
             target.add_assign(source);
         }
+        match (&mut self.memory, &other.memory) {
+            (Some(target), Some(source)) => target.merge_assign(source),
+            (None, Some(source)) => self.memory = Some(source.clone()),
+            _ => {}
+        }
     }
 }
 
@@ -1556,6 +2057,11 @@ impl LlamaLayerTimings {
         self.ffn_activation += other.ffn_activation;
         self.ffn_down += other.ffn_down;
         self.ffn_residual += other.ffn_residual;
+        match (&mut self.memory, &other.memory) {
+            (Some(target), Some(source)) => target.merge_assign(source),
+            (None, Some(source)) => self.memory = Some(source.clone()),
+            _ => {}
+        }
     }
 }
 
@@ -1822,6 +2328,8 @@ fn forward_layer_timed(
         layer_index: layer_idx,
         ..LlamaLayerTimings::default()
     };
+    let mut memory = structured_forward_memory_enabled()
+        .then(|| LlamaLayerMemoryTimings::new(layer_idx, capture_memory_sample(kv_cache)));
 
     let started = Instant::now();
     let attn_norm = hidden.rms_norm(
@@ -1836,6 +2344,9 @@ fn forward_layer_timed(
         .then(|| rms_norm_diagnostics(hidden, &layer.attention_norm, &attn_norm, rms_norm_epsilon))
         .transpose()?;
     timings.attention_norm = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_norm(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_norm_done");
 
     let started = Instant::now();
@@ -1852,6 +2363,9 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_q, &q, "linear"))
         .transpose()?;
     timings.attention_q = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_q(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_q_done");
 
     let started = Instant::now();
@@ -1869,6 +2383,9 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_k, &k, "attention_k"))
         .transpose()?;
     timings.attention_k = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_k(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_k_done");
 
     let started = Instant::now();
@@ -1923,6 +2440,9 @@ fn forward_layer_timed(
         })
         .transpose()?;
     timings.attention_rope = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_rope(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_rope_done");
 
     let started = Instant::now();
@@ -1940,11 +2460,17 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_v, &v, "attention_v"))
         .transpose()?;
     timings.attention_v = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_v(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_v_done");
 
     let started = Instant::now();
     write_kv_cache(kv_cache, layer_idx, &k, &v)?;
     timings.kv_cache_write = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_kv_cache_write(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "kv_cache_write_done");
 
     let started = Instant::now();
@@ -1963,6 +2489,9 @@ fn forward_layer_timed(
         .then(|| LlamaTensorStats::from_tensor(&context))
         .transpose()?;
     timings.attention_context = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_context(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_context_done");
 
     let started = Instant::now();
@@ -1987,6 +2516,9 @@ fn forward_layer_timed(
         })
         .transpose()?;
     timings.attention_output = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_output(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_output_done");
 
     let started = Instant::now();
@@ -2001,6 +2533,9 @@ fn forward_layer_timed(
         .then(|| residual_reconstruction_diagnostic(hidden, &attn_out, &residual))
         .transpose()?;
     timings.attention_residual = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_attention_residual(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "attention_residual_done");
 
     let started = Instant::now();
@@ -2016,6 +2551,9 @@ fn forward_layer_timed(
         .then(|| rms_norm_diagnostics(&residual, &layer.ffn_norm, &ffn_norm, rms_norm_epsilon))
         .transpose()?;
     timings.ffn_norm = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_ffn_norm(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "ffn_norm_done");
 
     let activated = gated_ffn_activation(
@@ -2037,6 +2575,9 @@ fn forward_layer_timed(
     let ffn_activation_stats = collect_diagnostics
         .then(|| LlamaTensorStats::from_tensor(&activated))
         .transpose()?;
+    if let Some(memory) = &mut memory {
+        memory.record_after_ffn_activation(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "ffn_gate_up_activation_done");
 
     let started = Instant::now();
@@ -2057,6 +2598,9 @@ fn forward_layer_timed(
         .then(|| linear_projection_diagnostics(&activated, &layer.ffn_down, &ffn_out, "ffn_down"))
         .transpose()?;
     timings.ffn_down = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_ffn_down(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "ffn_down_done");
 
     let started = Instant::now();
@@ -2071,8 +2615,12 @@ fn forward_layer_timed(
         .then(|| residual_reconstruction_diagnostic(&residual, &ffn_out, &output))
         .transpose()?;
     timings.ffn_residual = started.elapsed().as_micros();
+    if let Some(memory) = &mut memory {
+        memory.record_after_ffn_residual(capture_memory_sample(kv_cache));
+    }
     trace_forward_layer_memory(layer_idx, "ffn_residual_done");
     timings.total = total_started.elapsed().as_micros();
+    timings.memory = memory;
     let diagnostics = if collect_diagnostics {
         Some(LlamaLayerDiagnostics {
             layer_index: layer_idx,
@@ -4136,6 +4684,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                         output_idx + rows_this_chunk
                     ))
                 })?;
+                record_q8_0_file_read(chunk.len());
                 let output_end = out_start + output_idx + rows_this_chunk;
                 let output_chunk = &mut output[out_start + output_idx..output_end];
                 if should_parallelize_linear_output(output_width) {
@@ -4453,6 +5002,7 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
                     output_start + rows_this_chunk
                 ))
                 })?;
+            record_q8_0_file_read(chunk.len());
             let output_end = output_start + rows_this_chunk;
             let output_chunk = &mut output[output_start..output_end];
             if should_parallelize_linear_output(output_width) {
@@ -5601,10 +6151,82 @@ mod tests {
         assert!(dest[2..].iter().all(|value| *value == 0.0));
     }
 
+    fn memory_sample(
+        rss_kib: u64,
+        kv_position: usize,
+        allocated_sequence_length: usize,
+    ) -> LlamaMemorySample {
+        let elements = allocated_sequence_length * 2;
+        LlamaMemorySample {
+            rss_kib: Some(rss_kib),
+            kv_cache_position: kv_position,
+            kv_cache_allocated_sequence_length: allocated_sequence_length,
+            kv_cache_allocated_elements: elements,
+            kv_cache_allocated_bytes: (elements * std::mem::size_of::<f32>()) as u64,
+        }
+    }
+
+    fn test_forward_memory(start: LlamaMemorySample) -> LlamaForwardMemoryTimings {
+        LlamaForwardMemoryTimings::new(
+            start,
+            LlamaWeightMaterializationStats::default(),
+            Q8_0FileReadStats::default(),
+        )
+    }
+
+    #[test]
+    fn memory_timing_merge_tracks_forward_passes_and_peak_rss() {
+        let mut first = LlamaForwardTimings {
+            memory: Some(test_forward_memory(memory_sample(100, 0, 0))),
+            ..LlamaForwardTimings::default()
+        };
+        first
+            .memory
+            .as_mut()
+            .unwrap()
+            .record_after_logits(memory_sample(110, 0, 1));
+
+        let mut second = LlamaForwardTimings {
+            memory: Some(test_forward_memory(memory_sample(105, 1, 1))),
+            ..LlamaForwardTimings::default()
+        };
+        second
+            .memory
+            .as_mut()
+            .unwrap()
+            .record_after_layers(memory_sample(140, 1, 2));
+
+        first.add_assign(&second);
+
+        let memory = first.memory.expect("merged memory timings");
+        assert_eq!(memory.forward_passes, 2);
+        assert_eq!(memory.peak_rss_kib, Some(140));
+        assert_eq!(memory.peak_phase.as_deref(), Some("layers_done"));
+        assert_eq!(memory.end, None);
+        assert_eq!(
+            memory
+                .after_layers
+                .unwrap()
+                .kv_cache_allocated_sequence_length,
+            2
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_linux_proc_status_rss_kib() {
+        assert_eq!(
+            parse_proc_status_rss_kib("Name:\tcamelid\nVmRSS:\t  12345 kB\n"),
+            Some(12_345)
+        );
+    }
+
     fn clear_dense_diagnostic_env() {
         for key in [
             "BACKENDINFERENCE_ATTENTION_SCORE_SCALE",
             "BACKENDINFERENCE_FFN_GATE_UP_ORDER",
+            "BACKENDINFERENCE_FORWARD_MEMORY_TRACE",
+            "BACKENDINFERENCE_FORWARD_RSS_TIMINGS",
             "BACKENDINFERENCE_GQA_HEAD_MAPPING",
             "BACKENDINFERENCE_LINEAR_ACCUMULATION",
             "BACKENDINFERENCE_OUTPUT_PROJECTION_LAYOUT",
@@ -7551,6 +8173,7 @@ mod tests {
         std::env::set_var("BACKENDINFERENCE_SQUARE_LINEAR_LAYOUT", "descriptor");
         std::env::set_var("BACKENDINFERENCE_RECTANGULAR_LINEAR_LAYOUT", "descriptor");
         std::env::set_var("BACKENDINFERENCE_OUTPUT_PROJECTION_LAYOUT", "descriptor");
+        std::env::set_var("BACKENDINFERENCE_FORWARD_RSS_TIMINGS", "1");
 
         let config = LlamaModelConfig {
             context_length: 4,
@@ -7656,6 +8279,19 @@ mod tests {
 
         assert_eq!(step.prompt_token_count, 1);
         assert_eq!(step.next_token_id, 1);
+        let memory = step
+            .timings
+            .memory
+            .as_ref()
+            .expect("memory timings requested");
+        assert_eq!(memory.forward_passes, 1);
+        assert!(memory.after_embedding.is_some());
+        assert!(memory.after_layers.is_some());
+        assert!(memory.after_logits.is_some());
+        assert_eq!(memory.layers.len(), 1);
+        assert_eq!(memory.layers[0].layer_index, 0);
+        assert!(memory.layers[0].after_kv_cache_write.is_some());
+        assert_eq!(memory.end.as_ref().unwrap().kv_cache_position, 1);
         let diagnostics = step.diagnostics.expect("dense diagnostics requested");
         assert_slice_close(&diagnostics.embedding.checkpoint.first_values, &[1.0, 1.0]);
         assert_eq!(diagnostics.layers.len(), 1);
