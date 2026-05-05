@@ -69,6 +69,14 @@ Watchdog current-main follow-up after this note was committed:
 - Remote gates passed: `fmt --check`, focused `chunked_prefill_matches_sequential_prefill_outputs_and_cache`, focused `q8_0_file_backed_batch_matmul_reuses_chunk_reads_across_input_rows`, `clippy -q --lib -- -D warnings`, and `build -q --release --bin backendinference`.
 - This remains a current-head architecture/code spot-check only; it is not an 8B 1024/2048-context support artifact.
 
+Watchdog current-main follow-up after the spot-check note landed:
+
+- Clean public checkout: `e90b9973d38afd8da8c016a3381e0215f766ee9a`.
+- Remote work dir: `/tmp/camelid-watchdog-current-main-20260505T223640Z/repo`.
+- Local gates passed on the same head: `fmt --check`, focused `chunked_prefill_matches_sequential_prefill_outputs_and_cache`, focused `q8_0_file_backed_batch_matmul_reuses_chunk_reads_across_input_rows`, and `bash scripts/check-public-scrub.sh`.
+- Remote gates passed: `fmt --check`, focused `chunked_prefill_matches_sequential_prefill_outputs_and_cache`, focused `q8_0_file_backed_batch_matmul_reuses_chunk_reads_across_input_rows`, `clippy -q --lib -- -D warnings`, and `build -q --release --bin backendinference`.
+- This remains a current-main architecture/code spot-check only; it is not an 8B 1024/2048-context support artifact.
+
 Focused coverage:
 
 - `chunked_prefill_matches_sequential_prefill_outputs_and_cache` compares chunked vs sequential prompt prefill for next-token output, logits, hidden state, KV-cache position, keys, and values.
