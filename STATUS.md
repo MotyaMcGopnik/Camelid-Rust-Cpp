@@ -6,7 +6,7 @@ Last updated: 2026-05-05
 
 Use this file to answer three practical questions: what is supported now, what changed recently, and what still blocks the next support move?
 
-Executive summary: Camelid now has full API + frontend end-to-end smoke for the exact Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Instruct Q8_0 rows, refreshed on the reopened Ubuntu validation lane. The previous 3B JSON-shaped broader prompt-pack blocker is resolved, the 8B broader three-prompt 50-token rerun passed, and the first bounded 512-context pack now passes across all four exact Q8_0 rows. Llama 3.2 1B/3B bounded compact chat-template-shapes and bounded unique-chat perf/RSS envelopes now have passing public summaries, and compact 8B chat-template-shapes also has a passing public summary. The public support boundary moved only for those exact rows and only for the validated local-chat/parity envelopes; broad Llama-family support, larger contexts beyond the checked 512 pack, arbitrary template execution, and portability remain outside the support claim.
+Executive summary: Camelid now has full API + frontend end-to-end smoke for the exact Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Instruct Q8_0 rows, refreshed on the reopened Ubuntu validation lane. The previous 3B JSON-shaped broader prompt-pack blocker is resolved, the 8B broader three-prompt 50-token rerun passed, and the first bounded 512-context pack now passes across all four exact Q8_0 rows. Llama 3.2 1B now also has a passing second bounded 1024-context parity pack, while Llama 3.2 1B/3B bounded compact chat-template-shapes and bounded unique-chat perf/RSS envelopes have passing public summaries, and compact 8B chat-template-shapes also has a passing public summary. The public support boundary moved only for those exact rows and only for the validated local-chat/parity envelopes; broad Llama-family support, model-native/larger contexts beyond the checked packs, arbitrary template execution, and portability remain outside the support claim.
 
 ## Release ledger snapshot
 
@@ -42,6 +42,7 @@ Bottom line for reviewers: Camelid has the original TinyLlama supported gate plu
 - `qa/evidence-bundles/llama32-1b-3b-unique-chat-perf-rss-20260505T061644Z-head-e9f28572e090/manifest.json` is the clean-public-head Llama 3.2 1B/3B bounded unique-chat perf/RSS envelope bundle; both exact rows completed four measured unique chat requests after two warmups with hot weight-cache measured runs and RSS milestones, closing only that bounded memory/perf envelope box.
 - `qa/evidence-bundles/full-support-normalized-wp2-8b-watchdog-20260505T041404Z-head-83c21f0cbf5a/manifest.json` is the current-public-head normalized Llama 3 8B Instruct Q8_0 API/WebUI/RSS smoke bundle from the reopened Ubuntu lane; the exact row passed load/models/capabilities/completions/chat/timing-summary/frontend smoke, frontend chat generated `Hello`, max sampled backend RSS was `283372 KiB`, and `SHA256SUMS` sha256 is `83334a9083806081569322978db273044753515a195359d0b4326cf6352367da`.
 - `qa/evidence-bundles/four-row-context-512-20260505T051510Z-head-b403884/manifest.json` records the first bounded 512-context pack pass across TinyLlama 1.1B Chat Q8_0, Llama 3.2 1B/3B Instruct Q8_0, and Llama 3 8B Instruct Q8_0 from clean public head `b403884`; all four rows matched prompt tokens, generated token IDs, and generated text for the checked 5-token pack. This does not promote larger context buckets, arbitrary templates, or broad family support.
+- `qa/evidence-bundles/llama32-1b-context-1024-20260505T081001Z-head-156ded6fc76b/manifest.json` records the second bounded 1024-context pack pass for the exact Llama 3.2 1B Instruct Q8_0 row from clean public head `156ded6fc76b`; the 881-token prompt matched prompt tokens, generated token IDs `[34,2735,35,12,4278]`, and generated text `CMLD-102` for the checked 5-token pack. This closes only that exact 1B row+box slice.
 - `qa/evidence-bundles/8b-checkmark-current-head-20260505T052647Z-head-864e07b51f36/manifest.json` is the latest public-main Llama 3 8B Instruct Q8_0 checkmark refresh at head `864e07b51f36`; API/WebUI/RSS smoke passed load/models/capabilities/completions/chat/timing-summary/frontend smoke, frontend chat generated `Hello`, max sampled backend RSS was `286056 KiB`, and `SHA256SUMS` sha256 is `0774c12816651c6f330f072141ec2de83c958bb857cb771df57716755724b2cf`. This preserves exact-row smoke support only.
 - `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json` records the reopened-lane pass for the first bounded 8B 512-context pack.
 - `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json` records the reopened-lane pass for the bounded 8B broader three-prompt 50-token pack.
@@ -56,11 +57,11 @@ Bottom line for reviewers: Camelid has the original TinyLlama supported gate plu
 Recent work moved the exact-row release ledger in a narrow, evidence-backed way:
 
 - TinyLlama Q8_0 remains the trusted supported gate; its final-normalization bundle now closes the current-head broader parity, marker-template-shape, bounded 512-context, and backend RSS/perf box for the exact current-gate row.
-- Llama 3.2 1B Q8_0 moved from evidence-only to supported exact-row smoke after compact parity, broader prompt-pack parity, `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned. Its bounded compact chat-template-shapes box and bounded unique-chat perf/RSS envelope box are now green for the exact row only.
+- Llama 3.2 1B Q8_0 moved from evidence-only to supported exact-row smoke after compact parity, broader prompt-pack parity, `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned. Its bounded compact chat-template-shapes box, bounded unique-chat perf/RSS envelope box, and second bounded 1024-context parity box are now green for the exact row only.
 - Llama 3.2 3B Q8_0 moved from acceptance target to supported exact-row smoke after exact-row load, compact prompt-token/1-token/5-token/50-token parity, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned. Its bounded compact chat-template-shapes box and bounded unique-chat perf/RSS envelope box are now green for the exact row only.
 - The 3B broader JSON-shaped prompt divergence is now resolved: a post-Q8-dot rerun of the three-prompt, 50-token pack matched llama.cpp for prompt tokens, generated token IDs, and generated text.
 - Llama 3 8B Q8_0 moved from groundwork-only to supported exact-row smoke after Ubuntu three-prompt parity, API/frontend smoke, and bounded memory evidence aligned; the current public broader-pack rerun is the bounded three-prompt 50-token pass.
-- The first bounded 512-context pack now passes across all four exact supported Q8_0 rows; this is a checked 512-pack result only, not a 1k/2k/model-native context or portability claim.
+- The first bounded 512-context pack now passes across all four exact supported Q8_0 rows; this is a checked 512-pack result only, not a 1k/2k/model-native context or portability claim. The exact Llama 3.2 1B row also has a separate checked 1024-context pack pass, limited to that row and prompt pack.
 
 Bottom line: the engineering seam and product surface now agree for exact 1B/3B/8B short chat/parity; the support language stays intentionally narrow.
 
@@ -113,9 +114,10 @@ Current evidence boundary:
 - Prompt token IDs, generated token IDs, and generated text all match for the compact bounded response.
 - The broader five-prompt parity pack also passed for this exact 1B row.
 - The bounded compact chat-template-shapes pack passed all four checked prompt shapes for this exact 1B row.
+- The second bounded 1024-context pack passed for this exact 1B row: actual reference prompt tokens `881`, generated tokens `[34,2735,35,12,4278]`, generated text `CMLD-102`, and timed-process max RSS `2897852 KiB`.
 - The bounded unique-chat perf/RSS envelope passed for this exact 1B row: four measured unique chat requests after two warmups, hot weight-cache measured runs, no prompt-cache hits, average wall time `7379.73 ms`, average backend generate time `7065.25 ms`, and max sampled backend RSS `274.31 MiB`.
 - `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence are aligned with `/api/capabilities`.
-- The support claim is limited to this exact 1B Instruct Q8_0 row, short local-chat smoke, the checked first bounded 512-context pack, the checked compact chat-template-shapes pack, and the bounded unique-chat perf/RSS envelope; neighboring Llama rows, other quantizations, larger/broader contexts, arbitrary GGUF/Jinja template execution, broad chat-template behavior, production throughput, and portability remain outside the claim.
+- The support claim is limited to this exact 1B Instruct Q8_0 row, short local-chat smoke, the checked first bounded 512-context pack, the checked second bounded 1024-context pack, the checked compact chat-template-shapes pack, and the bounded unique-chat perf/RSS envelope; neighboring Llama rows, other quantizations, model-native/larger contexts beyond checked packs, arbitrary GGUF/Jinja template execution, broad chat-template behavior, production throughput, and portability remain outside the claim.
 
 Representative durable evidence:
 
@@ -127,6 +129,7 @@ Representative durable evidence:
 - `qa/evidence-bundles/four-row-context-512-20260505T051510Z-head-b403884/manifest.json`
 - `qa/evidence-bundles/llama32-1b-3b-chat-template-shapes-20260505T060036Z-head-e9f28572e090/manifest.json`
 - `qa/evidence-bundles/llama32-1b-3b-unique-chat-perf-rss-20260505T061644Z-head-e9f28572e090/manifest.json`
+- `qa/evidence-bundles/llama32-1b-context-1024-20260505T081001Z-head-156ded6fc76b/manifest.json`
 
 ### Llama 3.2 3B Instruct Q8_0
 
