@@ -60,5 +60,5 @@
       "backend_rss_after_kib": 304404
     }
   ],
-  "claim_boundary": "This summary refreshes exact-row API smoke only. It does not promote broad Llama-family support, neighboring sizes, other quantizations, frontend coverage, longer contexts, or full parity. Keep the 8B 512-context blocker until a passing current-head artifact exists."
+  "claim_boundary": "This summary refreshes exact-row API smoke only. It does not promote broad Llama-family support, neighboring sizes, other quantizations, frontend coverage, longer contexts, or full parity. Frontend freshness and the later single-pack 8B 512-context pass are recorded in separate public bundles."
 }

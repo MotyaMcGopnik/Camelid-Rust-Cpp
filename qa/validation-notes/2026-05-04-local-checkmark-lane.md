@@ -20,7 +20,7 @@ This pass only normalized repo-facing contract language and harness scaffolding:
 
 - TinyLlama remains the supported current gate.
 - Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B remain exact-row smoke-supported only.
-- The 8B row keeps its short-smoke/parity evidence, but the first 512-context current-head pack remains a documented blocker.
+- Historical at the time of this local-only pause: the 8B row kept its short-smoke/parity evidence, and the first 512-context current-head pack remained a documented blocker. This was later superseded by the passing rerun in `2026-05-04-8b-context-512-rerun.md`.
 - `/api/capabilities`, frontend readiness copy, and docs should expose blocked template/context/perf tracks rather than implying broad/full Llama support.
 - `scripts/prepare-full-support-bundle.mjs` is the safe scaffold generator for the next validation window; with the default `blocked_by_operator_shutdown` status, runtime command files preserve the original commands for review but exit blocked instead of running workloads.
 

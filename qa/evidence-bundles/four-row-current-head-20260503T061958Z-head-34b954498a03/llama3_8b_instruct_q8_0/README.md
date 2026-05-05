@@ -8,10 +8,10 @@ Tracks:
 - compact-parity: ready_to_run — Refresh compact-header hello parity at 5 tokens on current head.
 - broader-parity: ready_to_run — Run the broader three-prompt pack and require prompt/generated parity.
 - chat-template-shapes: ready_to_run — Run the chat-template-shapes pack to broaden template coverage on the exact row.
-- context-512: known_blocker — Run the bounded 512-context pack and preserve success or failure durably.
-- api-webui-smoke: ready_to_run — Refresh exact-row /api/models/load, /v1/models, /v1/completions, /v1/chat/completions, and frontend smoke.
+- context-512: superseded_by_later_pass — The scaffold preserved the bounded 512-context timeout; the later one-pack pass is recorded at `../../llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json`.
+- api-webui-smoke: refreshed_by_later_pass — Reopened-lane API + frontend smoke for this exact row is recorded at `../../four-row-api-webui-20260504T233202Z-head-cb8943d/manifest.json`.
 - perf-rss-portability: ready_to_run — Capture host facts, versions, model SHA, smoke timing, and backend RSS snapshots in one portable note.
 
 Blockers:
-- 512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.
+- Historical scaffold blocker: the first 512-context attempt timed out on the original current head and remains preserved for auditability. Current status: a later reopened-lane rerun passed for one bounded pack only; it does not promote broader/larger-context support.
 - Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families.
