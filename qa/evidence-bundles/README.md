@@ -16,7 +16,8 @@ Current public evidence map:
 - `llama3-8b-lazy-q8-hotpath-20260505T021411Z-head-723a665/` is the exact 8B retained-block lazy-Q8 hot-path cost probe; it is measurement evidence only, not a broader support/performance-portability promotion.
 - `llama3-8b-lazy-q8-hotpath-helper-validated-20260505T0350Z-head-e22307f2f90b/` validates the reusable helper on clean public `main` and repeats the exact 8B retained-block Q8 measurements; it is still measurement evidence only.
 
-Reproducibility helper:
+Reproducibility helpers:
+- `bash scripts/check-evidence-bundle-checksums.sh` verifies every committed `SHA256SUMS` under this directory, including older bundles that use bundle-local paths and newer bundles that use repo-relative paths.
 - `node scripts/bench-q8-hotpath-bundle.mjs --model <model.gguf>` regenerates a sanitized retained-block Q8 hot-path bundle with per-tensor JSON, `manifest.json`, and `SHA256SUMS`. Use it for measurement staging only; pair results with production API/WebUI timing/RSS before making portability or throughput claims.
 
 Rules:

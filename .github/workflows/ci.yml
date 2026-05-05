@@ -24,6 +24,9 @@ jobs:
       - name: Audit public evidence bundles for private details
         run: node scripts/audit-evidence-bundle-privacy.mjs --strict
 
+      - name: Verify public evidence bundle checksums
+        run: bash scripts/check-evidence-bundle-checksums.sh
+
   rust:
     runs-on: ubuntu-latest
     needs: public-scrub
