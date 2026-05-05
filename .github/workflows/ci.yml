@@ -27,6 +27,9 @@ jobs:
       - name: Verify public evidence bundle checksums
         run: bash scripts/check-evidence-bundle-checksums.sh
 
+      - name: Check public evidence claims
+        run: node scripts/check-public-evidence-claims.mjs
+
   rust:
     runs-on: ubuntu-latest
     needs: public-scrub
