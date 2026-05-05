@@ -42,6 +42,7 @@ const CPU_WEIGHT_MATERIALIZATION_LIMIT_ENV: &str =
     "BACKENDINFERENCE_MAX_CPU_WEIGHT_MATERIALIZATION_BYTES";
 const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
 const LAZY_Q8_LINEAR_ENV: &str = "BACKENDINFERENCE_LAZY_Q8_0_LINEAR";
+const METADATA_CHAT_TEMPLATE_ENV: &str = "BACKENDINFERENCE_METADATA_CHAT_TEMPLATE";
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -1600,17 +1601,20 @@ async fn prepare_generation(
             None,
         )
     })?;
-    let (prompt, parse_special) = match input {
-        PromptInput::Text(prompt) => (prompt, false),
-        // llama-server applies the TinyLlama marker template as regular SPM text,
-        // so chat prompts should keep normal dummy-prefix handling for marker tokens.
-        PromptInput::Chat(messages) => (
-            render_chat_prompt(&messages, &tokenizer),
-            tokenizer.chat_prompt_parse_special(),
-        ),
+    let rendered_prompt = match input {
+        PromptInput::Text(prompt) => RenderedPrompt {
+            text: prompt,
+            add_special: true,
+            parse_special: false,
+        },
+        PromptInput::Chat(messages) => render_chat_prompt_for_tokenization(&messages, &tokenizer),
     };
     let token_ids = tokenizer
-        .encode(&prompt, true, parse_special)
+        .encode(
+            &rendered_prompt.text,
+            rendered_prompt.add_special,
+            rendered_prompt.parse_special,
+        )
         .map_err(|err| {
             api_error(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -2670,17 +2674,53 @@ fn validate_chat_messages(messages: &[ChatMessage]) -> std::result::Result<(), B
     Ok(())
 }
 
-fn render_chat_prompt(messages: &[ChatMessage], tokenizer: &Tokenizer) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderedPrompt {
+    text: String,
+    add_special: bool,
+    parse_special: bool,
+}
+
+fn render_chat_prompt_for_tokenization(
+    messages: &[ChatMessage],
+    tokenizer: &Tokenizer,
+) -> RenderedPrompt {
     if let Some(template) = tokenizer.chat_template.as_deref() {
-        if is_llama3_instruct_template(template) {
-            return render_llama3_instruct_prompt(messages);
+        if metadata_chat_template_enabled() {
+            if let Some(rendered) =
+                render_llama3_metadata_subset_prompt(messages, tokenizer, template)
+            {
+                return rendered;
+            }
         }
+        // llama-server applies the TinyLlama marker template as regular SPM text,
+        // so chat prompts should keep normal dummy-prefix handling for marker tokens.
         if is_tinyllama_marker_template(template) {
-            return render_tinyllama_marker_prompt(messages, tokenizer);
+            return RenderedPrompt {
+                text: render_tinyllama_marker_prompt(messages, tokenizer),
+                add_special: true,
+                parse_special: tokenizer.chat_prompt_parse_special(),
+            };
+        }
+        if is_llama3_instruct_template(template) {
+            return RenderedPrompt {
+                text: render_llama3_instruct_prompt(messages),
+                add_special: true,
+                parse_special: tokenizer.chat_prompt_parse_special(),
+            };
         }
     }
 
-    render_role_colon_prompt(messages)
+    RenderedPrompt {
+        text: render_role_colon_prompt(messages),
+        add_special: true,
+        parse_special: tokenizer.chat_prompt_parse_special(),
+    }
+}
+
+#[cfg(test)]
+fn render_chat_prompt(messages: &[ChatMessage], tokenizer: &Tokenizer) -> String {
+    render_chat_prompt_for_tokenization(messages, tokenizer).text
 }
 
 fn is_tinyllama_marker_template(template: &str) -> bool {
@@ -2693,6 +2733,43 @@ fn is_llama3_instruct_template(template: &str) -> bool {
     template.contains("<|start_header_id|>")
         && template.contains("<|end_header_id|>")
         && template.contains("<|eot_id|>")
+}
+
+fn metadata_chat_template_enabled() -> bool {
+    matches!(
+        env::var(METADATA_CHAT_TEMPLATE_ENV),
+        Ok(value)
+            if value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("enabled")
+                || value.eq_ignore_ascii_case("metadata")
+    )
+}
+
+fn render_llama3_metadata_subset_prompt(
+    messages: &[ChatMessage],
+    tokenizer: &Tokenizer,
+    template: &str,
+) -> Option<RenderedPrompt> {
+    if !is_llama3_instruct_template(template) || !template.contains("bos_token") {
+        return None;
+    }
+    let bos = tokenizer.token_text(tokenizer.special.bos)?;
+    let trim_content = template.contains("| trim") || template.contains(".strip()");
+    let mut prompt = String::new();
+    prompt.push_str(bos);
+    prompt.push_str(&render_llama3_instruct_prompt_with_options(
+        messages,
+        trim_content,
+    ));
+    Some(RenderedPrompt {
+        text: prompt,
+        // The metadata template already emitted bos_token as text. With parse_special=true
+        // it becomes the same control token without duplicating the tokenizer-level BOS.
+        add_special: false,
+        parse_special: tokenizer.chat_prompt_parse_special(),
+    })
 }
 
 fn render_tinyllama_marker_prompt(messages: &[ChatMessage], tokenizer: &Tokenizer) -> String {
@@ -2718,12 +2795,23 @@ fn render_tinyllama_marker_prompt(messages: &[ChatMessage], tokenizer: &Tokenize
 }
 
 fn render_llama3_instruct_prompt(messages: &[ChatMessage]) -> String {
+    render_llama3_instruct_prompt_with_options(messages, false)
+}
+
+fn render_llama3_instruct_prompt_with_options(
+    messages: &[ChatMessage],
+    trim_content: bool,
+) -> String {
     let mut prompt = String::new();
     for message in messages {
         prompt.push_str("<|start_header_id|>");
         prompt.push_str(message.role.trim());
         prompt.push_str("<|end_header_id|>\n\n");
-        prompt.push_str(&message.content);
+        if trim_content {
+            prompt.push_str(message.content.trim());
+        } else {
+            prompt.push_str(&message.content);
+        }
         prompt.push_str("<|eot_id|>");
     }
     if messages
@@ -3247,15 +3335,132 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keeps_compact_llama3_renderer_by_default_for_metadata_templates() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_metadata_subset_test_tokenizer();
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "  hello  ".to_string(),
+            }],
+            &tokenizer,
+        );
+
+        assert!(rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(
+            rendered.text,
+            "<|start_header_id|>user<|end_header_id|>\n\n  hello  <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn can_opt_into_llama3_metadata_subset_renderer_without_duplicate_bos() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let tokenizer = llama3_metadata_subset_test_tokenizer();
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "  hello  ".to_string(),
+            }],
+            &tokenizer,
+        );
+
+        assert!(!rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhello<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
+    fn metadata_subset_renderer_matches_llama3_gguf_template_shape() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: "  Be brief.  ".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "  hello  ".to_string(),
+                },
+            ],
+            &tokenizer,
+        );
+
+        assert!(!rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nhello<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
+    fn metadata_template_opt_in_falls_back_without_bos_token_expression() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let tokenizer = llama3_test_tokenizer();
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "  hello  ".to_string(),
+            }],
+            &tokenizer,
+        );
+
+        assert!(rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(
+            rendered.text,
+            "<|start_header_id|>user<|end_header_id|>\n\n  hello  <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
     fn llama3_test_tokenizer() -> Tokenizer {
+        llama3_tokenizer_with_template(
+            "<|start_header_id|>{{ role }}<|end_header_id|>{{ content }}<|eot_id|>",
+        )
+    }
+
+    fn llama3_metadata_subset_test_tokenizer() -> Tokenizer {
+        llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE)
+    }
+
+    const LLAMA3_METADATA_SUBSET_TEMPLATE: &str = "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}";
+
+    fn llama3_tokenizer_with_template(template: &str) -> Tokenizer {
         Tokenizer {
             model: TokenizerModel::Gpt2Bpe,
-            tokens: Vec::new(),
-            token_to_id: HashMap::new(),
+            tokens: vec![Token {
+                id: 0,
+                text: "<|begin_of_text|>".to_string(),
+                score: 0.0,
+                kind: TokenKind::Control,
+            }],
+            token_to_id: HashMap::from([("<|begin_of_text|>".to_string(), 0)]),
             byte_token_to_id: HashMap::new(),
             bpe_ranks: HashMap::new(),
             bpe_registry: BpeRegistry::default(),
-            special: SpecialTokens::default(),
+            special: SpecialTokens {
+                bos: Some(0),
+                ..SpecialTokens::default()
+            },
             config: TokenizerConfig {
                 add_bos: true,
                 add_eos: false,
@@ -3263,9 +3468,7 @@ mod tests {
                 add_space_prefix: false,
                 remove_extra_whitespaces: false,
             },
-            chat_template: Some(
-                "<|start_header_id|>{{ role }}<|end_header_id|>{{ content }}<|eot_id|>".to_string(),
-            ),
+            chat_template: Some(template.to_string()),
         }
     }
 
