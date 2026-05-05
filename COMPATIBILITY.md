@@ -48,6 +48,7 @@ In plain terms: TinyLlama Q8_0 is still the only full supported gate; exact Llam
 - `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json` records the single-pack 8B 512-context pass.
 - `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json` records the bounded 8B broader three-prompt 50-token pass.
 - `qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/manifest.json` records the bounded 8B compact chat-template-shapes pass.
+- `qa/evidence-bundles/llama3-8b-api-webui-rss-clean-20260505T015843Z-head-aee469b9c13a/manifest.json` plus `SHA256SUMS` is the clean-main exact 8B API/WebUI/RSS timing smoke for completion diagnostics.
 - Raw `target/` artifacts may appear as drill-down references, but they should not stand alone as the release-facing evidence anchor.
 
 ## Current release ledger
