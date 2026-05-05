@@ -13,7 +13,9 @@ use std::{
 
 const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
 const Q8_FILE_CACHE_BYTES_ENV: &str = "BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES";
-const DEFAULT_Q8_FILE_CACHE_BYTES: usize = 128 * 1024 * 1024;
+// Keep lazy Q8_0 file reads memory-safe by default. The bounded chunk cache is an
+// explicit diagnostic/performance probe until long-context prefill has row-specific evidence.
+const DEFAULT_Q8_FILE_CACHE_BYTES: usize = 0;
 
 use rayon::prelude::*;
 use serde::Serialize;
