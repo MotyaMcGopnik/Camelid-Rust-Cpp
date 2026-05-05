@@ -1814,6 +1814,15 @@ async fn completion_endpoint_generates_multiple_greedy_tokens() {
     assert_eq!(body["choices"][0]["finish_reason"], "length");
     assert!(body["choices"][0].get("logprobs").is_none());
     assert_eq!(body["usage"]["completion_tokens"], 2);
+    assert!(body["backendinference"]["prompt_token_ids"]
+        .as_array()
+        .is_some_and(|tokens| !tokens.is_empty()));
+    assert_eq!(
+        body["backendinference"]["generated_token_ids"],
+        json!([0, 0])
+    );
+    assert!(body["backendinference"]["timings_ms"]["generation"]["forward_total"].is_number());
+    assert!(body["backendinference"]["timings_ms"]["layers"].is_array());
 }
 
 #[tokio::test]

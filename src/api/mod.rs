@@ -486,6 +486,7 @@ pub struct CompletionResponse {
     pub model: String,
     pub choices: Vec<CompletionChoice>,
     pub usage: CompletionUsage,
+    pub backendinference: GenerationDiagnostics,
 }
 
 #[derive(Debug, Serialize)]
@@ -1213,26 +1214,49 @@ async fn completions(
     let model_id = prepared.model_id.clone();
     let prompt_token_count = prepared.token_ids.len();
     match generate_decoded_tokens(prepared) {
-        Ok(generated) => (
-            StatusCode::OK,
-            Json(CompletionResponse {
-                id: format!("cmpl-{}", uuid::Uuid::new_v4()),
-                object: "text_completion",
-                created: 0,
-                model: model_id,
-                choices: vec![CompletionChoice {
-                    index: 0,
-                    text: generated.text,
-                    finish_reason: generated.finish_reason,
-                }],
-                usage: CompletionUsage {
-                    prompt_tokens: prompt_token_count,
-                    completion_tokens: generated.completion_tokens,
-                    total_tokens: prompt_token_count + generated.completion_tokens,
-                },
-            }),
-        )
-            .into_response(),
+        Ok(generated) => {
+            let GeneratedText {
+                text,
+                prompt_token_ids,
+                generated_token_ids,
+                dense_metadata,
+                top_logits,
+                output_projection,
+                dense,
+                completion_tokens,
+                finish_reason,
+                timings,
+            } = generated;
+            (
+                StatusCode::OK,
+                Json(CompletionResponse {
+                    id: format!("cmpl-{}", uuid::Uuid::new_v4()),
+                    object: "text_completion",
+                    created: 0,
+                    model: model_id,
+                    choices: vec![CompletionChoice {
+                        index: 0,
+                        text,
+                        finish_reason,
+                    }],
+                    usage: CompletionUsage {
+                        prompt_tokens: prompt_token_count,
+                        completion_tokens,
+                        total_tokens: prompt_token_count + completion_tokens,
+                    },
+                    backendinference: GenerationDiagnostics {
+                        prompt_token_ids,
+                        generated_token_ids,
+                        dense_metadata,
+                        top_logits,
+                        output_projection,
+                        dense,
+                        timings_ms: timings,
+                    },
+                }),
+            )
+                .into_response()
+        }
         Err(response) => *response,
     }
 }
