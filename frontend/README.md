@@ -45,7 +45,7 @@ Then run the frontend:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -56,6 +56,8 @@ http://127.0.0.1:4175
 ```
 
 ## Configuration
+
+For repo-wide local toolchain and path guidance, see [`../docs/CONFIGURATION.md`](../docs/CONFIGURATION.md).
 
 The default API base is:
 

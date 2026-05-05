@@ -16,6 +16,9 @@ Read these first:
 ## Contributor and project policy
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution and validation guidance
+- [`docs/CONTRIBUTOR_QUICKSTART.md`](docs/CONTRIBUTOR_QUICKSTART.md) — shortest safe local contributor path
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — current toolchain, env-var, and path guidance
+- [`docs/VALIDATION_MATRIX.md`](docs/VALIDATION_MATRIX.md) — expected checks by change class
 - [`SECURITY.md`](SECURITY.md) — security reporting guidance
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — acknowledgements and license notices
 - [`DECISIONS.md`](DECISIONS.md) — design decision log
@@ -40,6 +43,7 @@ These documents are working notes, not support ledgers. When a note and a public
 - [`SAMPLING_API_RECON.md`](SAMPLING_API_RECON.md)
 - [`SAFETENSORS_PLAN.md`](SAFETENSORS_PLAN.md)
 - [`ATTENTION_CHECKPOINTS.md`](ATTENTION_CHECKPOINTS.md)
+- [`REPO_READINESS_PLAN.md`](REPO_READINESS_PLAN.md) — draft repo-readiness improvement plan for contributor setup, configuration, and validation ergonomics
 
 ## Historical archives
 

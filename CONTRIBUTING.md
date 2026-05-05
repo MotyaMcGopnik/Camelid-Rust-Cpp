@@ -20,10 +20,15 @@ boundaries, and reproducible validation over optimistic claims.
 1. Read `README.md` for the current release contract.
 2. Check `COMPATIBILITY.md` for the evidence-based support matrix.
 3. Review `ROADMAP.md` and `STATUS.md` for the current phase and open work.
-4. If your change affects claims, docs, or readiness wording, update every source of truth in the
+4. Read `docs/CONTRIBUTOR_QUICKSTART.md` for the shortest safe local setup path.
+5. If your change affects claims, docs, or readiness wording, update every source of truth in the
    same PR.
 
 ## Development setup
+
+For the shortest contributor path, start with `docs/CONTRIBUTOR_QUICKSTART.md`.
+
+For local toolchain, env-var, and path guidance, see `docs/CONFIGURATION.md`.
 
 ### Backend
 
@@ -46,8 +51,9 @@ npm run build
 
 ## Validation expectations
 
-Run the smallest meaningful validation for your change. For substantial backend changes, prefer the
-full standard gate:
+Run the smallest meaningful validation for your change. Use `docs/VALIDATION_MATRIX.md` to map change type to the expected lane.
+
+For substantial backend changes, prefer the full standard gate:
 
 ```bash
 cargo fmt --all -- --check
@@ -67,6 +73,9 @@ npm run build
 
 If you change model support behavior, tokenizer behavior, generation semantics, or readiness
 language, include concrete artifacts or references showing why the change is justified.
+
+Keep public contributor docs focused on local/public workflows. Do not add private SSH details,
+maintainer workstation paths, or unpublished operator procedures to public onboarding docs.
 
 ## Pull requests
 
