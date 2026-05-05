@@ -11,6 +11,7 @@ Current public evidence map:
 - `full-support-normalized-wp1-20260505T032406Z-head-bcf9e647d6fd/` is the current-head normalized TinyLlama/1B/3B API/WebUI smoke bundle from the reopened Ubuntu lane; it preserves manifest/checksum-verifiable evidence without broadening beyond exact-row smoke support.
 - `tinyllama-broader-template-context-perf-rss-20260505T044519Z-head-864e07b51f36/` closes the exact TinyLlama Q8_0 current-head broader five-prompt parity, marker chat-template-shapes parity, bounded 512-context parity, and perf/RSS durable-normalization slice; scope is exact-row only.
 - `four-row-context-512-20260505T051510Z-head-b403884/` closes only the first bounded 512-context pack for the four exact supported Q8_0 rows; it does not promote larger context buckets or broad family support.
+- `llama32-3b-context-2048-20260505T105742Z-head-36ec8e492d65/` closes only the third bounded 2048-context pack for the exact Llama 3.2 3B Instruct Q8_0 row; it does not promote neighboring rows, model-native context, or broad/full support.
 - `llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/` closes only the bounded 8B broader three-prompt 50-token pack.
 - `llama3-8b-context-512-20260504T234625Z-head-58acf592345c/` closes only the first bounded 8B 512-context pack.
 - `llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/` closes only the bounded 8B compact chat-template-shapes pack.
