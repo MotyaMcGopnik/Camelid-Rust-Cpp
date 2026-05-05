@@ -7,7 +7,7 @@ const rootDir = resolve(args.get('root') || 'qa/evidence-bundles')
 const outPath = args.get('out') ? resolve(args.get('out')) : null
 const strict = args.has('strict')
 
-const textExtensions = new Set(['.json', '.md', '.txt'])
+const textExtensions = new Set(['.json', '.md', '.txt', '.log', '.tsv'])
 const findings = []
 
 const patterns = [

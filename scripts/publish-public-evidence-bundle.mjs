@@ -41,7 +41,7 @@ async function copyTree(fromDir, toDir) {
       await writeFile(dstPath, `${JSON.stringify(sanitizeValue(payload), null, 2)}\n`, 'utf8')
       continue
     }
-    if (ext === '.md' || ext === '.txt') {
+    if (isSanitizedTextExtension(ext)) {
       await writeFile(dstPath, sanitizeText(content.toString('utf8')), 'utf8')
       continue
     }
@@ -59,13 +59,18 @@ function sanitizeValue(value) {
 
 function sanitizeText(input) {
   return String(input)
-    .replace(/\/home\/[^/]+\/work\/Camelid-public-[^/]+\/target\//g, 'target/')
-    .replace(/\/home\/[^/]+\/work\/Camelid\/target\//g, 'target/')
-    .replace(/\/home\/[^/]+\/work\/Camelid\/frontend\/scripts\/smoke\.mjs/g, 'frontend/scripts/smoke.mjs')
+    .replace(/\/home\/[^/]+\/work\/Camelid[^/]*\/target\//g, 'target/')
+    .replace(/\/home\/[^/]+\/work\/Camelid[^/]*\/frontend\/scripts\/smoke\.mjs/g, 'frontend/scripts/smoke.mjs')
+    .replace(/\/home\/[^/]+\/work\/Camelid[^/]*\/scripts\/summarize-generation-timings\.mjs/g, 'scripts/summarize-generation-timings.mjs')
+    .replace(/\/home\/[^/]+\/work\/Camelid[^\s"]*/g, '$CAMELID_WORKTREE')
     .replace(/\/home\/[^/]+\/\.nvm\/versions\/node\/[^/]+\/bin\/node/g, 'node')
     .replace(/\/home\/[^/]+\/models\//g, '$CAMELID_MODEL_DIR/')
-    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, 'canonical-private-ubuntu-validation-host')
-    .replace(/\bip-(?:\d+-){3}\d+\b/g, 'canonical-private-ubuntu-validation-host')
+    .replace(/(?:\d{1,3}\.){3}\d{1,3}/g, 'canonical-private-ubuntu-validation-host')
+    .replace(/ip-(?:\d+-){3}\d+/g, 'canonical-private-ubuntu-validation-host')
+}
+
+function isSanitizedTextExtension(ext) {
+  return ext === '.md' || ext === '.txt' || ext === '.log' || ext === '.tsv'
 }
 
 async function writeSha256Sums(rootDir) {
