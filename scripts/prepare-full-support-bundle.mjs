@@ -6,6 +6,22 @@ import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promis
 import { dirname, join, relative, resolve } from 'node:path'
 
 const args = parseArgs(process.argv.slice(2))
+
+if (args.has('help') || args.has('h')) {
+  console.log(`Usage: node scripts/prepare-full-support-bundle.mjs [options]
+
+Generate a normalized four-row full-support evidence execution scaffold.
+
+Options:
+  --repo-root <path>                 Repository root (default: current directory)
+  --out-dir <path>                   Output bundle root (default: target/full-support-<utc>-head-<sha>)
+  --utc <stamp>                      UTC stamp for the default output directory
+  --validation-host-status <status>  available | blocked_by_operator_shutdown (default: available)
+  --help, -h                         Print this help without writing files
+`)
+  process.exit(0)
+}
+
 const repoRoot = resolve(args.get('repo-root') || '.')
 const utcStamp = args.get('utc') || isoStamp(new Date())
 const gitHead = git(['rev-parse', 'HEAD'], repoRoot)
