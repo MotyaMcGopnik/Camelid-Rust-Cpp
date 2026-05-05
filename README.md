@@ -80,6 +80,8 @@ Authoritative details live in [`COMPATIBILITY.md`](COMPATIBILITY.md). The curren
 
 ## Quickstart
 
+This quickstart verifies that Camelid builds and the backend starts on your machine. It is **not** a one-command end-to-end chat demo: the repository does not bundle supported GGUF model files, and supported local chat requires additional setup.
+
 ### 1) Build and run the server
 
 ```bash
@@ -99,9 +101,17 @@ From another shell:
 curl -s http://127.0.0.1:8181/api/capabilities
 ```
 
-That confirms the backend is up. Loading a real model and reaching supported local chat requires a supported GGUF on disk and the contributor setup described in [`docs/CONTRIBUTOR_QUICKSTART.md`](docs/CONTRIBUTOR_QUICKSTART.md) and [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+That confirms the backend is up.
 
-For a first supported local run, TinyLlama is the clearest path — but it is not bundled in this repository.
+### 3) Before you expect local chat to work
+
+You will need all of the following:
+
+- a supported GGUF model file already present on your machine
+- the model path wired into a load request you control
+- any extra contributor setup described in [`docs/CONTRIBUTOR_QUICKSTART.md`](docs/CONTRIBUTOR_QUICKSTART.md) and [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+
+For a first supported local run, TinyLlama is the clearest path — but it is **not bundled** in this repository, and the README should not be read as a copy-paste chat demo.
 
 ## Frontend
 
