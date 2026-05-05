@@ -4,6 +4,36 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 
 const args = parseArgs(process.argv.slice(2))
+
+if (args.has('help') || args.has('h')) {
+  console.log(`Usage: node scripts/model-promotion-smoke-bundle.mjs [options]
+
+Capture one exact-row API/WebUI promotion smoke bundle against a running Camelid backend/frontend.
+
+Required options:
+  --model <path>                       Exact GGUF model path to load
+  --out-dir <path>                     Output artifact directory
+
+Common options:
+  --api <url>                          Camelid API base (default: BACKENDINFERENCE_API_BASE or http://127.0.0.1:8181)
+  --frontend <url>                     Frontend URL (default: BACKENDINFERENCE_FRONTEND_URL or http://127.0.0.1:4175)
+  --model-id <id>                      Runtime model id to load (default: BACKENDINFERENCE_SMOKE_MODEL_ID or smoke-model)
+  --message <text>                     Prompt/chat message (default: hello)
+  --max-tokens <n>                     Positive token budget (default: 1)
+  --temperature <number>               Sampling temperature (default: 0)
+  --skip-frontend                      Capture API artifacts only
+  --allow-guarded-chat                 Let frontend smoke pass guarded-chat state instead of requiring generation
+  --frontend-script <path>             Frontend smoke script (default: frontend/scripts/smoke.mjs)
+  --timings-script <path>              Timing summary script (default: scripts/summarize-generation-timings.mjs)
+  --expect-compatibility-row <id>      Assert exact frontend/API compatibility row
+  --expect-compatibility-status <text> Assert exact compatibility status
+  --expect-contract-supported <bool>   Assert frontend contract support state
+  --expect-webui-chat <state>          Assert WebUI chat state, e.g. enabled
+  --help, -h                           Print this help without writing files
+`)
+  process.exit(0)
+}
+
 const apiBase = (args.get('api') || args.get('backend') || process.env.BACKENDINFERENCE_API_BASE || 'http://127.0.0.1:8181').replace(/\/$/, '')
 const frontendUrl = (args.get('frontend') || process.env.BACKENDINFERENCE_FRONTEND_URL || 'http://127.0.0.1:4175').replace(/\/$/, '')
 const modelPath = args.get('model') ? resolve(args.get('model')) : null
