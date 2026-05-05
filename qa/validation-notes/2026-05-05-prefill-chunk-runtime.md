@@ -55,6 +55,13 @@ Ubuntu follow-up validation:
 - Remote work dir: `/tmp/camelid-prefill-memory-lx1w0o/repo`.
 - Remote gates passed: `fmt --check`, focused `chunked_prefill_matches_sequential_prefill_outputs_and_cache`, full `test -q --lib` (`106 passed` on Linux), `clippy -q --lib -- -D warnings`, and `build -q --release --bin backendinference`.
 
+Watchdog current-head spot-check:
+
+- Clean public checkout: `ce48e934eec0de1183f2d46c421b1d542ca05f01`.
+- Remote work dir: `/tmp/camelid-watchdog-current-head-20260505T213512Z/repo`.
+- Remote gates passed: `fmt --check`, focused `chunked_prefill_matches_sequential_prefill_outputs_and_cache`, focused `q8_0_file_backed_batch_matmul_reuses_chunk_reads_across_input_rows`, `clippy -q --lib -- -D warnings`, and `build -q --release --bin backendinference`.
+- Local spot-check gates also passed on the same head: `fmt --check`, the same two focused tests, and `bash scripts/check-public-scrub.sh`.
+
 Focused coverage:
 
 - `chunked_prefill_matches_sequential_prefill_outputs_and_cache` compares chunked vs sequential prompt prefill for next-token output, logits, hidden state, KV-cache position, keys, and values.
