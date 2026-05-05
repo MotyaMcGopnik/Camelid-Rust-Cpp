@@ -6,17 +6,11 @@
 
 **Camelid is a Rust-native local inference backend for GGUF language models built for people who want local AI they can actually trust.**
 
-It aims for a rare combination: fast-moving local-model ergonomics with a support contract strict enough to survive scrutiny. Camelid does not blur “probably works” into “supported.” It publishes exact rows, keeps API and UI readiness honest, and moves only when the evidence is real.
+Most local-model stacks are easy to demo and hard to trust. Camelid is built to close that gap: fast local inference, honest readiness signals, and support claims narrow enough to verify.
 
-A tiny honest demo moment:
+It does not blur “probably works” into “supported.” Camelid publishes exact support rows, keeps the API and WebUI aligned with reality, and moves only when the evidence is real.
 
-```bash
-curl -s http://127.0.0.1:8181/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"tinyllama-q8","messages":[{"role":"user","content":"hello"}],"max_tokens":12,"temperature":0}'
-```
-
-That kind of local chat flow is the point. Camelid is trying to make it feel sharp, legible, and dependable — not magical until it breaks.
+The goal is simple: local chat that feels sharp, legible, and dependable — without pretending unsupported paths are ready.
 
 > **Current public posture:** one fully validated TinyLlama lane and three intentionally narrow exact-row Llama smoke lanes. Nearby models do not inherit support.
 
@@ -97,25 +91,17 @@ target/release/backendinference serve --addr 127.0.0.1:8181
 
 Toolchain note: Camelid currently requires Rust/Cargo 1.87+. If your host exposes an older system `cargo`, use the rustup-managed toolchain described in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
-### 2) Load a supported local model
+### 2) Verify the server is responding
 
-From another shell in the repository root:
-
-```bash
-curl -s http://127.0.0.1:8181/api/models/load \
-  -H 'content-type: application/json' \
-  -d '{"id":"tinyllama-q8","path":"models/tinyllama-1.1b-chat-v1.0.Q8_0.gguf"}'
-```
-
-### 3) Generate through the OpenAI-compatible API
+From another shell:
 
 ```bash
-curl -s http://127.0.0.1:8181/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"tinyllama-q8","messages":[{"role":"user","content":"hello"}],"max_tokens":50,"temperature":0}'
+curl -s http://127.0.0.1:8181/api/capabilities
 ```
 
-For a first local run, TinyLlama is the clearest supported path.
+That confirms the backend is up. Loading a real model and reaching supported local chat requires a supported GGUF on disk and the contributor setup described in [`docs/CONTRIBUTOR_QUICKSTART.md`](docs/CONTRIBUTOR_QUICKSTART.md) and [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+
+For a first supported local run, TinyLlama is the clearest path — but it is not bundled in this repository.
 
 ## Frontend
 
