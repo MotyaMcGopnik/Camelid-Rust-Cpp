@@ -45,6 +45,9 @@ async function validateBundle(manifestPath) {
     if (!summaryExists) fail(bundleRel, 'four-row context-512 bundle must include summary.json')
     await validateFourRowContext512(bundleRel, manifest, summaryExists ? await readJson(summaryPath) : null)
   }
+
+  const singleRowContext = singleRowContextSchema(schema)
+  if (singleRowContext) validateSingleRowContextBundle(bundleRel, manifest, singleRowContext)
 }
 
 function validateSummaryAgreement(bundleRel, manifest, summary) {
@@ -139,17 +142,87 @@ async function validateFourRowContext512(bundleRel, manifest, summary) {
 }
 
 function validateContext512Row(bundleRel, row) {
-  const rowId = row.row_id || '<missing row_id>'
-  if (row.context_window !== 512) fail(bundleRel, `${rowId} context_window must be 512`)
-  if (row.max_tokens !== 5) fail(bundleRel, `${rowId} max_tokens must be 5`)
+  validateContextRow(bundleRel, row, {
+    contextWindow: 512,
+    maxTokens: 5,
+    minPromptTokens: 1,
+  })
+}
+
+function validateSingleRowContextBundle(bundleRel, manifest, expected) {
+  if (manifest.passed !== true) fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} manifest must be passed=true`)
+  if (manifest.checkout_clean !== true) fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} manifest must record checkout_clean=true`)
+  if (manifest.pack?.target_context_window !== expected.contextWindow) {
+    fail(bundleRel, `${expected.rowId} pack target_context_window must be ${expected.contextWindow}`)
+  }
+  if (manifest.pack?.max_tokens !== expected.maxTokens) fail(bundleRel, `${expected.rowId} pack max_tokens must be ${expected.maxTokens}`)
+  if (manifest.pack?.source_prompt_pack !== expected.sourcePromptPack) {
+    fail(bundleRel, `${expected.rowId} source_prompt_pack must be ${expected.sourcePromptPack}`)
+  }
+  if (manifest.pack?.prompt_count !== 1) fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} pack prompt_count must be 1`)
+  if (!boundaryIsNarrow(manifest.claim_boundary)) {
+    fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} claim_boundary must explicitly avoid broader/full-family promotion`)
+  }
+  if (!Array.isArray(manifest.rows) || manifest.rows.length !== 1) {
+    fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} manifest must include exactly one row`)
+    return
+  }
+  validateContextRow(bundleRel, manifest.rows[0], expected)
+}
+
+function validateContextRow(bundleRel, row, expected) {
+  const rowId = row?.row_id || '<missing row_id>'
+  if (expected.rowId && rowId !== expected.rowId) fail(bundleRel, `row_id must be ${expected.rowId}, got ${rowId}`)
+  if (row.context_window !== expected.contextWindow) fail(bundleRel, `${rowId} context_window must be ${expected.contextWindow}`)
+  if (row.max_tokens !== expected.maxTokens) fail(bundleRel, `${rowId} max_tokens must be ${expected.maxTokens}`)
+  if (expected.promptId && row.prompt_id !== expected.promptId) fail(bundleRel, `${rowId} prompt_id must be ${expected.promptId}`)
+  if (expected.generatedText && row.generated_text !== expected.generatedText) {
+    fail(bundleRel, `${rowId} generated_text must stay ${JSON.stringify(expected.generatedText)}`)
+  }
+  if (row.passed !== undefined && row.passed !== true) fail(bundleRel, `${rowId} passed must be true`)
   if (row.prompt_tokens_match !== true) fail(bundleRel, `${rowId} prompt_tokens_match must be true`)
   if (row.generated_tokens_match !== true) fail(bundleRel, `${rowId} generated_tokens_match must be true`)
   if (row.generated_text_match !== true) fail(bundleRel, `${rowId} generated_text_match must be true`)
   if (row.first_generated_token_diff_index !== -1) fail(bundleRel, `${rowId} first_generated_token_diff_index must be -1`)
-  if (!Number.isInteger(row.reference_prompt_token_count) || row.reference_prompt_token_count <= 0) fail(bundleRel, `${rowId} reference_prompt_token_count must be positive`)
+  if (!Number.isInteger(row.reference_prompt_token_count) || row.reference_prompt_token_count < expected.minPromptTokens) {
+    fail(bundleRel, `${rowId} reference_prompt_token_count must be at least ${expected.minPromptTokens}`)
+  }
   if (!Number.isInteger(row.max_resident_set_kib) || row.max_resident_set_kib <= 0) fail(bundleRel, `${rowId} max_resident_set_kib must be positive`)
   if (typeof row.model_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.model_sha256)) fail(bundleRel, `${rowId} model_sha256 must be a 64-character lowercase sha256`)
   if (typeof row.raw_artifact !== 'string' || row.raw_artifact.startsWith('/') || row.raw_artifact.includes('..')) fail(bundleRel, `${rowId} raw_artifact must be a safe relative path`)
+}
+
+function singleRowContextSchema(schema) {
+  const schemas = {
+    'camelid.llama32_1b_context_1024_public_evidence.v1': {
+      rowId: 'llama32_1b_instruct_q8_0',
+      contextWindow: 1024,
+      maxTokens: 5,
+      minPromptTokens: 513,
+      sourcePromptPack: 'qa/prompt-packs/llama3-context-1024-smoke.json',
+      promptId: 'roughly-1024-token-recall',
+      generatedText: 'CMLD-102',
+    },
+    'camelid.llama32_3b_context_1024_public_evidence.v1': {
+      rowId: 'llama32_3b_instruct_q8_0',
+      contextWindow: 1024,
+      maxTokens: 5,
+      minPromptTokens: 513,
+      sourcePromptPack: 'qa/prompt-packs/llama3-context-1024-smoke.json',
+      promptId: 'roughly-1024-token-recall',
+      generatedText: 'CMLD-102',
+    },
+    'camelid.llama32_3b_context_2048_public_evidence.v1': {
+      rowId: 'llama32_3b_instruct_q8_0',
+      contextWindow: 2048,
+      maxTokens: 5,
+      minPromptTokens: 1025,
+      sourcePromptPack: 'qa/prompt-packs/llama3-context-2048-smoke.json',
+      promptId: 'roughly-2048-token-recall',
+      generatedText: 'CMLD-204',
+    },
+  }
+  return schemas[schema]
 }
 
 function validateChecksObject(bundleRel, label, checks, requiredKeys) {

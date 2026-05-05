@@ -10,7 +10,9 @@ const goodRoot = join(tempRoot, 'good')
 const badRoot = join(tempRoot, 'bad')
 
 await writeBundle(goodRoot, { mutate: false })
+await writeSingleRowContextBundle(goodRoot, { mutate: false })
 await writeBundle(badRoot, { mutate: true })
+await writeSingleRowContextBundle(badRoot, { mutate: true })
 
 const good = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.mjs', '--root', goodRoot], {
   cwd: process.cwd(),
@@ -23,8 +25,9 @@ const bad = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.m
   cwd: process.cwd(),
   encoding: 'utf8',
 })
-assert.notEqual(bad.status, 0, 'invalid context-512 evidence should fail')
+assert.notEqual(bad.status, 0, 'invalid context evidence should fail')
 assert.match(bad.stderr, /generated_tokens_match must be true/)
+assert.match(bad.stderr, /source_prompt_pack must be qa\/prompt-packs\/llama3-context-1024-smoke\.json/)
 
 async function writeBundle(root, { mutate }) {
   const dir = join(root, 'four-row-context-512-test')
@@ -71,6 +74,42 @@ async function writeBundle(root, { mutate }) {
   }
   await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   await writeFile(join(dir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
+}
+
+async function writeSingleRowContextBundle(root, { mutate }) {
+  const dir = join(root, 'llama32-1b-context-1024-test')
+  await mkdir(dir, { recursive: true })
+  const rowItem = {
+    row_id: 'llama32_1b_instruct_q8_0',
+    context_window: 1024,
+    max_tokens: 5,
+    prompt_id: 'roughly-1024-token-recall',
+    reference_prompt_token_count: 881,
+    prompt_tokens_match: true,
+    generated_tokens_match: true,
+    generated_text_match: true,
+    first_generated_token_diff_index: -1,
+    generated_text: 'CMLD-102',
+    max_resident_set_kib: 2897852,
+    model_sha256: 'b'.repeat(64),
+    raw_artifact: 'target/llama32-1b-context-1024-test/summary.json',
+    passed: true,
+  }
+  const manifest = {
+    schema: 'camelid.llama32_1b_context_1024_public_evidence.v1',
+    passed: true,
+    checkout_clean: true,
+    pack: {
+      target_context_window: 1024,
+      max_tokens: 5,
+      source_prompt_pack: mutate ? 'qa/prompt-packs/llama3-context-512-smoke.json' : 'qa/prompt-packs/llama3-context-1024-smoke.json',
+      prompt_count: 1,
+    },
+    rows: [rowItem],
+    claim_boundary:
+      'Closes only the second bounded 1024-context pack for the exact Llama 3.2 1B row. It does not promote neighboring rows, other quantizations, model-native/larger context buckets, arbitrary templates, broad/full Llama-family support, production throughput, or portability support.',
+  }
+  await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
 function row(rowId, tokenCount) {
