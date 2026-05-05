@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support still requires normalized current-head bundles, and the passing 8B broader 50-token, 512-context, compact chat-template-shapes, and lazy-Q8 hot-path reruns are bounded packs/measurements only"
+        "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support still requires normalized current-head bundles, and the passing 1B/3B second 1024-context plus 8B broader 50-token, 512-context, compact chat-template-shapes, and lazy-Q8 hot-path reruns are bounded packs/measurements only"
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -108,7 +108,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_1b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_1b["tested_context"],
-        "short_api_webui_smoke_plus_first_512_context_pack"
+        "short_api_webui_smoke_plus_first_512_and_second_1024_context_packs"
     );
     assert_eq!(llama32_1b["chat_template_renderer"], "compact");
     assert_eq!(
@@ -140,7 +140,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_3b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_3b["tested_context"],
-        "short_api_webui_smoke_with_broader_prompt_pack_parity_plus_first_512_context_pack"
+        "short_api_webui_smoke_with_broader_prompt_pack_parity_plus_first_512_and_second_1024_context_packs"
     );
     assert_eq!(llama32_3b["chat_template_renderer"], "compact");
     assert_eq!(
