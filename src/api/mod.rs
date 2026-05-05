@@ -3027,7 +3027,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capabilities_report_llama32_second_1024_context_pack() {
+    fn capabilities_report_llama32_context_pack_boundaries() {
         let response = capabilities_response();
         let targets = response
             .model_compatibility
@@ -3056,12 +3056,46 @@ mod tests {
                 .contains("second bounded 1024-context parity"));
         }
 
+        let one_b = response
+            .model_compatibility
+            .iter()
+            .find(|target| target.id == "llama32_1b_instruct_q8_0")
+            .expect("1B row should stay advertised");
+        assert_eq!(
+            one_b.bounded_context_2048_pack,
+            "blocked_first_token_divergence"
+        );
+        assert_eq!(
+            one_b.bounded_context_2048_pack_id,
+            "llama3-context-2048-smoke-v1"
+        );
+        assert_eq!(one_b.bounded_context_2048_window, 2048);
+        assert!(one_b
+            .evidence
+            .contains("diverged on the first generated token"));
+
+        let three_b = response
+            .model_compatibility
+            .iter()
+            .find(|target| target.id == "llama32_3b_instruct_q8_0")
+            .expect("3B row should stay advertised");
+        assert_eq!(three_b.bounded_context_2048_pack, "validated_third_pack");
+        assert_eq!(
+            three_b.bounded_context_2048_pack_id,
+            "llama3-context-2048-smoke-v1"
+        );
+        assert_eq!(three_b.bounded_context_2048_window, 2048);
+
         let eight_b = response
             .model_compatibility
             .iter()
             .find(|target| target.id == "llama3_8b_instruct_q8_0")
             .expect("8B row should stay advertised");
         assert_eq!(eight_b.bounded_context_1024_pack, "not_started");
+        assert_eq!(
+            eight_b.bounded_context_2048_pack,
+            "ready_to_run_not_promoted"
+        );
     }
 
     #[test]
