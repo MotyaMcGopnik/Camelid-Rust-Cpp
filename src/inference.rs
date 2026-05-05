@@ -2902,6 +2902,12 @@ fn forward_prefill_layer_chunk_timed(
 ) -> Result<LlamaTimedLayerOutput> {
     let config = params.config;
     let layer_idx = params.layer_idx;
+    if params.base_position != kv_cache.position {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "prefill chunk base position {} does not match KV cache cursor {}",
+            params.base_position, kv_cache.position
+        )));
+    }
     let total_started = Instant::now();
     let mut timings = LlamaLayerTimings {
         layer_index: layer_idx,
@@ -6535,6 +6541,17 @@ fn causal_attention_context_batch(
     }
 
     let rows = query.dim(0)?;
+    let required_sequence_length = base_position.checked_add(rows).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(format!(
+            "attention batch base position {base_position} plus {rows} row(s) overflows"
+        ))
+    })?;
+    if required_sequence_length > kv_cache.allocated_sequence_length {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "attention batch needs {} cached position(s), but KV cache has {} allocated",
+            required_sequence_length, kv_cache.allocated_sequence_length
+        )));
+    }
     let repeats = attention_heads / kv_heads;
     let head_mapping = diagnostic_gqa_head_mapping()?;
     let score_scale = diagnostic_attention_score_scale()?;
@@ -9598,6 +9615,135 @@ mod tests {
 
         std::env::remove_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS");
         std::env::remove_var("BACKENDINFERENCE_FORWARD_RSS_TIMINGS");
+    }
+
+    #[test]
+    fn prefill_layer_rejects_misaligned_kv_cache_cursor() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let config = LlamaModelConfig {
+            context_length: 8,
+            embedding_length: 2,
+            block_count: 1,
+            feed_forward_length: 2,
+            attention_head_count: 1,
+            attention_head_count_kv: 1,
+            rope_dimension_count: Some(2),
+            rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
+            rms_norm_epsilon: 1.0e-5,
+            vocab_size: Some(4),
+            file_type: None,
+        };
+        let layer = LlamaLayerWeights {
+            attention_norm: CpuTensor::from_f32("blk.0.attn_norm.weight", vec![2], vec![1.0, 1.0])
+                .unwrap(),
+            attention_q: CpuTensor::from_f32(
+                "blk.0.attn_q.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            attention_k: CpuTensor::from_f32(
+                "blk.0.attn_k.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            attention_v: CpuTensor::from_f32(
+                "blk.0.attn_v.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            attention_output: CpuTensor::from_f32(
+                "blk.0.attn_output.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            ffn_norm: CpuTensor::from_f32("blk.0.ffn_norm.weight", vec![2], vec![1.0, 1.0])
+                .unwrap(),
+            ffn_gate: CpuTensor::from_f32(
+                "blk.0.ffn_gate.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            ffn_up: CpuTensor::from_f32(
+                "blk.0.ffn_up.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            ffn_down: CpuTensor::from_f32(
+                "blk.0.ffn_down.weight",
+                vec![2, 2],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+        };
+        let hidden = CpuTensor::from_f32("hidden", vec![2, 2], vec![0.1, 0.2, 0.3, 0.4]).unwrap();
+        let plan = LlamaKvCachePlan::from_config(&config).unwrap();
+        let mut kv_cache = LlamaKvCache::new(plan).unwrap();
+        kv_cache.position = 1;
+
+        let err = forward_prefill_layer_chunk_timed(
+            &hidden,
+            &layer,
+            PrefillLayerChunkParams {
+                config: &config,
+                rope_freqs: None,
+                rms_norm_epsilon: config.rms_norm_epsilon,
+                layer_idx: 0,
+                base_position: 0,
+            },
+            &mut kv_cache,
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("prefill chunk base position 0 does not match KV cache cursor 1"));
+    }
+
+    #[test]
+    fn batch_attention_rejects_reads_beyond_allocated_kv_cache() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let config = LlamaModelConfig {
+            context_length: 2,
+            embedding_length: 2,
+            block_count: 1,
+            feed_forward_length: 2,
+            attention_head_count: 1,
+            attention_head_count_kv: 1,
+            rope_dimension_count: Some(2),
+            rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
+            rms_norm_epsilon: 1.0e-5,
+            vocab_size: Some(4),
+            file_type: None,
+        };
+        let kv_cache = LlamaKvCache::new(LlamaKvCachePlan::from_config(&config).unwrap()).unwrap();
+        let query = CpuTensor::from_f32("query", vec![1, 2], vec![0.1, 0.2]).unwrap();
+
+        let err =
+            causal_attention_context_batch(&kv_cache, 0, 0, &query, 1, 1, "context").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("attention batch needs 1 cached position(s), but KV cache has 0 allocated"));
     }
 
     #[test]
