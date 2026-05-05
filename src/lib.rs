@@ -3,6 +3,7 @@ pub mod error;
 pub mod gguf;
 pub mod inference;
 pub mod model;
+pub mod model_source;
 pub mod tensor;
 pub mod tokenizer;
 

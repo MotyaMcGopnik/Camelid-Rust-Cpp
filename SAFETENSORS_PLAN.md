@@ -182,6 +182,14 @@ Architectural implications for the first SafeTensors slice:
 
 Recommended next code seam is now slightly sharper: add `src/source.rs` (or `src/model_source.rs`) with owned manifest/readiness structs and descriptor-only tests, then have the existing GGUF file path populate that struct internally before any Hugging Face directory path is exposed through API responses.
 
+## 2026-05-05 12:20 PT Implementation Slice
+
+Local `main` head `fd894db8a560` now has the first SafeTensors source/readiness seam queued in code without changing the GGUF runtime path: `src/model_source.rs` introduces `ModelSourceManifest`, `ModelSourceReadiness`, and descriptor-only inspection for `.gguf` files plus local Hugging Face SafeTensors directories. The module is deliberately non-generating: SafeTensors directories can report separate metadata/tokenizer/weights readiness, but always carry `generation_disabled` until tokenizer parity, tensor orientation, dtype decode, and a one-token dense fixture pass.
+
+The first fixture coverage matches the architecture guardrails from the 09:20 check: complete local HF directory, missing tokenizer, missing shard index, invalid shard index, and unsupported config all assert exact blocker codes. The implementation still performs no network access, no Hugging Face Hub downloads, no SafeTensors weight decode, and no `/api/models/load` behavior change.
+
+Next code slice should stay local/test-first: parse richer HF `config.json` fields into typed Camelid-owned metadata, then add SafeTensors header/tensor-descriptor parsing for tiny fixture shards before any materialization or API exposure.
+
 ## Recommended Rust Crates / APIs
 
 - `safetensors` (`0.7.0` current crates.io default as of 2026-04-28): use `safetensors::SafeTensors::deserialize` / tensor views for safe header parsing and per-tensor byte slices. Prefer read-only mmap-backed byte storage for large files; copy/decode into Camelid CPU tensors only at the runtime boundary.
