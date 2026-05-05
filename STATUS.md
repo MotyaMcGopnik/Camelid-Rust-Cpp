@@ -1,3 +1,4 @@
+- TinyLlama current-head durable normalization moved green for the exact current-gate row: `qa/evidence-bundles/tinyllama-broader-template-context-perf-rss-20260505T044519Z-head-864e07b51f36/manifest.json` contains broader five-prompt/50-token marker-template parity, marker chat-template-shapes parity, bounded 512-context parity, backend RSS sampling, model SHA256, sanitized logs, and `SHA256SUMS`. Scope remains exact TinyLlama Q8_0 only; this does not widen neighboring rows or arbitrary template/context support.
 # Camelid Status
 
 Last updated: 2026-05-05

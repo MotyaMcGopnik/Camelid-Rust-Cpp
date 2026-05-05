@@ -9,6 +9,7 @@ Current public evidence map:
 - `four-row-api-only-20260504T230722Z-head-13a465608fbf/` is the reopened-lane API-only freshness slice with manifest and checksums.
 - `four-row-api-webui-20260505T003100Z-head-b403884/` is the reopened-lane API + frontend smoke freshness slice for all four exact rows, with manifest and checksums.
 - `full-support-normalized-wp1-20260505T032406Z-head-bcf9e647d6fd/` is the current-head normalized TinyLlama/1B/3B API/WebUI smoke bundle from the reopened Ubuntu lane; it preserves manifest/checksum-verifiable evidence without broadening beyond exact-row smoke support.
+- `tinyllama-broader-template-context-perf-rss-20260505T044519Z-head-864e07b51f36/` closes the exact TinyLlama Q8_0 current-head broader five-prompt parity, marker chat-template-shapes parity, bounded 512-context parity, and perf/RSS durable-normalization slice; scope is exact-row only.
 - `llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/` closes only the bounded 8B broader three-prompt 50-token pack.
 - `llama3-8b-context-512-20260504T234625Z-head-58acf592345c/` closes only the first bounded 8B 512-context pack.
 - `llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/` closes only the bounded 8B compact chat-template-shapes pack.
