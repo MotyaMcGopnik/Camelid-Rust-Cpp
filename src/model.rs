@@ -15,6 +15,11 @@ pub struct LlamaModelConfig {
     pub attention_head_count_kv: u32,
     pub rope_dimension_count: Option<u32>,
     pub rope_freq_base: Option<f32>,
+    pub rope_scaling_type: Option<String>,
+    pub rope_scaling_factor: Option<f32>,
+    pub rope_scaling_original_context_length: Option<u32>,
+    pub rope_scaling_low_freq_factor: Option<f32>,
+    pub rope_scaling_high_freq_factor: Option<f32>,
     pub rms_norm_epsilon: f32,
     pub vocab_size: Option<u32>,
     pub file_type: Option<u32>,
@@ -43,6 +48,14 @@ impl LlamaModelConfig {
             attention_head_count_kv,
             rope_dimension_count: gguf.metadata_u32("llama.rope.dimension_count"),
             rope_freq_base: gguf.metadata_f32("llama.rope.freq_base"),
+            rope_scaling_type: gguf
+                .metadata_string("llama.rope.scaling.type")
+                .map(str::to_string),
+            rope_scaling_factor: gguf.metadata_f32("llama.rope.scaling.factor"),
+            rope_scaling_original_context_length: gguf
+                .metadata_u32("llama.rope.scaling.original_context_length"),
+            rope_scaling_low_freq_factor: gguf.metadata_f32("llama.rope.scaling.low_freq_factor"),
+            rope_scaling_high_freq_factor: gguf.metadata_f32("llama.rope.scaling.high_freq_factor"),
             rms_norm_epsilon: gguf
                 .metadata_f32("llama.attention.layer_norm_rms_epsilon")
                 .unwrap_or(1e-5),
@@ -82,6 +95,7 @@ pub struct LlamaTensorBinding {
     pub output_norm: GgufTensorDescriptor,
     pub output: GgufTensorDescriptor,
     pub output_is_tied_embedding: bool,
+    pub rope_freqs: Option<GgufTensorDescriptor>,
     pub layers: Vec<LlamaLayerTensors>,
 }
 
@@ -93,6 +107,7 @@ impl LlamaTensorBinding {
             Some(desc) => (desc.clone(), false),
             None => (token_embedding.clone(), true),
         };
+        let rope_freqs = find_tensor(gguf, "rope_freqs.weight").cloned();
 
         let mut layers = Vec::with_capacity(config.block_count as usize);
         for layer_idx in 0..config.block_count {
@@ -120,6 +135,7 @@ impl LlamaTensorBinding {
             output_norm,
             output,
             output_is_tied_embedding,
+            rope_freqs,
             layers,
         };
         binding.validate_dense_shapes(config)?;
@@ -146,6 +162,16 @@ impl LlamaTensorBinding {
             dims.embedding_length,
             dims.vocab_size,
         )?;
+        if let Some(rope_freqs) = &self.rope_freqs {
+            let rope_dim = config.rope_dimension_count.unwrap_or(dims.head_dim as u32) as usize;
+            if rope_dim == 0 || rope_dim > dims.head_dim || !rope_dim.is_multiple_of(2) {
+                return Err(BackendError::InvalidModelMetadata(format!(
+                    "RoPE dimension count {rope_dim} must be even and within head dimension {}",
+                    dims.head_dim
+                )));
+            }
+            require_descriptor_shape(rope_freqs, &[rope_dim / 2], "rope frequencies")?;
+        }
 
         if self.layers.len() != dims.block_count {
             return Err(BackendError::InvalidModelMetadata(format!(

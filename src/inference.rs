@@ -193,6 +193,7 @@ pub struct LlamaLoadedWeights {
     pub token_embedding: CpuTensor,
     pub output_norm: CpuTensor,
     pub output: Option<CpuTensor>,
+    pub rope_freqs: Option<CpuTensor>,
     pub layers: Vec<LlamaLayerWeights>,
 }
 
@@ -659,6 +660,11 @@ impl LlamaLoadedWeights {
         } else {
             Some(load_linear(&binding.output.name)?)
         };
+        let rope_freqs = binding
+            .rope_freqs
+            .as_ref()
+            .map(|desc| store.load_cpu_f32(&desc.name))
+            .transpose()?;
         let mut layers = Vec::with_capacity(binding.layers.len());
         for layer in &binding.layers {
             layers.push(LlamaLayerWeights {
@@ -677,6 +683,7 @@ impl LlamaLoadedWeights {
             token_embedding,
             output_norm,
             output,
+            rope_freqs,
             layers,
         })
     }
@@ -695,6 +702,10 @@ impl LlamaLoadedWeights {
             dims.vocab_size,
             "output projection",
         )?;
+        if let Some(rope_freqs) = &self.rope_freqs {
+            let rope_dim = config.rope_dimension_count.unwrap_or(dims.head_dim as u32) as usize;
+            validate_rope_frequency_tensor(rope_freqs, rope_dim)?;
+        }
 
         if self.layers.len() != dims.block_count {
             return Err(BackendError::RuntimeShapeMismatch(format!(
@@ -993,6 +1004,13 @@ pub struct LlamaRopeDiagnostic {
     pub pairing: &'static str,
     pub direction: &'static str,
     pub position_mode: &'static str,
+    pub frequency_source: &'static str,
+    pub rope_freqs_count: Option<usize>,
+    pub scaling_type: &'static str,
+    pub scaling_factor: f32,
+    pub scaling_original_context_length: Option<u32>,
+    pub scaling_low_freq_factor: Option<f32>,
+    pub scaling_high_freq_factor: Option<f32>,
     pub position: usize,
     pub effective_position: usize,
     pub head_count: usize,
@@ -1226,11 +1244,14 @@ impl LlamaInferenceSession {
             let timed = forward_layer_timed(
                 &hidden,
                 layer,
-                &self.config,
-                rms_norm_epsilon,
-                layer_idx,
+                ForwardLayerParams {
+                    config: &self.config,
+                    rope_freqs: self.weights.rope_freqs.as_ref(),
+                    rms_norm_epsilon,
+                    layer_idx,
+                    collect_diagnostics,
+                },
                 &mut self.kv_cache,
-                collect_diagnostics,
             )?;
             hidden = timed.output;
             trace_forward_memory(&format!("layer_{layer_idx}_done"));
@@ -1777,15 +1798,25 @@ fn token_index_to_u32(idx: usize) -> Result<u32> {
     })
 }
 
+struct ForwardLayerParams<'a> {
+    config: &'a LlamaModelConfig,
+    rope_freqs: Option<&'a CpuTensor>,
+    rms_norm_epsilon: f32,
+    layer_idx: usize,
+    collect_diagnostics: bool,
+}
+
 fn forward_layer_timed(
     hidden: &CpuTensor,
     layer: &LlamaLayerWeights,
-    config: &LlamaModelConfig,
-    rms_norm_epsilon: f32,
-    layer_idx: usize,
+    params: ForwardLayerParams<'_>,
     kv_cache: &mut LlamaKvCache,
-    collect_diagnostics: bool,
 ) -> Result<LlamaTimedLayerOutput> {
+    let config = params.config;
+    let rope_freqs = params.rope_freqs;
+    let rms_norm_epsilon = params.rms_norm_epsilon;
+    let layer_idx = params.layer_idx;
+    let collect_diagnostics = params.collect_diagnostics;
     let total_started = Instant::now();
     let mut timings = LlamaLayerTimings {
         layer_index: layer_idx,
@@ -1848,6 +1879,7 @@ fn forward_layer_timed(
         kv_cache.position,
         config.attention_head_count as usize,
         config,
+        rope_freqs,
         format!("layer_{layer_idx}_attention_q_rope"),
     )?;
     let k = apply_rope(
@@ -1855,6 +1887,7 @@ fn forward_layer_timed(
         kv_cache.position,
         config.attention_head_count_kv as usize,
         config,
+        rope_freqs,
         format!("layer_{layer_idx}_attention_k_rope"),
     )?;
     let attention_q_rope_stats = collect_diagnostics
@@ -1868,6 +1901,7 @@ fn forward_layer_timed(
                 kv_cache.position,
                 config.attention_head_count as usize,
                 config,
+                rope_freqs,
                 "attention_q",
             )
         })
@@ -1883,6 +1917,7 @@ fn forward_layer_timed(
                 kv_cache.position,
                 config.attention_head_count_kv as usize,
                 config,
+                rope_freqs,
                 "attention_k",
             )
         })
@@ -4599,6 +4634,7 @@ fn apply_rope(
     position: usize,
     head_count: usize,
     config: &LlamaModelConfig,
+    rope_freqs: Option<&CpuTensor>,
     name: impl Into<String>,
 ) -> Result<CpuTensor> {
     if head_count == 0 {
@@ -4631,6 +4667,10 @@ fn apply_rope(
             "RoPE frequency base {freq_base} must be finite and positive"
         )));
     }
+    let scaling = rope_scaling_from_config(config)?;
+    let rope_freqs = rope_freqs
+        .map(|freqs| validate_rope_frequency_tensor(freqs, rope_dim))
+        .transpose()?;
 
     apply_rope_with_pairing(
         tensor,
@@ -4643,13 +4683,134 @@ fn apply_rope(
             pairing: diagnostic_rope_pairing()?,
             direction: diagnostic_rope_direction()?,
             position_mode: diagnostic_rope_position_mode()?,
+            scaling,
+            rope_freqs,
         },
         name,
     )
 }
 
+fn validate_rope_frequency_tensor(rope_freqs: &CpuTensor, rope_dim: usize) -> Result<&[f32]> {
+    let expected_count = rope_dim / 2;
+    if rope_dim == 0 || !rope_dim.is_multiple_of(2) {
+        return Err(BackendError::InvalidModelMetadata(format!(
+            "RoPE dimension count {rope_dim} must be even and greater than zero"
+        )));
+    }
+    if rope_freqs.shape.dims != [expected_count] {
+        return Err(BackendError::InvalidModelMetadata(format!(
+            "rope_freqs.weight expected shape [{expected_count}], got {:?}",
+            rope_freqs.shape.dims
+        )));
+    }
+    if let Some((idx, frequency)) = rope_freqs
+        .data
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, frequency)| *frequency <= 0.0 || !frequency.is_finite())
+    {
+        return Err(BackendError::InvalidModelMetadata(format!(
+            "rope_freqs.weight[{idx}] frequency {frequency} must be finite and positive"
+        )));
+    }
+    Ok(&rope_freqs.data)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RopeScaling {
+    kind: RopeScalingKind,
+    factor: f32,
+    original_context_length: Option<u32>,
+    low_freq_factor: Option<f32>,
+    high_freq_factor: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RopeScalingKind {
+    None,
+    Linear,
+    Llama3,
+}
+
+impl RopeScalingKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Linear => "linear",
+            Self::Llama3 => "llama3",
+        }
+    }
+}
+
+fn rope_scaling_from_config(config: &LlamaModelConfig) -> Result<RopeScaling> {
+    let kind = match config.rope_scaling_type.as_deref().map(str::trim) {
+        None | Some("") | Some("none") => RopeScalingKind::None,
+        Some("linear") => RopeScalingKind::Linear,
+        Some("llama3") => RopeScalingKind::Llama3,
+        Some(other) => {
+            return Err(BackendError::InvalidModelMetadata(format!(
+                "unsupported llama.rope.scaling.type {other:?}; expected none, linear, or llama3"
+            )))
+        }
+    };
+
+    let factor = config.rope_scaling_factor.unwrap_or(1.0);
+    if factor <= 0.0 || !factor.is_finite() {
+        return Err(BackendError::InvalidModelMetadata(format!(
+            "RoPE scaling factor {factor} must be finite and positive"
+        )));
+    }
+
+    match kind {
+        RopeScalingKind::None => Ok(RopeScaling {
+            kind,
+            factor: 1.0,
+            original_context_length: None,
+            low_freq_factor: None,
+            high_freq_factor: None,
+        }),
+        RopeScalingKind::Linear => Ok(RopeScaling {
+            kind,
+            factor,
+            original_context_length: None,
+            low_freq_factor: None,
+            high_freq_factor: None,
+        }),
+        RopeScalingKind::Llama3 => {
+            let original_context_length =
+                config.rope_scaling_original_context_length.unwrap_or(8_192);
+            if original_context_length == 0 {
+                return Err(BackendError::InvalidModelMetadata(
+                    "llama3 RoPE scaling original context length must be greater than zero"
+                        .to_string(),
+                ));
+            }
+            let low_freq_factor = config.rope_scaling_low_freq_factor.unwrap_or(1.0);
+            let high_freq_factor = config.rope_scaling_high_freq_factor.unwrap_or(4.0);
+            if low_freq_factor <= 0.0
+                || high_freq_factor <= 0.0
+                || !low_freq_factor.is_finite()
+                || !high_freq_factor.is_finite()
+                || high_freq_factor <= low_freq_factor
+            {
+                return Err(BackendError::InvalidModelMetadata(format!(
+                    "llama3 RoPE scaling frequency factors must be finite, positive, and high > low; got low={low_freq_factor}, high={high_freq_factor}"
+                )));
+            }
+            Ok(RopeScaling {
+                kind,
+                factor,
+                original_context_length: Some(original_context_length),
+                low_freq_factor: Some(low_freq_factor),
+                high_freq_factor: Some(high_freq_factor),
+            })
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-struct RopeParams {
+struct RopeParams<'a> {
     position: usize,
     head_count: usize,
     head_dim: usize,
@@ -4658,11 +4819,13 @@ struct RopeParams {
     pairing: RopePairing,
     direction: RopeDirection,
     position_mode: RopePositionMode,
+    scaling: RopeScaling,
+    rope_freqs: Option<&'a [f32]>,
 }
 
 fn apply_rope_with_pairing(
     tensor: &CpuTensor,
-    params: RopeParams,
+    params: RopeParams<'_>,
     name: impl Into<String>,
 ) -> Result<CpuTensor> {
     let mut data = tensor.data.clone();
@@ -4679,9 +4842,7 @@ fn apply_rope_with_pairing(
                     head_start + pair_idx + (params.rope_dim / 2),
                 ),
             };
-            let theta = params
-                .freq_base
-                .powf(-(pair_idx as f32 * 2.0) / params.rope_dim as f32);
+            let theta = rope_pair_frequency(pair_idx, &params);
             let angle = params.position_mode.effective_position(params.position) as f32 * theta;
             let (sin, cos) = angle.sin_cos();
             let x0 = data[dim0];
@@ -4702,12 +4863,53 @@ fn apply_rope_with_pairing(
     CpuTensor::from_f32(name, tensor.shape.dims.clone(), data)
 }
 
+fn rope_pair_frequency(pair_idx: usize, params: &RopeParams<'_>) -> f32 {
+    if let Some(rope_freqs) = params.rope_freqs {
+        return rope_freqs[pair_idx];
+    }
+    let base_frequency = params
+        .freq_base
+        .powf(-(pair_idx as f32 * 2.0) / params.rope_dim as f32);
+    match params.scaling.kind {
+        RopeScalingKind::None => base_frequency,
+        RopeScalingKind::Linear => base_frequency / params.scaling.factor,
+        RopeScalingKind::Llama3 => llama3_scaled_rope_frequency(base_frequency, params.scaling),
+    }
+}
+
+fn llama3_scaled_rope_frequency(frequency: f32, scaling: RopeScaling) -> f32 {
+    let original_context_length = scaling
+        .original_context_length
+        .expect("validated llama3 scaling has original context length")
+        as f32;
+    let low_freq_factor = scaling
+        .low_freq_factor
+        .expect("validated llama3 scaling has low freq factor");
+    let high_freq_factor = scaling
+        .high_freq_factor
+        .expect("validated llama3 scaling has high freq factor");
+
+    let wavelength = (2.0 * std::f32::consts::PI) / frequency;
+    let low_freq_wavelength = original_context_length / low_freq_factor;
+    let high_freq_wavelength = original_context_length / high_freq_factor;
+    if wavelength < high_freq_wavelength {
+        frequency
+    } else if wavelength > low_freq_wavelength {
+        frequency / scaling.factor
+    } else {
+        let smooth = (original_context_length / wavelength - low_freq_factor)
+            / (high_freq_factor - low_freq_factor);
+        ((1.0 - smooth) * frequency / scaling.factor) + (smooth * frequency)
+    }
+}
+
 fn rope_diagnostics(
     input: &CpuTensor,
     reported: &CpuTensor,
     position: usize,
     head_count: usize,
     config: &LlamaModelConfig,
+    rope_freqs: Option<&CpuTensor>,
     role: &str,
 ) -> Result<LlamaRopeDiagnostic> {
     if head_count == 0 {
@@ -4744,6 +4946,10 @@ fn rope_diagnostics(
     let pairing = diagnostic_rope_pairing()?;
     let direction = diagnostic_rope_direction()?;
     let position_mode = diagnostic_rope_position_mode()?;
+    let scaling = rope_scaling_from_config(config)?;
+    let rope_freqs = rope_freqs
+        .map(|freqs| validate_rope_frequency_tensor(freqs, rope_dim))
+        .transpose()?;
     let reconstructed = apply_rope_with_pairing(
         input,
         RopeParams {
@@ -4755,6 +4961,8 @@ fn rope_diagnostics(
             pairing,
             direction,
             position_mode,
+            scaling,
+            rope_freqs,
         },
         format!("{role}_rope_diagnostic"),
     )?;
@@ -4797,6 +5005,17 @@ fn rope_diagnostics(
         pairing: pairing.label(),
         direction: direction.label(),
         position_mode: position_mode.label(),
+        frequency_source: if rope_freqs.is_some() {
+            "rope_freqs.weight"
+        } else {
+            "metadata"
+        },
+        rope_freqs_count: rope_freqs.map(<[f32]>::len),
+        scaling_type: scaling.kind.label(),
+        scaling_factor: scaling.factor,
+        scaling_original_context_length: scaling.original_context_length,
+        scaling_low_freq_factor: scaling.low_freq_factor,
+        scaling_high_freq_factor: scaling.high_freq_factor,
         position,
         effective_position: position_mode.effective_position(position),
         head_count,
@@ -5345,6 +5564,16 @@ mod tests {
                 (*actual - *expected).abs() < 1e-5,
                 "expected index {idx} to be {expected}, got {actual}"
             );
+        }
+    }
+
+    fn no_rope_scaling() -> RopeScaling {
+        RopeScaling {
+            kind: RopeScalingKind::None,
+            factor: 1.0,
+            original_context_length: None,
+            low_freq_factor: None,
+            high_freq_factor: None,
         }
     }
 
@@ -6208,13 +6437,18 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(2),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
-        let rotated = apply_rope(&tensor, 1, 2, &config, "query_rope").unwrap();
+        let rotated = apply_rope(&tensor, 1, 2, &config, None, "query_rope").unwrap();
 
         let (sin, cos) = 1.0_f32.sin_cos();
         assert_eq!(rotated.shape.dims, vec![1, 4]);
@@ -6238,14 +6472,20 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(4),
             rope_freq_base: Some(500_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-5,
             vocab_size: None,
             file_type: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
 
-        let rotated = apply_rope(&tensor, 1, 1, &config, "query_rope").unwrap();
-        let diagnostic = rope_diagnostics(&tensor, &rotated, 1, 1, &config, "attention_q").unwrap();
+        let rotated = apply_rope(&tensor, 1, 1, &config, None, "query_rope").unwrap();
+        let diagnostic =
+            rope_diagnostics(&tensor, &rotated, 1, 1, &config, None, "attention_q").unwrap();
 
         let theta_500k = 500_000.0_f32.powf(-0.5);
         let (sin_500k, cos_500k) = theta_500k.sin_cos();
@@ -6260,6 +6500,108 @@ mod tests {
             "RoPE rotation unexpectedly matched the TinyLlama 10000 fallback instead of GGUF freq_base=500000"
         );
         assert_eq!(diagnostic.freq_base, 500_000.0);
+        assert!(diagnostic.max_abs_delta < 1e-7);
+    }
+
+    #[test]
+    fn apply_rope_uses_llama3_frequency_scaling_metadata() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let config = LlamaModelConfig {
+            context_length: 32,
+            embedding_length: 4,
+            block_count: 1,
+            feed_forward_length: 8,
+            attention_head_count: 1,
+            attention_head_count_kv: 1,
+            rope_dimension_count: Some(4),
+            rope_freq_base: Some(10_000.0),
+            rope_scaling_type: Some("llama3".to_string()),
+            rope_scaling_factor: Some(8.0),
+            rope_scaling_original_context_length: Some(16),
+            rope_scaling_low_freq_factor: Some(1.0),
+            rope_scaling_high_freq_factor: Some(4.0),
+            rms_norm_epsilon: 1e-5,
+            vocab_size: None,
+            file_type: None,
+        };
+        let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
+
+        let rotated = apply_rope(&tensor, 8, 1, &config, None, "query_rope").unwrap();
+        let diagnostic =
+            rope_diagnostics(&tensor, &rotated, 8, 1, &config, None, "attention_q").unwrap();
+
+        let base_theta = 10_000.0_f32.powf(-0.5);
+        let scaled_theta = base_theta / 8.0;
+        let (scaled_sin, scaled_cos) = (8.0 * scaled_theta).sin_cos();
+        let (unscaled_sin, _) = (8.0 * base_theta).sin_cos();
+
+        assert_eq!(rotated.shape.dims, vec![1, 4]);
+        assert_close(rotated.data[2], scaled_cos);
+        assert_close(rotated.data[3], scaled_sin);
+        assert!(
+            (rotated.data[3] - unscaled_sin).abs() > 1e-2,
+            "RoPE rotation unexpectedly ignored llama3 scaling metadata"
+        );
+        assert_eq!(diagnostic.scaling_type, "llama3");
+        assert_eq!(diagnostic.scaling_factor, 8.0);
+        assert_eq!(diagnostic.scaling_original_context_length, Some(16));
+        assert_eq!(diagnostic.scaling_low_freq_factor, Some(1.0));
+        assert_eq!(diagnostic.scaling_high_freq_factor, Some(4.0));
+        assert!(diagnostic.max_abs_delta < 1e-7);
+    }
+
+    #[test]
+    fn apply_rope_prefers_gguf_rope_frequency_tensor() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let config = LlamaModelConfig {
+            context_length: 32,
+            embedding_length: 4,
+            block_count: 1,
+            feed_forward_length: 8,
+            attention_head_count: 1,
+            attention_head_count_kv: 1,
+            rope_dimension_count: Some(4),
+            rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
+            rms_norm_epsilon: 1e-5,
+            vocab_size: None,
+            file_type: None,
+        };
+        let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
+        let rope_freqs =
+            CpuTensor::from_f32("rope_freqs.weight", vec![2], vec![1.0, 0.125]).unwrap();
+
+        let rotated = apply_rope(&tensor, 8, 1, &config, Some(&rope_freqs), "query_rope").unwrap();
+        let diagnostic = rope_diagnostics(
+            &tensor,
+            &rotated,
+            8,
+            1,
+            &config,
+            Some(&rope_freqs),
+            "attention_q",
+        )
+        .unwrap();
+
+        let (tensor_sin, tensor_cos) = (8.0_f32 * 0.125).sin_cos();
+        let (derived_sin, _) = (8.0_f32 * 10_000.0_f32.powf(-0.5)).sin_cos();
+
+        assert_close(rotated.data[2], tensor_cos);
+        assert_close(rotated.data[3], tensor_sin);
+        assert!(
+            (rotated.data[3] - derived_sin).abs() > 0.5,
+            "RoPE rotation unexpectedly ignored rope_freqs.weight"
+        );
+        assert_eq!(diagnostic.frequency_source, "rope_freqs.weight");
+        assert_eq!(diagnostic.rope_freqs_count, Some(2));
         assert!(diagnostic.max_abs_delta < 1e-7);
     }
 
@@ -6279,15 +6621,20 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(2),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
-        let reported = apply_rope(&tensor, 1, 2, &config, "query_rope").unwrap();
+        let reported = apply_rope(&tensor, 1, 2, &config, None, "query_rope").unwrap();
 
         let diagnostic =
-            rope_diagnostics(&tensor, &reported, 1, 2, &config, "attention_q").unwrap();
+            rope_diagnostics(&tensor, &reported, 1, 2, &config, None, "attention_q").unwrap();
 
         assert_eq!(diagnostic.role, "attention_q");
         assert_eq!(diagnostic.pairing, "adjacent_even_odd");
@@ -6335,6 +6682,11 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(4),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
@@ -6355,6 +6707,8 @@ mod tests {
                 pairing: RopePairing::AdjacentEvenOdd,
                 direction: RopeDirection::Forward,
                 position_mode: RopePositionMode::ZeroBased,
+                scaling: no_rope_scaling(),
+                rope_freqs: None,
             },
             "adjacent",
         )
@@ -6370,6 +6724,8 @@ mod tests {
                 pairing: RopePairing::SplitHalf,
                 direction: RopeDirection::Forward,
                 position_mode: RopePositionMode::ZeroBased,
+                scaling: no_rope_scaling(),
+                rope_freqs: None,
             },
             "split",
         )
@@ -6399,6 +6755,11 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(2),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
@@ -6419,6 +6780,8 @@ mod tests {
                 pairing: RopePairing::AdjacentEvenOdd,
                 direction: RopeDirection::Forward,
                 position_mode: RopePositionMode::ZeroBased,
+                scaling: no_rope_scaling(),
+                rope_freqs: None,
             },
             "forward",
         )
@@ -6434,6 +6797,8 @@ mod tests {
                 pairing: RopePairing::AdjacentEvenOdd,
                 direction: RopeDirection::Inverse,
                 position_mode: RopePositionMode::ZeroBased,
+                scaling: no_rope_scaling(),
+                rope_freqs: None,
             },
             "inverse",
         )
@@ -6462,14 +6827,20 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(2),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 2], vec![1.0, 0.0]).unwrap();
 
-        let rotated = apply_rope(&tensor, 0, 1, &config, "query_rope").unwrap();
-        let diagnostic = rope_diagnostics(&tensor, &rotated, 0, 1, &config, "attention_q").unwrap();
+        let rotated = apply_rope(&tensor, 0, 1, &config, None, "query_rope").unwrap();
+        let diagnostic =
+            rope_diagnostics(&tensor, &rotated, 0, 1, &config, None, "attention_q").unwrap();
 
         let (sin, cos) = 1.0_f32.sin_cos();
         assert_close(rotated.data[0], cos);
@@ -7190,6 +7561,11 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(2),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 0.0,
             vocab_size: Some(3),
             file_type: None,
@@ -7218,6 +7594,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            rope_freqs: None,
             layers: vec![LlamaLayerWeights {
                 attention_norm: CpuTensor::from_f32(
                     "blk.0.attn_norm.weight",

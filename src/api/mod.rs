@@ -376,6 +376,11 @@ pub struct DenseDiagnosticMetadata {
     pub head_dim: usize,
     pub rope_dimension_count: usize,
     pub rope_freq_base: f32,
+    pub rope_scaling_type: String,
+    pub rope_scaling_factor: Option<f32>,
+    pub rope_scaling_original_context_length: Option<u32>,
+    pub rope_scaling_low_freq_factor: Option<f32>,
+    pub rope_scaling_high_freq_factor: Option<f32>,
     pub rope_pairing: &'static str,
     pub rope_direction: &'static str,
     pub rope_position_mode: &'static str,
@@ -1534,6 +1539,19 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
                 )
             })?;
     }
+    if let Some(rope_freqs) = &binding.rope_freqs {
+        total = total
+            .checked_add(tensor_estimate(
+                rope_freqs,
+                retain_q8_blocks,
+                lazy_q8_linear,
+            )?)
+            .ok_or_else(|| {
+                BackendError::InvalidTensorData(
+                    "CPU materialization byte estimate overflow".to_string(),
+                )
+            })?;
+    }
     for layer in &binding.layers {
         for desc in [
             &layer.attention_norm,
@@ -1805,6 +1823,16 @@ fn dense_diagnostic_metadata(
         head_dim,
         rope_dimension_count: config.rope_dimension_count.unwrap_or(head_dim as u32) as usize,
         rope_freq_base: config.rope_freq_base.unwrap_or(10_000.0),
+        rope_scaling_type: config
+            .rope_scaling_type
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("none")
+            .to_string(),
+        rope_scaling_factor: config.rope_scaling_factor,
+        rope_scaling_original_context_length: config.rope_scaling_original_context_length,
+        rope_scaling_low_freq_factor: config.rope_scaling_low_freq_factor,
+        rope_scaling_high_freq_factor: config.rope_scaling_high_freq_factor,
         rope_pairing: diagnostic_rope_pairing()
             .map(|pairing| pairing.label())
             .unwrap_or("invalid_env"),
@@ -3645,6 +3673,7 @@ mod tests {
             output_norm: desc("output_norm.weight"),
             output: desc("output.weight"),
             output_is_tied_embedding: tied_output,
+            rope_freqs: None,
             layers: vec![crate::model::LlamaLayerTensors {
                 attention_norm: desc("blk.0.attn_norm.weight"),
                 attention_q: desc("blk.0.attn_q.weight"),
@@ -3720,6 +3749,11 @@ mod tests {
             head_dim: 2,
             rope_dimension_count: 2,
             rope_freq_base: 10_000.0,
+            rope_scaling_type: "none".to_string(),
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rope_pairing: "split_half",
             rope_direction: "forward",
             rope_position_mode: "zero_based",
@@ -3780,6 +3814,11 @@ mod tests {
             attention_head_count_kv: 1,
             rope_dimension_count: Some(2),
             rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
             rms_norm_epsilon: 1e-6,
             vocab_size: Some(3),
             file_type: Some(0),
@@ -3801,6 +3840,7 @@ mod tests {
                 vec![3, hidden],
                 vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             )),
+            rope_freqs: None,
             layers: vec![LlamaLayerWeights {
                 attention_norm: ones("blk.0.attn_norm.weight", hidden),
                 attention_q: select_rows("blk.0.attn_q.weight", hidden, hidden, &[0, 1, 2, 3]),

@@ -67,6 +67,16 @@ fn accepts_llama3_style_gqa_metadata_and_rope_theta() {
     assert_eq!(config.attention_head_count_kv, 2);
     assert_eq!(config.rope_dimension_count, Some(4));
     assert_eq!(config.rope_freq_base, Some(500_000.0));
+    assert_eq!(config.rope_scaling_type.as_deref(), Some("llama3"));
+    assert_eq!(config.rope_scaling_factor, Some(32.0));
+    assert_eq!(config.rope_scaling_original_context_length, Some(8192));
+    assert_eq!(config.rope_scaling_low_freq_factor, Some(1.0));
+    assert_eq!(config.rope_scaling_high_freq_factor, Some(4.0));
+    assert_eq!(
+        binding.rope_freqs.as_ref().unwrap().name,
+        "rope_freqs.weight"
+    );
+    assert_eq!(binding.rope_freqs.as_ref().unwrap().dimensions, vec![2]);
     assert_eq!(binding.layers[0].attention_q.dimensions, vec![32, 32]);
     assert_eq!(binding.layers[0].attention_k.dimensions, vec![32, 8]);
     assert_eq!(binding.layers[0].attention_v.dimensions, vec![32, 8]);
@@ -215,6 +225,7 @@ fn write_llama_gguf_with_bad_attention_k_shape(path: &Path) {
 fn write_scaled_llama3_style_gqa_gguf(path: &Path) {
     let tensors: Vec<(&str, Vec<i64>)> = vec![
         ("token_embd.weight", vec![4, 32]),
+        ("rope_freqs.weight", vec![2]),
         ("output_norm.weight", vec![32]),
         ("blk.0.attn_norm.weight", vec![32]),
         ("blk.0.attn_q.weight", vec![32, 32]),
@@ -232,7 +243,7 @@ fn write_scaled_llama3_style_gqa_gguf(path: &Path) {
     b.extend_from_slice(b"GGUF");
     push_u32(&mut b, 3);
     push_i64(&mut b, tensors.len() as i64);
-    push_i64(&mut b, 12);
+    push_i64(&mut b, 17);
 
     push_kv_string(&mut b, "general.architecture", "llama");
     push_kv_u32(&mut b, "general.file_type", 0);
@@ -244,6 +255,11 @@ fn write_scaled_llama3_style_gqa_gguf(path: &Path) {
     push_kv_u32(&mut b, "llama.attention.head_count_kv", 2);
     push_kv_u32(&mut b, "llama.rope.dimension_count", 4);
     push_kv_f32(&mut b, "llama.rope.freq_base", 500_000.0);
+    push_kv_string(&mut b, "llama.rope.scaling.type", "llama3");
+    push_kv_f32(&mut b, "llama.rope.scaling.factor", 32.0);
+    push_kv_u32(&mut b, "llama.rope.scaling.original_context_length", 8192);
+    push_kv_f32(&mut b, "llama.rope.scaling.low_freq_factor", 1.0);
+    push_kv_f32(&mut b, "llama.rope.scaling.high_freq_factor", 4.0);
     push_kv_f32(&mut b, "llama.attention.layer_norm_rms_epsilon", 1e-5);
     push_kv_u32(&mut b, "llama.vocab_size", 4);
 
@@ -257,6 +273,9 @@ fn write_scaled_llama3_style_gqa_gguf(path: &Path) {
         push_i32(&mut b, 0); // f32
         push_u64(&mut b, relative_offset);
         relative_offset += dims.iter().product::<i64>() as u64 * 4;
+        while !relative_offset.is_multiple_of(32) {
+            relative_offset += 1;
+        }
     }
 
     while !b.len().is_multiple_of(32) {
