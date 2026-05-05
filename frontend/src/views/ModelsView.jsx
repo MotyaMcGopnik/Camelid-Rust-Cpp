@@ -679,6 +679,7 @@ export default function ModelsView({
                     {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B five-prompt API smoke passed</div>}
                     {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B first 512-context pack passed</div>}
                     {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B second 1024-context pack passed</div>}
+                    {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B third 2048-context pack passed</div>}
                     {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B compact template-shapes pack passed</div>}
                     {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B unique-chat perf/RSS passed</div>}
                     {target.id === 'llama3_8b_instruct_q8_0' && <div className="pin-badge ready">8B API/WebUI smoke passed</div>}

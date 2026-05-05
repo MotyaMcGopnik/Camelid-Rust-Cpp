@@ -56,7 +56,7 @@ Protect the supported lanes and clear the next blocker before widening claims.
 
 - Protect the validated TinyLlama Q8_0 gate.
 - Protect the exact Llama 3.2 1B/3B and Llama 3 8B Instruct Q8_0 short-chat/parity smoke gates.
-- Preserve the Llama 3.2 3B broader prompt-pack win while expanding only after longer-context, stronger performance/portability, and broader chat-template evidence land.
+- Preserve the Llama 3.2 3B broader prompt-pack plus bounded 512/1024/2048 context-pack wins while expanding only after model-native/larger-context, stronger performance/portability, and broader chat-template evidence land.
 - Preserve the Llama 3 8B exact-row promotion while broadening prompt-pack length, chat-template coverage, longer context, WebUI/performance, and portability evidence without widening the support claim.
 - Keep README, `COMPATIBILITY.md`, `ROADMAP.md`, `STATUS.md`, `/api/capabilities`, and frontend readiness copy aligned.
 
@@ -102,7 +102,7 @@ Current required discipline:
 
 - TinyLlama 1.1B Chat Q8_0 remains a supported generation gate.
 - Llama 3.2 1B Q8_0 is supported only as an exact-row short-chat smoke lane.
-- Llama 3.2 3B Q8_0 is supported as an exact-row smoke lane with compact and broader three-prompt parity evidence; longer-context and broader chat-template expansion remain gated.
+- Llama 3.2 3B Q8_0 is supported as an exact-row smoke lane with compact and broader three-prompt parity plus bounded 512/1024/2048 context-pack evidence; model-native/larger-context and broader chat-template expansion remain gated.
 - Llama 3 8B Q8_0 is supported as an exact-row smoke/parity lane with compact parity, the three-prompt 50-token pass, API/frontend smoke, bounded memory evidence, one bounded 512-context pack, and one compact chat-template-shapes pack; longer-context, broader chat-template, performance, and portability expansion remain gated.
 - Frontend readiness must remain exact-row and exact-quant aware.
 - Support-language updates should point first to the committed `qa/evidence-bundles/...` manifests/checksums and only then to raw `target/` drill-down artifacts.
