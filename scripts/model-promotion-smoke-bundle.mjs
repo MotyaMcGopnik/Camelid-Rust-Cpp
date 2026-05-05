@@ -15,6 +15,7 @@ const temperature = Number.parseFloat(args.get('temperature') || '0')
 const skipFrontend = args.has('skip-frontend')
 const allowGuardedChat = args.has('allow-guarded-chat')
 const frontendScript = resolve(args.get('frontend-script') || 'frontend/scripts/smoke.mjs')
+const timingsScript = resolve(args.get('timings-script') || 'scripts/summarize-generation-timings.mjs')
 const expectCompatibilityRow = args.get('expect-compatibility-row') || ''
 const expectCompatibilityStatus = args.get('expect-compatibility-status') || ''
 const expectContractSupported = args.get('expect-contract-supported') || ''
@@ -71,11 +72,12 @@ try {
     temperature,
   }
   await writeJson(join(outDir, 'completion.request.json'), completionRequest)
+  const completionResponsePath = join(outDir, 'completion.response.json')
   const completionResponse = await fetchJson(`${apiBase}/v1/completions`, {
     method: 'POST',
     body: JSON.stringify(completionRequest),
   })
-  await recordStep('v1_completions', completionResponse, join(outDir, 'completion.response.json'))
+  await recordStep('v1_completions', completionResponse, completionResponsePath)
 
   const chatRequest = {
     model: modelId,
@@ -85,11 +87,34 @@ try {
     temperature,
   }
   await writeJson(join(outDir, 'chat.request.json'), chatRequest)
+  const chatResponsePath = join(outDir, 'chat.response.json')
   const chatResponse = await fetchJson(`${apiBase}/v1/chat/completions`, {
     method: 'POST',
     body: JSON.stringify(chatRequest),
   })
-  await recordStep('v1_chat_completions', chatResponse, join(outDir, 'chat.response.json'))
+  await recordStep('v1_chat_completions', chatResponse, chatResponsePath)
+
+  const timingsReportPath = join(outDir, 'generation-timings.summary.json')
+  const timingsCommand = [
+    process.execPath,
+    timingsScript,
+    '--out', timingsReportPath,
+    completionResponsePath,
+    chatResponsePath,
+  ]
+  await writeFile(join(outDir, 'generation-timings.command.txt'), `${shellJoin(timingsCommand)}\n`)
+  const timingsRun = await run(timingsCommand[0], timingsCommand.slice(1))
+  await writeFile(join(outDir, 'generation-timings.stdout.log'), timingsRun.stdout)
+  await writeFile(join(outDir, 'generation-timings.stderr.log'), timingsRun.stderr)
+  const timingsSummary = {
+    command: timingsCommand,
+    exit_code: timingsRun.code,
+    summary_path: timingsReportPath,
+  }
+  if (timingsRun.code !== 0) {
+    timingsSummary.__error = `generation timing summary exited ${timingsRun.code}`
+  }
+  await recordStep('generation_timings', timingsSummary, join(outDir, 'generation-timings.run.json'))
 
   const healthAfter = await tryFetchJson(`${apiBase}/v1/health`)
   await recordStep('health_after', healthAfter, join(outDir, 'health-after.json'))

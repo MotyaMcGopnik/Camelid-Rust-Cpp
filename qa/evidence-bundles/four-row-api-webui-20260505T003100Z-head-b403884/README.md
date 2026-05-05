@@ -17,4 +17,4 @@ Covered in this bundle:
 - `/v1/chat/completions`
 - frontend smoke contract checks
 
-Boundary: this is freshness evidence for the four exact supported/smoke-supported rows only. It does not promote broad Llama-family support, neighboring rows, other quantizations, longer contexts, full parity, or performance portability. The first 8B 512-context pass is recorded separately at `../llama3-8b-context-512-20260504T234625Z-head-58acf592345c/`.
+Boundary: this is freshness evidence for the four exact supported/smoke-supported rows only. It does not promote broad Llama-family support, neighboring rows, other quantizations, longer contexts, arbitrary-template support, full parity, or performance portability. The bounded 8B broader 50-token pass is recorded separately at `../llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/`, the first 8B 512-context pass is recorded separately at `../llama3-8b-context-512-20260504T234625Z-head-58acf592345c/`, and the bounded 8B compact chat-template-shapes pass is recorded separately at `../llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/`.

@@ -144,7 +144,7 @@ const capabilityFixture = {
     { id: 'llama_spm_q4_k_q5_k', family: 'llama_spm_decoder', quantization: 'Q4_K_M/Q5_K_M', status: 'planned_phase_10', next_step: 'implement K-quant support' },
     { id: 'llama32_1b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'supported_exact_row_smoke', evidence: '1B exact-row load, completion, chat, frontend smoke, and prompt-pack evidence' },
     { id: 'llama32_3b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'supported_exact_row_smoke', evidence: '3B exact-row load, completion, chat, frontend smoke, compact parity, and broader prompt-pack evidence' },
-    { id: 'llama3_8b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'supported_exact_row_smoke', evidence: '8B exact-row API/frontend smoke plus compact and prompt-pack parity evidence' },
+    { id: 'llama3_8b_instruct_q8_0', family: 'llama_bpe_decoder', quantization: 'Q8_0', status: 'supported_exact_row_smoke', evidence: '8B exact-row API/frontend smoke plus compact 50-token, broader 50-token, first 512-context, and compact template-shapes pack evidence only' },
   ],
 }
 assert.deepEqual(
@@ -211,6 +211,7 @@ assert.equal(
 )
 const llama3EightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama3EightBHint.target.id, 'llama3_8b_instruct_q8_0', 'Llama 3 8B must match its exact supported row')
+assert.match(compatibilityHintCopy(llama3EightBHint), /first 512-context, and compact template-shapes pack evidence only/)
 const llama3HyphenEightBHint = findCompatibilityHint(capabilityFixture, { name: 'Meta-Llama-3-8B-Instruct-Q8_0', quant: 'Q8_0' })
 assert.equal(llama3HyphenEightBHint.target.id, 'llama3_8b_instruct_q8_0', 'Llama-3-8B filenames should match the exact Llama 3 8B row')
 const llama3EightBQuantMissingHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct' })

@@ -1,12 +1,12 @@
 # Camelid Status
 
-Last updated: 2026-05-04
+Last updated: 2026-05-05
 
 `STATUS.md` is Camelid's current release-evidence checkpoint. It records what Camelid can prove today, what moved recently, and what still blocks the next support change. Treat it as a briefing memo, not a diary. Detailed historical run logs, older validation slices, and superseded tactical notes now live in [`STATUS_ARCHIVE_2026-04.md`](STATUS_ARCHIVE_2026-04.md).
 
 Use this file to answer three practical questions: what is supported now, what changed recently, and what still blocks the next support move?
 
-Executive summary: Camelid now has full API + frontend end-to-end smoke for the exact Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Instruct Q8_0 rows, refreshed on the reopened Ubuntu validation lane. The previous 3B JSON-shaped broader prompt-pack blocker is resolved, the 8B long-timeout three-prompt parity rerun passed, and the first bounded 8B 512-context pack now has a passing public summary. The public support boundary moved only for those exact rows and only for the validated local-chat/parity envelopes; broad Llama-family support, larger contexts, and portability remain outside the support claim.
+Executive summary: Camelid now has full API + frontend end-to-end smoke for the exact Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Instruct Q8_0 rows, refreshed on the reopened Ubuntu validation lane. The previous 3B JSON-shaped broader prompt-pack blocker is resolved, the 8B broader three-prompt 50-token rerun passed, and the first bounded 8B 512-context plus compact chat-template-shapes packs now have passing public summaries. The public support boundary moved only for those exact rows and only for the validated local-chat/parity envelopes; broad Llama-family support, larger contexts, arbitrary template execution, and portability remain outside the support claim.
 
 ## Release ledger snapshot
 
@@ -18,7 +18,7 @@ For a fast read, the current answer is:
 
 - **Supported generation gates:** TinyLlama 1.1B Chat Q8_0 remains supported, and the exact Llama 3.2 1B/3B plus Llama 3 8B Instruct Q8_0 rows are now smoke-supported for short local chat/parity after exact-row load, completion, chat-completion, frontend smoke, and parity evidence.
 - **Scope boundary:** Llama support is exact-row only: model version/size, Instruct variant, Q8_0 quantization, loaded runtime readiness, and the tested smoke/parity envelope all matter.
-- **8B promotion:** Llama 3 8B Instruct Q8_0 now has end-to-end generation parity artifacts: compact parity, a long-timeout three-prompt 5-token Ubuntu parity run, API/frontend smoke, and bounded-memory evidence all agree for the exact tracked Q8_0 GGUF.
+- **8B promotion:** Llama 3 8B Instruct Q8_0 now has end-to-end generation parity artifacts: compact parity, a three-prompt 50-token Ubuntu parity run, the bounded compact chat-template-shapes pack, API/frontend smoke, and bounded-memory evidence all agree for the exact tracked Q8_0 GGUF.
 - **Explicit non-claim:** no broad Llama-family support exists today; neighboring variants remain unsupported unless they have their own exact row and evidence.
 
 Two standing rules apply to every row:
@@ -37,6 +37,8 @@ Bottom line for reviewers: Camelid has the original TinyLlama supported gate plu
 - `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/manifest.json` plus its per-row manifests/checksums are the durable current-head citation target for exact rerun tracks, blocker notes, and command files.
 - `qa/evidence-bundles/four-row-api-webui-20260505T003100Z-head-b403884/manifest.json` is the latest sanitized API + frontend smoke summary for all four exact rows on a clean public checkout; `qa/evidence-bundles/four-row-api-only-20260504T230722Z-head-13a465608fbf/manifest.json` is the narrower API-only predecessor.
 - `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json` records the reopened-lane pass for the first bounded 8B 512-context pack.
+- `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json` records the reopened-lane pass for the bounded 8B broader three-prompt 50-token pack.
+- `qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/manifest.json` records the reopened-lane pass for the bounded 8B compact chat-template-shapes pack.
 - Raw `target/` paths below are drill-down artifacts only; they are not the sole public evidence anchor.
 
 ## What changed in this support line
@@ -47,7 +49,7 @@ Recent work moved the exact-row release ledger in a narrow, evidence-backed way:
 - Llama 3.2 1B Q8_0 moved from evidence-only to supported exact-row smoke after compact parity, broader prompt-pack parity, `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned.
 - Llama 3.2 3B Q8_0 moved from acceptance target to supported exact-row smoke after exact-row load, compact prompt-token/1-token/5-token/50-token parity, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence aligned.
 - The 3B broader JSON-shaped prompt divergence is now resolved: a post-Q8-dot rerun of the three-prompt, 50-token pack matched llama.cpp for prompt tokens, generated token IDs, and generated text.
-- Llama 3 8B Q8_0 moved from groundwork-only to supported exact-row smoke after the long-timeout Ubuntu three-prompt 5-token parity run, API/frontend smoke, and bounded memory evidence aligned.
+- Llama 3 8B Q8_0 moved from groundwork-only to supported exact-row smoke after Ubuntu three-prompt parity, API/frontend smoke, and bounded memory evidence aligned; the current public broader-pack rerun is the bounded three-prompt 50-token pass.
 
 Bottom line: the engineering seam and product surface now agree for exact 1B/3B/8B short chat/parity; the support language stays intentionally narrow.
 
@@ -147,8 +149,9 @@ Current evidence boundary:
 - Independent tokenizer reference fixtures exist.
 - Lazy/file-backed Q8 execution is now good enough for repeat bounded parity on the exact tracked Q8_0 GGUF.
 - The Ubuntu compact-header `hello` harness matches llama.cpp for prompt tokens and deterministic generation at 1, 5, and bounded 50-token lengths on this exact row.
-- The long-timeout Ubuntu three-prompt 5-token parity run passed for `hello`, alpacas, and JSON with prompt tokens, generated token IDs, and generated text all matching the known-good reference.
+- The Ubuntu three-prompt 50-token parity run passed for `hello`, alpacas, and JSON with prompt tokens, generated token IDs, and generated text all matching the known-good reference.
 - The first bounded 512-context pack now passes on the reopened Ubuntu lane: prompt tokens, generated token IDs, and generated text matched for `qa/prompt-packs/llama3-context-512-smoke.json` at `58acf592345c69c1b684544124cd23804e2899f1`.
+- The bounded compact chat-template-shapes pack now passes on the reopened Ubuntu lane: all 4 prompts in `qa/prompt-packs/llama3-chat-template-shapes.json` matched prompt tokens, generated token IDs, and generated text at `d13541ad8d7e87426cddd0d0a13e292f39c73f31`.
 - `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke passed for this exact row.
 - The support claim is limited to this exact Llama 3 8B Instruct Q8_0 row and tested smoke/parity envelope; neighboring Llama rows, other quantizations, larger contexts, and broader chat-template behavior remain outside the claim.
 
@@ -159,13 +162,17 @@ Representative durable evidence:
 - `qa/evidence-bundles/four-row-public-20260503T024327Z/SHA256SUMS`
 - `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json`
 - `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/llama3_8b_instruct_q8_0/manifest.json`
+- `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json`
 - `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json`
+- `qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/manifest.json`
+- `qa/validation-notes/2026-05-05-8b-broader-50tok.md`
 - `qa/validation-notes/2026-05-04-8b-context-512-rerun.md`
+- `qa/validation-notes/2026-05-05-8b-chat-template-shapes.md`
 - `qa/validation-notes/2026-05-03-ubuntu-toolchain-and-8b-context.md`
 
 Selected source artifacts recorded by those committed files:
 
-- `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json` is the broader three-prompt 5-token parity pass referenced by the row bundle.
+- `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json` is the public sanitized broader three-prompt 50-token parity pass for the exact 8B row; the older `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json` remains historical carry-forward evidence only.
 - `target/ubuntu-llama3-8b-q8-current-head-20260502T000207Z/validation-summary.json` is the bounded-RSS short-slice summary carried forward beside the current-head blocker note.
 
 ## Latest promotion-relevant work
@@ -202,8 +209,9 @@ Recent backend work converted the 8B runtime artifacts into an exact-row support
 - repeat bounded backend-only `/v1/completions` first-token probes returned `,` for prompt `hello`
 - current-head raw `hello` prompt-token parity matched `[128000, 15339]` for the exact same model SHA
 - a short deterministic 5-token backend slice returned `, I'm a new`
-- the long-timeout Ubuntu three-prompt 5-token parity run passed for `hello`, alpacas, and JSON: `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json`
+- the Ubuntu three-prompt 50-token parity run passed for `hello`, alpacas, and JSON: `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json`
 - the reopened-lane first 512-context pack passed with prompt-token, generated-token, and generated-text parity; public summary/checksums live at `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/`
+- the reopened-lane compact chat-template-shapes pack passed all 4 checked shapes with prompt-token, generated-token, and generated-text parity; public summary/checksums live at `qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/`
 - `/v1/completions`, `/v1/chat/completions`, and frontend smoke are preserved in the sanitized carry-forward bundle at `qa/evidence-bundles/four-row-public-20260503T024327Z/llama3_8b_instruct_q8_0.bundle.json`; the newer reopened-lane API + frontend smoke summary at `qa/evidence-bundles/four-row-api-webui-20260505T003100Z-head-b403884/manifest.json` refreshes exact-row WebUI/API readiness for the four tracked rows, but broader/full-support evidence is still outstanding
 - the current-head memory gate stayed bounded: first-token sampled RSS roughly `6,220 -> 378,520 KiB`; 5-token sampled RSS roughly `6,076 -> 396,912 KiB`; no swap, OOM, timeout, or runaway retained-RSS signature appeared
 
@@ -225,13 +233,13 @@ Results:
 - **TinyLlama 1.1B Chat Q8_0:** `hello` and the alpacas prompt matched llama.cpp; the JSON-shaped prompt diverged despite matching prompt tokens (`endpoint` vs `function` wording in the generated text).
 - **Llama 3.2 1B Instruct Q8_0:** the three-prompt Llama 3 pack passed completely; prompt tokens, generated token IDs, and generated text all matched llama.cpp.
 - **Llama 3.2 3B Instruct Q8_0:** the earlier downloaded matrix captured the now-fixed JSON-shaped prompt divergence; the post-Q8-dot clean rerun at `target/camelid-llama32-3b-broad-50-after-q8dot-clean-20260502T233427Z/pack/summary.json` supersedes that 3B result and passes all three prompts for prompt tokens, generated token IDs, and generated text.
-- **Llama 3 8B Instruct Q8_0:** the long-timeout rerun at `target/acceptance-llama3-8b-broader-5tok-longtimeout-20260503T010536Z/summary.json` passed `hello`, alpacas, and JSON for prompt-token, generated-token, and generated-text parity at 5 tokens, clearing the earlier client-timeout blocker for the exact 8B row.
+- **Llama 3 8B Instruct Q8_0:** the reopened-lane rerun at `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json` passed `hello`, alpacas, and JSON for prompt-token, generated-token, and generated-text parity at 50 tokens, clearing the earlier client-timeout blocker for the exact 8B row.
 
 The downloaded-model matrix still disproves a broad inherited “perfect Llama-family parity” claim. Camelid should claim only the exact supported rows and envelopes backed by passing artifacts: TinyLlama Q8_0, Llama 3.2 1B Q8_0, Llama 3.2 3B Q8_0, and Llama 3 8B Q8_0.
 
 Public evidence packaging note: sanitized carry-forward bundle manifests/checksums for the four-row smoke slices now live under `qa/evidence-bundles/four-row-public-20260503T024327Z/` and `qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/`. They intentionally preserve the blocked public-head rerun state instead of overstating it.
 
-Current-head durable execution note: the exact-row normalized rerun scaffold is now checked in at `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/`. Its per-row manifests/commands give docs, API, and frontend a stable current-head citation target while most Ubuntu reruns for broader template coverage and stronger perf/portability evidence are still outstanding. The first exact 8B 512-context rerun is separately captured at `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/`.
+Current-head durable execution note: the exact-row normalized rerun scaffold is now checked in at `qa/evidence-bundles/four-row-current-head-20260503T061958Z-head-34b954498a03/`. Its per-row manifests/commands give docs, API, and frontend a stable current-head citation target while broader context coverage and stronger perf/portability evidence are still outstanding. The exact 8B broader three-prompt 50-token rerun is separately captured at `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/`, the first exact 8B 512-context rerun is separately captured at `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/`, and the bounded exact 8B compact chat-template-shapes rerun is separately captured at `qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/`.
 
 ## Next blocking work
 
@@ -243,7 +251,7 @@ In order of importance:
 4. Preserve the Llama 3 8B exact-row promotion in docs, API, frontend readiness, and regression evidence without lending it to neighboring rows.
 5. Keep docs, `/api/capabilities`, and frontend readiness copy aligned with the exact-row support contract.
 
-Current operator update: Tim has reopened the approved Ubuntu validation lane. Promotion-grade Llama-family reruns for 1B/3B/8B should resume there from clean public `main` checkouts while preserving any dirty remote worktrees. Fresh reopened-lane API-only and API + frontend smoke summaries now live at `qa/evidence-bundles/four-row-api-only-20260504T230722Z-head-13a465608fbf/manifest.json` and `qa/evidence-bundles/four-row-api-webui-20260505T003100Z-head-b403884/manifest.json`, and the first exact 8B 512-context pack now has a passing public summary at `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json`. This does not widen support by itself: broader/full support still requires normalized parity, memory/perf, broader context/template coverage, and durable-bundle evidence. See `qa/validation-notes/2026-05-04-validation-lane-reopened.md` and `qa/validation-notes/2026-05-04-8b-context-512-rerun.md`.
+Current operator update: Tim has reopened the approved Ubuntu validation lane. Promotion-grade Llama-family reruns for 1B/3B/8B should resume there from clean public `main` checkouts while preserving any dirty remote worktrees. Fresh reopened-lane API-only and API + frontend smoke summaries now live at `qa/evidence-bundles/four-row-api-only-20260504T230722Z-head-13a465608fbf/manifest.json` and `qa/evidence-bundles/four-row-api-webui-20260505T003100Z-head-b403884/manifest.json`; the exact 8B broader three-prompt 50-token pack has a passing public summary at `qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json`; the first exact 8B 512-context pack has a passing public summary at `qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json`; and the bounded exact 8B compact chat-template-shapes pack has a passing public summary at `qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/manifest.json`. This does not widen support by itself: broader/full support still requires normalized parity, memory/perf, broader context/template coverage, and durable-bundle evidence. See `qa/validation-notes/2026-05-04-validation-lane-reopened.md`, `qa/validation-notes/2026-05-04-8b-context-512-rerun.md`, `qa/validation-notes/2026-05-05-8b-broader-50tok.md`, and `qa/validation-notes/2026-05-05-8b-chat-template-shapes.md`.
 
 ### Qwen prerequisite note
 

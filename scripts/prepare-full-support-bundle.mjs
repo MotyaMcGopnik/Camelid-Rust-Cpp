@@ -19,6 +19,9 @@ const runtimeValidationAvailable = validationHostStatus === 'available'
 const qaBundleRoot = 'qa/evidence-bundles/four-row-public-20260503T024327Z'
 const perfEnvelopePath = 'qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json'
 const validationNotePath = 'qa/validation-notes/2026-05-04-validation-lane-reopened.md'
+const context512EvidencePath = 'qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json'
+const chatTemplateShapesEvidencePath = 'qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/manifest.json'
+const broader50EvidencePath = 'qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json'
 const toolchainCommand = repoCommand('./scripts/with-rustup-cargo.sh build --release --bin backendinference')
 const apiBase = '${CAMELID_API_BASE:-http://127.0.0.1:8181}'
 const frontendUrl = '${CAMELID_FRONTEND_URL:-http://127.0.0.1:4175}'
@@ -94,7 +97,7 @@ const rows = [
         id: 'api-webui-smoke',
         kind: 'api_webui',
         status: runtimeTrackStatus(),
-        description: 'Refresh current-head TinyLlama load/completions/chat/frontend smoke.',
+        description: 'Refresh current-head TinyLlama load/completions/chat/frontend smoke plus response-local generation timing summary.',
         command: runtimeCommand(repoCommand(`node scripts/model-promotion-smoke-bundle.mjs --api ${apiBase} --frontend ${frontendUrl} --model \"${modelDir}/tinyllama-1.1b-chat-v1.0.Q8_0.gguf\" --model-id tinyllama-q8 --out-dir ROW_ROOT/api-webui --message hello --max-tokens 1 --temperature 0 --expect-compatibility-row tinyllama_1_1b_chat_q8_0 --expect-compatibility-status supported_current_gate --expect-contract-supported true --expect-webui-chat enabled`))
       },
       {
@@ -188,11 +191,12 @@ const rows = [
     template_family: 'llama3_instruct',
     carry_forward_bundle: `${qaBundleRoot}/llama3_8b_instruct_q8_0.bundle.json`,
     notes: [
-      'Short validation evidence exists for the exact row only; the broader 5-token Ubuntu pack passed on the tracked GGUF.',
-      'The first bounded 512-context pack timed out on current head, so longer-context and performance/RSS evidence remain the blocker.'
+      'Short validation evidence exists for the exact row only; the broader three-prompt 50-token Ubuntu pack passed on the tracked GGUF.',
+      'The first bounded 512-context pack and compact chat-template-shapes pack now have passing Ubuntu current-head artifacts for this exact row only; broader contexts and performance/RSS portability remain blockers.'
     ],
     blockers: [
-      '512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.',
+      'Do not widen the single passing 512-context pack into broader context/full-support language; rerun broader context and performance/RSS evidence durably before promotion.',
+      'Do not widen the chat-template-shapes pass into arbitrary GGUF/Jinja template support; it validates only the checked compact Llama 3 prompt shapes for the exact 8B row.',
       ...hostShutdownBlockers('Promotion-grade 8B runtime evidence is blocked while Tim’s Ubuntu validation host is shut down.'),
       'Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families.'
     ],
@@ -206,10 +210,17 @@ const rows = [
       broaderPack: 'qa/prompt-packs/llama3-broader-repro-3prompt.json',
       contextWaitMs: 300000,
       perfWaitMs: 1200000,
-      contextTrackStatus: 'known_blocker',
+      broaderTrackNotes: [
+        `Carry-forward exact-row pass: ${broader50EvidencePath}. Treat this as one bounded three-prompt 50-token pack only.`,
+        'Do not infer the unresolved p4/p5 prompts, neighboring rows, or broad/full support from this three-prompt pass.'
+      ],
+      chatTemplateTrackNotes: [
+        `Carry-forward exact-row pass: ${chatTemplateShapesEvidencePath}. Treat this as one bounded compact chat-template-shapes pack only.`,
+        'Keep broader template/context/performance reruns durable before any wider or full-support claim.'
+      ],
       contextTrackNotes: [
-        'Known blocker from qa/validation-notes/2026-05-03-ubuntu-toolchain-and-8b-context.md: Camelid timed out at POST /v1/chat/completions after 300000 ms while llama.cpp finished the same 512-context reference prompt + 5-token completion.',
-        'Keep the failure plus performance/RSS evidence durable inside the new bundle instead of papering over it.'
+        `Carry-forward exact-row pass: ${context512EvidencePath}. Treat this as one bounded 512-context pack only.`,
+        'Keep broader context/performance reruns durable before any wider or full-support claim.'
       ],
     })
   }
@@ -267,6 +278,9 @@ const manifest = {
     normalized_bundle_root: qaBundleRoot,
     perf_portability_envelope: perfEnvelopePath,
     validation_note: validationNotePath,
+    llama3_8b_broader_50tok_evidence: broader50EvidencePath,
+    llama3_8b_context_512_evidence: context512EvidencePath,
+    llama3_8b_chat_template_shapes_evidence: chatTemplateShapesEvidencePath,
   },
   rows: rows.map(row => summarizeRow(outDir, row)),
 }
@@ -335,7 +349,7 @@ function summarizeRow(outDir, row) {
   }
 }
 
-function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus, expectContractSupported, expectWebUiChat, broaderPack, contextWaitMs, perfWaitMs, contextTrackStatus = 'ready_to_run', contextTrackNotes = [] }) {
+function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus, expectContractSupported, expectWebUiChat, broaderPack, contextWaitMs, perfWaitMs, contextTrackStatus = 'ready_to_run', contextTrackNotes = [], chatTemplateTrackNotes = [], broaderTrackNotes = [] }) {
   return [
     {
       id: 'compact-parity',
@@ -350,6 +364,7 @@ function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus
       status: runtimeTrackStatus(),
       description: 'Run the broader three-prompt pack and require prompt/generated parity.',
       pack_path: broaderPack,
+      notes: broaderTrackNotes,
       command: runtimeCommand(repoCommand(`node scripts/run-llama3-prompt-pack.mjs --backend ${apiBase} --llama-url ${llamaBase} --model \"${modelDir}/${modelFile}\" --model-id ${modelId} --llama-server \"${llamaServerBin}\" --llama-tokenize \"${llamaTokenizeBin}\" --start-llama-server --pack ${broaderPack} --out-dir ROW_ROOT/broader-parity --wait-ms ${Math.max(contextWaitMs, 120000)} --require-prompt-match --require-generated-match`))
     },
     {
@@ -358,6 +373,7 @@ function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus
       status: runtimeTrackStatus(),
       description: 'Run the chat-template-shapes pack to broaden template coverage on the exact row.',
       pack_path: 'qa/prompt-packs/llama3-chat-template-shapes.json',
+      notes: chatTemplateTrackNotes,
       command: runtimeCommand(repoCommand(`node scripts/run-llama3-prompt-pack.mjs --backend ${apiBase} --llama-url ${llamaBase} --model \"${modelDir}/${modelFile}\" --model-id ${modelId} --llama-server \"${llamaServerBin}\" --llama-tokenize \"${llamaTokenizeBin}\" --start-llama-server --pack qa/prompt-packs/llama3-chat-template-shapes.json --out-dir ROW_ROOT/chat-template-shapes --wait-ms ${Math.max(contextWaitMs, 120000)} --require-prompt-match --require-generated-match`))
     },
     {
@@ -377,7 +393,7 @@ function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus
       id: 'api-webui-smoke',
       kind: 'api_webui',
       status: runtimeTrackStatus(),
-      description: 'Refresh exact-row /api/models/load, /v1/models, /v1/completions, /v1/chat/completions, and frontend smoke.',
+      description: 'Refresh exact-row /api/models/load, /v1/models, /v1/completions, /v1/chat/completions, frontend smoke, and response-local generation timing summary.',
       command: runtimeCommand(repoCommand(`node scripts/model-promotion-smoke-bundle.mjs --api ${apiBase} --frontend ${frontendUrl} --model \"${modelDir}/${modelFile}\" --model-id ${modelId} --out-dir ROW_ROOT/api-webui --message hello --max-tokens 1 --temperature 0 --expect-compatibility-row ${compatibilityRow} --expect-compatibility-status ${compatibilityStatus} --expect-contract-supported ${String(expectContractSupported)} --expect-webui-chat ${expectWebUiChat}`))
     },
     {
@@ -525,15 +541,15 @@ function renderReadme(manifest) {
         'Runtime command scripts are runnable because this bundle was generated with an available validation lane; execute them only on the approved validation host or another Tim-authorized runtime lane.',
         'Use clean public `main` checkouts for reruns, and preserve dirty remote worktrees.',
         'Keep claims exact-row only unless docs, API, frontend, and artifacts all agree.',
-        'Preserve known blockers durably instead of deleting them, especially the 8B 512-context performance/RSS gap.',
+        'Preserve known blockers durably instead of deleting them; the 8B 512-context and chat-template-shapes passes are bounded packs only and broader performance/RSS evidence is still required.',
       ]
     : [
         'Tim has shut down the Ubuntu validation server when this default bundle is generated; runtime command scripts exit blocked unless regenerated with `--validation-host-status available` after Tim explicitly says the lane is back.',
         'Do not SSH to validation hosts, and do not substitute local Mac llama-server/reference workloads while the host-shutdown blocker is active.',
         'Keep claims exact-row only unless docs, API, frontend, and artifacts all agree.',
-        'Preserve known blockers durably instead of deleting them, especially the 8B 512-context performance/RSS gap.',
+        'Preserve known blockers durably instead of deleting them; the 8B 512-context and chat-template-shapes passes are bounded packs only and broader performance/RSS evidence is still required.',
       ]
-  return `# Full-support current-head execution bundle\n\nGenerated: ${manifest.generated_utc}\n\nGit head: \`${manifest.git.head}\`\nOrigin/main: \`${manifest.git.origin_main}\`\nValidation host status: \`${manifest.validation_host_status.status}\`\nRuntime validation available: \`${manifest.validation_host_status.runtime_validation_available}\`\n\nThis bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.\n\nRequired tracks per row:\n- compact parity\n- broader parity\n- chat-template shapes\n- 512-context\n- API/WebUI smoke\n- perf/RSS/portability\n\nTop-level commands:\n- \`commands/build-current-head.sh\`\n- \`commands/capture-host-facts.sh\`\n- \`commands/run-all-rows.sh\`\n\nGuardrails:\n${guardrails.map(item => `- ${item}`).join('\n')}\n\nCarry-forward public references:\n- \`${manifest.carry_forward_public_refs.normalized_bundle_root}\`\n- \`${manifest.carry_forward_public_refs.perf_portability_envelope}\`\n- \`${manifest.carry_forward_public_refs.validation_note}\`\n`}
+  return `# Full-support current-head execution bundle\n\nGenerated: ${manifest.generated_utc}\n\nGit head: \`${manifest.git.head}\`\nOrigin/main: \`${manifest.git.origin_main}\`\nValidation host status: \`${manifest.validation_host_status.status}\`\nRuntime validation available: \`${manifest.validation_host_status.runtime_validation_available}\`\n\nThis bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.\n\nRequired tracks per row:\n- compact parity\n- broader parity\n- chat-template shapes\n- 512-context\n- API/WebUI smoke\n- perf/RSS/portability\n\nTop-level commands:\n- \`commands/build-current-head.sh\`\n- \`commands/capture-host-facts.sh\`\n- \`commands/run-all-rows.sh\`\n\nGuardrails:\n${guardrails.map(item => `- ${item}`).join('\n')}\n\nCarry-forward public references:\n- \`${manifest.carry_forward_public_refs.normalized_bundle_root}\`\n- \`${manifest.carry_forward_public_refs.perf_portability_envelope}\`\n- \`${manifest.carry_forward_public_refs.validation_note}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_broader_50tok_evidence}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_context_512_evidence}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_chat_template_shapes_evidence}\`\n`}
 
 function renderRowReadme(row, manifest) {
   const tracks = manifest.tracks.map(track => `- ${track.id}: ${track.status} — ${track.description}`).join('\n')

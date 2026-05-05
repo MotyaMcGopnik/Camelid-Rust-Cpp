@@ -22,8 +22,8 @@ Explain the user-visible or engineering reason for the change.
 ## Support-contract check
 
 - [ ] This PR does not overclaim support
-- [ ] TinyLlama Q8_0 remains the only supported generation gate unless exact new evidence is included
-- [ ] Any 1B / 3B / 8B wording stays aligned with `COMPATIBILITY.md`, `STATUS.md`, and `/api/capabilities`
+- [ ] TinyLlama Q8_0 remains the current full-support gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows stay limited to their documented exact-row smoke envelopes unless exact new evidence is included
+- [ ] Any 1B / 3B / 8B wording stays aligned with `COMPATIBILITY.md`, `STATUS.md`, and `/api/capabilities`, including bounded-pack caveats for 8B broader 50-token, 512-context, and compact template-shapes evidence
 
 ## Evidence / artifacts
 
