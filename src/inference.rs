@@ -5816,7 +5816,7 @@ fn validate_rope_frequency_tensor(rope_freqs: &CpuTensor, rope_dim: usize) -> Re
         .find(|(_, frequency)| *frequency <= 0.0 || !frequency.is_finite())
     {
         return Err(BackendError::InvalidModelMetadata(format!(
-            "rope_freqs.weight[{idx}] frequency {frequency} must be finite and positive"
+            "rope_freqs.weight[{idx}] frequency factor {frequency} must be finite and positive"
         )));
     }
     Ok(&rope_freqs.data)
@@ -5974,16 +5974,23 @@ fn apply_rope_to_row(data: &mut [f32], position: usize, mut params: RopeParams<'
 }
 
 fn rope_pair_frequency(pair_idx: usize, params: &RopeParams<'_>) -> f32 {
-    if let Some(rope_freqs) = params.rope_freqs {
-        return rope_freqs[pair_idx];
-    }
     let base_frequency = params
         .freq_base
         .powf(-(pair_idx as f32 * 2.0) / params.rope_dim as f32);
+    // GGUF's `rope_freqs.weight` follows llama.cpp's `freq_factors` contract:
+    // the stored value divides the metadata-derived base frequency for the pair,
+    // rather than replacing it as an absolute frequency.
+    let effective_base_frequency = if let Some(rope_freqs) = params.rope_freqs {
+        base_frequency / rope_freqs[pair_idx]
+    } else {
+        base_frequency
+    };
     match params.scaling.kind {
-        RopeScalingKind::None => base_frequency,
-        RopeScalingKind::Linear => base_frequency / params.scaling.factor,
-        RopeScalingKind::Llama3 => llama3_scaled_rope_frequency(base_frequency, params.scaling),
+        RopeScalingKind::None => effective_base_frequency,
+        RopeScalingKind::Linear => effective_base_frequency / params.scaling.factor,
+        RopeScalingKind::Llama3 => {
+            llama3_scaled_rope_frequency(effective_base_frequency, params.scaling)
+        }
     }
 }
 
@@ -8200,7 +8207,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_rope_prefers_gguf_rope_frequency_tensor() {
+    fn apply_rope_uses_gguf_rope_frequency_factors() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
 
@@ -8223,8 +8230,7 @@ mod tests {
             file_type: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
-        let rope_freqs =
-            CpuTensor::from_f32("rope_freqs.weight", vec![2], vec![1.0, 0.125]).unwrap();
+        let rope_freqs = CpuTensor::from_f32("rope_freqs.weight", vec![2], vec![1.0, 4.0]).unwrap();
 
         let rotated = apply_rope(&tensor, 8, 1, &config, Some(&rope_freqs), "query_rope").unwrap();
         let diagnostic = rope_diagnostics(
@@ -8238,14 +8244,16 @@ mod tests {
         )
         .unwrap();
 
-        let (tensor_sin, tensor_cos) = (8.0_f32 * 0.125).sin_cos();
-        let (derived_sin, _) = (8.0_f32 * 10_000.0_f32.powf(-0.5)).sin_cos();
+        let derived_theta = 10_000.0_f32.powf(-0.5);
+        let factor_theta = derived_theta / 4.0;
+        let (factor_sin, factor_cos) = (8.0_f32 * factor_theta).sin_cos();
+        let (derived_sin, _) = (8.0_f32 * derived_theta).sin_cos();
 
-        assert_close(rotated.data[2], tensor_cos);
-        assert_close(rotated.data[3], tensor_sin);
+        assert_close(rotated.data[2], factor_cos);
+        assert_close(rotated.data[3], factor_sin);
         assert!(
-            (rotated.data[3] - derived_sin).abs() > 0.5,
-            "RoPE rotation unexpectedly ignored rope_freqs.weight"
+            (rotated.data[3] - derived_sin).abs() > 0.05,
+            "RoPE rotation unexpectedly ignored rope_freqs.weight factors"
         );
         assert_eq!(diagnostic.frequency_source, "rope_freqs.weight");
         assert_eq!(diagnostic.rope_freqs_count, Some(2));
