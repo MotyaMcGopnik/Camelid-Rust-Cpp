@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "Four exact Q8_0 rows: TinyLlama current gate; exact Llama 3.2 1B/3B smoke rows with checked bounded 512/1024/2048-context packs; exact Llama 3 8B smoke row with checked bounded 512-context only. 8B 1024/2048 remain blocked_backend_timeout_900s until fresh PASS artifacts and docs/API/frontend alignment land."
+        "Four exact Q8_0 rows: TinyLlama current gate; exact Llama 3.2 1B/3B smoke rows with checked bounded 512/1024/2048-context packs; exact Llama 3 8B smoke row with checked bounded 512/1024/2048-context packs. 8B 1024/2048 are bounded exact-row proof only."
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -258,7 +258,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     assert_eq!(
         llama3["tested_context"],
-        "short_api_webui_smoke_with_broader_50_token_first_512_context_pack_and_blocked_1024_2048_timeouts"
+        "short_api_webui_smoke_with_broader_50_token_first_512_context_pack_and_current_head_1024_2048_context_packs"
     );
     assert_eq!(llama3["chat_template_renderer"], "compact");
     assert_eq!(llama3["chat_template_shape_pack"], "validated_compact_pack");
@@ -272,19 +272,13 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "llama3-context-512-smoke-v1"
     );
     assert_eq!(llama3["bounded_context_window"], 512);
-    assert_eq!(
-        llama3["bounded_context_1024_pack"],
-        "blocked_backend_timeout_900s"
-    );
+    assert_eq!(llama3["bounded_context_1024_pack"], "validated_second_pack");
     assert_eq!(
         llama3["bounded_context_1024_pack_id"],
         "llama3-context-1024-smoke-v1"
     );
     assert_eq!(llama3["bounded_context_1024_window"], 1024);
-    assert_eq!(
-        llama3["bounded_context_2048_pack"],
-        "blocked_backend_timeout_900s"
-    );
+    assert_eq!(llama3["bounded_context_2048_pack"], "validated_third_pack");
     assert_eq!(
         llama3["bounded_context_2048_pack_id"],
         "llama3-context-2048-smoke-v1"
@@ -292,10 +286,10 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama3["bounded_context_2048_window"], 2048);
     assert_eq!(
         llama3["latest_checked_bucket"],
-        "llama3-context-512-smoke-v1"
+        "llama3-context-2048-smoke-v1"
     );
     assert_eq!(llama3["latest_checked_result"], "pass");
-    assert_eq!(llama3["latest_checked_output"], "CMLD-512");
+    assert_eq!(llama3["latest_checked_output"], "CMLD-204");
     assert!(llama3["evidence"]
         .as_str()
         .unwrap()
