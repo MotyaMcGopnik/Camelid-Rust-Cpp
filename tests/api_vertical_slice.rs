@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "TinyLlama Q8_0 current gate plus exact Llama 3.2 1B/3B Q8_0 bounded 2048-context passes and exact Llama 3 8B Q8_0 bounded 512-context pass; broader/full support still requires normalized current-head bundles, and 8B 1024/2048-context promotion remains blocked by backend timeouts"
+        "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B Q8_0 have checked bounded 512/1024/2048-context packs; exact Llama 3 8B Q8_0 has a checked bounded 512-context pack only; 8B 1024/2048-context promotion remains blocked_backend_timeout_900s until fresh PASS artifacts and docs/API/frontend alignment land"
     );
     assert!(body["supported_quantization"]
         .as_array()

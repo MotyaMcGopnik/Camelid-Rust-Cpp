@@ -708,7 +708,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "TinyLlama Q8_0 current gate plus exact Llama 3.2 1B/3B Q8_0 bounded 2048-context passes and exact Llama 3 8B Q8_0 bounded 512-context pass; broader/full support still requires normalized current-head bundles, and 8B 1024/2048-context promotion remains blocked by backend timeouts",
+            current_gate: "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B Q8_0 have checked bounded 512/1024/2048-context packs; exact Llama 3 8B Q8_0 has a checked bounded 512-context pack only; 8B 1024/2048-context promotion remains blocked_backend_timeout_900s until fresh PASS artifacts and docs/API/frontend alignment land",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -731,7 +731,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "Q8_0",
                 status: "supported_current_gate",
-                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke only, while broader family support and full-support normalization still require broader context/template coverage, performance, and current-head durable-bundle evidence",
+                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B/3B Q8_0 rows add only their checked bounded 512/1024/2048-context packs, and the exact Llama 3 8B Q8_0 row adds only its checked bounded 512-context pack. Broader family support, 8B 1024/2048, production performance, and portability remain blocked until fresh row-specific evidence lands.",
             },
         ],
         planned_quantization: vec![
@@ -755,7 +755,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "llama_bpe_decoder_exact_1b_3b_8b_q8_0",
                 status: "supported_exact_row_smoke_lanes",
-                notes: "exact Llama 3.2 1B/3B and Llama 3 8B Instruct Q8_0 have row-specific smoke support; the 1B and 3B third 2048-context packs passed, and the 8B broader 50-token, first 512-context, compact chat-template-shapes, and retained-block lazy-Q8 hot-path passes are bounded pack/measurement evidence only; the 8B 1024/2048 context packs are blocked by backend timeout and promotion is paused; broader Llama-family/full support still waits on normalized current-head bundles, broader context/template coverage, and production performance evidence",
+                notes: "exact Llama 3.2 1B/3B and Llama 3 8B Instruct Q8_0 have row-specific smoke support; 1B/3B have checked bounded 512/1024/2048-context packs, while 8B has checked bounded 512-context only. 8B broader 50-token, compact chat-template-shapes, and retained-block lazy-Q8 hot-path passes are bounded pack/measurement evidence only; 8B 1024/2048 remain blocked_backend_timeout_900s until fresh PASS artifacts and synchronized docs/API/frontend updates land.",
             },
         ],
         planned_model_families: vec![
