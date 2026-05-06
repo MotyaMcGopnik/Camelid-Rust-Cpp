@@ -18,7 +18,7 @@ use crate::{
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
     tensor::{
         q8_0_file_read_stats, record_q8_0_file_read, should_parallelize_linear_output, CpuTensor,
-        Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, TensorStore,
+        Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, TensorShape, TensorStore,
     },
     BackendError, Result,
 };
@@ -1578,10 +1578,14 @@ impl LlamaInferenceSession {
         let layers_started = Instant::now();
         let rms_norm_epsilon = diagnostic_rms_norm_epsilon(self.config.rms_norm_epsilon)?;
         let hidden_width = hidden.dim(1)?;
+        let hidden_dims = vec![token_ids.len(), hidden_width];
         let capture_prefill_attribution = prefill_layer_major_attribution_enabled();
+        let mut next_hidden = vec![0.0_f32; hidden.data.len()];
         for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
             let hidden_bytes = tensor_f32_bytes(&hidden);
-            let mut next_hidden = vec![0.0_f32; hidden.data.len()];
+            if next_hidden.len() != hidden.data.len() {
+                next_hidden.resize(hidden.data.len(), 0.0);
+            }
             let mut layer_timings = LlamaLayerTimings {
                 layer_index: layer_idx,
                 ..LlamaLayerTimings::default()
@@ -1652,11 +1656,14 @@ impl LlamaInferenceSession {
                 memory.record_layer(layer_memory.clone());
             }
             timings.layers.push(layer_timings);
-            hidden = CpuTensor::from_f32(
-                format!("layer_{layer_idx}_prefill_layer_major_output"),
-                vec![token_ids.len(), hidden_width],
-                next_hidden,
-            )?;
+            std::mem::swap(&mut hidden.data, &mut next_hidden);
+            hidden.name = format!("layer_{layer_idx}_prefill_layer_major_output");
+            hidden.shape = TensorShape {
+                dims: hidden_dims.clone(),
+            };
+            hidden.source_type = None;
+            hidden.q8_0_blocks = None;
+            hidden.q8_0_file_backing = None;
             trace_forward_memory(&format!("prefill_layer_major_layer_{layer_idx}_done"));
         }
         timings.layers_total = layers_started.elapsed().as_micros();
