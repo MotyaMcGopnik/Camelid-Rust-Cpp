@@ -1788,7 +1788,7 @@ impl LlamaInferenceSession {
         let mut prefill_timings = LlamaForwardTimings::default();
         let mut first_token_timings = LlamaForwardTimings::default();
         let prefill_count = token_ids.len().saturating_sub(1);
-        let prefill_chunk_tokens = prefill_chunk_token_count();
+        let prefill_chunk_tokens = prefill_chunk_token_count(prefill_count);
         if prefill_count > 0
             && prefill_chunk_tokens > 1
             && prefill_layer_major_enabled(&self.weights)
@@ -1927,13 +1927,25 @@ fn env_flag_enabled(key: &str) -> bool {
     )
 }
 
-fn prefill_chunk_token_count() -> usize {
+fn prefill_chunk_token_count(prefill_count: usize) -> usize {
     const DEFAULT_PREFILL_CHUNK_TOKENS: usize = 128;
-    env::var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_PREFILL_CHUNK_TOKENS)
+    match env::var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if matches!(
+                trimmed.to_ascii_lowercase().as_str(),
+                "all" | "full" | "prompt" | "unbounded"
+            ) {
+                return prefill_count.max(1);
+            }
+            trimmed
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_PREFILL_CHUNK_TOKENS)
+        }
+        Err(_) => DEFAULT_PREFILL_CHUNK_TOKENS,
+    }
 }
 
 fn prefill_layer_major_enabled(weights: &LlamaLoadedWeights) -> bool {
@@ -7601,6 +7613,25 @@ mod tests {
                     .unwrap(),
             }],
         }
+    }
+
+    #[test]
+    fn prefill_chunk_token_count_accepts_full_prompt_probe() {
+        let _env_guard = env_lock();
+        std::env::remove_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS");
+        assert_eq!(prefill_chunk_token_count(2047), 128);
+
+        std::env::set_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS", "256");
+        assert_eq!(prefill_chunk_token_count(2047), 256);
+
+        for value in ["all", "full", "prompt", "unbounded", " FULL "] {
+            std::env::set_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS", value);
+            assert_eq!(prefill_chunk_token_count(2047), 2047);
+        }
+
+        std::env::set_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS", "0");
+        assert_eq!(prefill_chunk_token_count(2047), 128);
+        std::env::remove_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS");
     }
 
     #[test]
