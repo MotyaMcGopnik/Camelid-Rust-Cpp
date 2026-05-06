@@ -1518,14 +1518,20 @@ impl LlamaInferenceSession {
                 layer_index: layer_idx,
                 ..LlamaLayerTimings::default()
             };
+            let mut chunk_input_buffer = Vec::with_capacity(chunk_tokens * hidden_width);
             for chunk_start in (0..token_ids.len()).step_by(chunk_tokens) {
                 let rows_this_chunk = chunk_tokens.min(token_ids.len() - chunk_start);
                 let chunk_base_position = prefill_base_position + chunk_start;
-                let hidden_chunk = tensor_row_slice(
+                copy_tensor_rows_into_buffer(
                     &hidden,
                     chunk_start,
                     rows_this_chunk,
+                    &mut chunk_input_buffer,
+                )?;
+                let hidden_chunk = CpuTensor::from_f32(
                     format!("layer_{layer_idx}_prefill_layer_major_input_{chunk_start}"),
+                    vec![rows_this_chunk, hidden_width],
+                    std::mem::take(&mut chunk_input_buffer),
                 )?;
                 let saved_position = self.kv_cache.position;
                 self.kv_cache.position = chunk_base_position;
@@ -1545,6 +1551,7 @@ impl LlamaInferenceSession {
                 );
                 self.kv_cache.position = saved_position;
                 let timed = timed?;
+                chunk_input_buffer = hidden_chunk.data;
                 copy_tensor_rows_into(&timed.output, &mut next_hidden, chunk_start, hidden_width)?;
                 layer_timings.add_assign(&timed.timings);
             }
@@ -1834,35 +1841,40 @@ impl LlamaInferenceSession {
     }
 }
 
-fn tensor_row_slice(
+fn copy_tensor_rows_into_buffer(
     tensor: &CpuTensor,
     row_start: usize,
     rows: usize,
-    name: impl Into<String>,
-) -> Result<CpuTensor> {
+    buffer: &mut Vec<f32>,
+) -> Result<()> {
     if tensor.rank() != 2 {
         return Err(BackendError::RuntimeShapeMismatch(format!(
-            "tensor row slice expected rank-2 tensor {}, got {:?}",
+            "tensor row buffer copy expected rank-2 tensor {}, got {:?}",
             tensor.name, tensor.shape.dims
         )));
     }
     let total_rows = tensor.dim(0)?;
     let width = tensor.dim(1)?;
     let row_end = row_start.checked_add(rows).ok_or_else(|| {
-        BackendError::RuntimeShapeMismatch("tensor row slice range overflows".to_string())
+        BackendError::RuntimeShapeMismatch("tensor row buffer copy range overflows".to_string())
     })?;
     if rows == 0 || row_end > total_rows {
         return Err(BackendError::RuntimeShapeMismatch(format!(
-            "tensor row slice {row_start}..{row_end} is outside row count {total_rows}"
+            "tensor row buffer copy {row_start}..{row_end} is outside row count {total_rows}"
         )));
     }
-    let data_start = row_start * width;
-    let data_end = row_end * width;
-    CpuTensor::from_f32(
-        name,
-        vec![rows, width],
-        tensor.data[data_start..data_end].to_vec(),
-    )
+    let data_start = row_start.checked_mul(width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row buffer copy offset overflows".to_string())
+    })?;
+    let data_len = rows.checked_mul(width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row buffer copy length overflows".to_string())
+    })?;
+    let data_end = data_start.checked_add(data_len).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row buffer copy end overflows".to_string())
+    })?;
+    buffer.clear();
+    buffer.extend_from_slice(&tensor.data[data_start..data_end]);
+    Ok(())
 }
 
 fn copy_tensor_rows_into(
