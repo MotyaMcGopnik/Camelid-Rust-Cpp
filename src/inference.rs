@@ -1188,8 +1188,11 @@ pub struct LlamaForwardMemoryTimings {
     pub forward_passes: usize,
     pub materialization: LlamaWeightMaterializationStats,
     pub q8_file_reads: Q8_0FileReadStats,
+    pub q8_file_read_phases: Vec<LlamaQ8FileReadPhaseTrace>,
     #[serde(skip)]
     q8_file_read_start: Q8_0FileReadStats,
+    #[serde(skip)]
+    q8_file_read_phase_start: Q8_0FileReadStats,
     pub start: LlamaMemorySample,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after_embedding: Option<LlamaMemorySample>,
@@ -2128,7 +2131,9 @@ impl LlamaForwardMemoryTimings {
             forward_passes: 1,
             materialization,
             q8_file_reads: Q8_0FileReadStats::default(),
+            q8_file_read_phases: Vec::new(),
             q8_file_read_start,
+            q8_file_read_phase_start: q8_file_read_start,
             peak_rss_kib: None,
             peak_rss_delta_kib: None,
             peak_phase: None,
@@ -2194,7 +2199,17 @@ impl LlamaForwardMemoryTimings {
         set: impl FnOnce(&mut Self, LlamaMemorySample),
     ) {
         self.consider_peak_sample(phase, &sample);
+        self.record_q8_file_read_phase(phase);
         set(self, sample);
+    }
+
+    fn record_q8_file_read_phase(&mut self, phase: &str) {
+        let current = q8_0_file_read_stats();
+        let delta = current.saturating_delta_since(self.q8_file_read_phase_start);
+        self.q8_file_read_phase_start = current;
+        if q8_file_read_stats_has_activity(delta) {
+            add_q8_file_read_phase_trace(&mut self.q8_file_read_phases, phase, delta);
+        }
     }
 
     fn consider_peak_sample(&mut self, phase: &str, sample: &LlamaMemorySample) {
@@ -2233,6 +2248,13 @@ impl LlamaForwardMemoryTimings {
         self.q8_file_reads.cache_entries = other.q8_file_reads.cache_entries;
         self.q8_file_reads.cache_bytes = other.q8_file_reads.cache_bytes;
         self.q8_file_reads.cache_capacity_bytes = other.q8_file_reads.cache_capacity_bytes;
+        for phase in &other.q8_file_read_phases {
+            add_q8_file_read_phase_trace(
+                &mut self.q8_file_read_phases,
+                &phase.phase,
+                phase.q8_file_reads,
+            );
+        }
         self.after_embedding = other.after_embedding.clone();
         self.after_layers = other.after_layers.clone();
         self.after_final_norm = other.after_final_norm.clone();
@@ -7608,6 +7630,23 @@ mod tests {
             .as_mut()
             .unwrap()
             .record_after_logits(memory_sample(110, 0, 1));
+        first
+            .memory
+            .as_mut()
+            .unwrap()
+            .q8_file_read_phases
+            .push(LlamaQ8FileReadPhaseTrace {
+                phase: "logits_done".to_string(),
+                q8_file_reads: Q8_0FileReadStats {
+                    read_calls: 3,
+                    read_bytes: 256,
+                    cache_hits: 1,
+                    cache_hit_bytes: 64,
+                    cache_entries: 2,
+                    cache_bytes: 512,
+                    cache_capacity_bytes: 1024,
+                },
+            });
 
         let mut second = LlamaForwardTimings {
             memory: Some(test_forward_memory(memory_sample(105, 1, 1))),
@@ -7618,6 +7657,23 @@ mod tests {
             .as_mut()
             .unwrap()
             .record_after_layers(memory_sample(140, 1, 2));
+        second
+            .memory
+            .as_mut()
+            .unwrap()
+            .q8_file_read_phases
+            .push(LlamaQ8FileReadPhaseTrace {
+                phase: "layers_done".to_string(),
+                q8_file_reads: Q8_0FileReadStats {
+                    read_calls: 4,
+                    read_bytes: 1024,
+                    cache_hits: 2,
+                    cache_hit_bytes: 128,
+                    cache_entries: 3,
+                    cache_bytes: 768,
+                    cache_capacity_bytes: 1024,
+                },
+            });
         first.memory.as_mut().unwrap().q8_file_reads = Q8_0FileReadStats {
             read_calls: 3,
             read_bytes: 256,
@@ -7656,6 +7712,14 @@ mod tests {
         assert_eq!(memory.peak_rss_kib, Some(140));
         assert_eq!(memory.peak_rss_delta_kib, Some(40));
         assert_eq!(memory.peak_phase.as_deref(), Some("layers_done"));
+        assert_eq!(memory.q8_file_read_phases.len(), 2);
+        assert_eq!(memory.q8_file_read_phases[0].phase, "logits_done");
+        assert_eq!(
+            memory.q8_file_read_phases[0].q8_file_reads.cache_hit_bytes,
+            64
+        );
+        assert_eq!(memory.q8_file_read_phases[1].phase, "layers_done");
+        assert_eq!(memory.q8_file_read_phases[1].q8_file_reads.read_bytes, 1024);
         assert_eq!(memory.end, None);
         assert_eq!(
             memory
