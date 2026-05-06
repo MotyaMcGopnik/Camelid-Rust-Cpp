@@ -1963,10 +1963,18 @@ fn trace_forward_memory(phase: &str) {
 
     let q8_reads = q8_0_file_read_stats();
     let q8_file_read_mib = q8_reads.read_bytes as f64 / (1024.0 * 1024.0);
+    let q8_file_cache_hit_mib = q8_reads.cache_hit_bytes as f64 / (1024.0 * 1024.0);
+    let q8_file_cache_mib = q8_reads.cache_bytes as f64 / (1024.0 * 1024.0);
+    let q8_file_cache_capacity_mib = q8_reads.cache_capacity_bytes as f64 / (1024.0 * 1024.0);
     eprintln!(
-        "backendinference_forward_memory_trace phase={phase} rss_kib={rss_kib} free_like_pages={free_like_pages} free_like_mib={free_like_mib} throttled_pages={throttled_pages} q8_file_read_calls={} q8_file_read_bytes={} q8_file_read_mib={q8_file_read_mib:.2}",
+        "backendinference_forward_memory_trace phase={phase} rss_kib={rss_kib} free_like_pages={free_like_pages} free_like_mib={free_like_mib} throttled_pages={throttled_pages} q8_file_read_calls={} q8_file_read_bytes={} q8_file_read_mib={q8_file_read_mib:.2} q8_file_cache_hits={} q8_file_cache_hit_bytes={} q8_file_cache_hit_mib={q8_file_cache_hit_mib:.2} q8_file_cache_entries={} q8_file_cache_bytes={} q8_file_cache_mib={q8_file_cache_mib:.2} q8_file_cache_capacity_bytes={} q8_file_cache_capacity_mib={q8_file_cache_capacity_mib:.2}",
         q8_reads.read_calls,
-        q8_reads.read_bytes
+        q8_reads.read_bytes,
+        q8_reads.cache_hits,
+        q8_reads.cache_hit_bytes,
+        q8_reads.cache_entries,
+        q8_reads.cache_bytes,
+        q8_reads.cache_capacity_bytes
     );
 }
 
