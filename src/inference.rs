@@ -7326,6 +7326,75 @@ mod tests {
         )
     }
 
+    fn tiny_prefill_schedule_weights(attention_q: CpuTensor) -> LlamaLoadedWeights {
+        LlamaLoadedWeights {
+            token_embedding: CpuTensor::from_f32("token_embd.weight", vec![2, 2], vec![1.0; 4])
+                .unwrap(),
+            output_norm: CpuTensor::from_f32("output_norm.weight", vec![2], vec![1.0; 2]).unwrap(),
+            output: None,
+            rope_freqs: None,
+            layers: vec![LlamaLayerWeights {
+                attention_norm: CpuTensor::from_f32(
+                    "blk.0.attn_norm.weight",
+                    vec![2],
+                    vec![1.0; 2],
+                )
+                .unwrap(),
+                attention_q,
+                attention_k: CpuTensor::from_f32("blk.0.attn_k.weight", vec![2, 2], vec![1.0; 4])
+                    .unwrap(),
+                attention_v: CpuTensor::from_f32("blk.0.attn_v.weight", vec![2, 2], vec![1.0; 4])
+                    .unwrap(),
+                attention_output: CpuTensor::from_f32(
+                    "blk.0.attn_output.weight",
+                    vec![2, 2],
+                    vec![1.0; 4],
+                )
+                .unwrap(),
+                ffn_norm: CpuTensor::from_f32("blk.0.ffn_norm.weight", vec![2], vec![1.0; 2])
+                    .unwrap(),
+                ffn_gate: CpuTensor::from_f32("blk.0.ffn_gate.weight", vec![2, 2], vec![1.0; 4])
+                    .unwrap(),
+                ffn_up: CpuTensor::from_f32("blk.0.ffn_up.weight", vec![2, 2], vec![1.0; 4])
+                    .unwrap(),
+                ffn_down: CpuTensor::from_f32("blk.0.ffn_down.weight", vec![2, 2], vec![1.0; 4])
+                    .unwrap(),
+            }],
+        }
+    }
+
+    #[test]
+    fn prefill_layer_major_defaults_only_for_lazy_q8_backing() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let dense_weights = tiny_prefill_schedule_weights(
+            CpuTensor::from_f32("blk.0.attn_q.weight", vec![2, 2], vec![1.0; 4]).unwrap(),
+        );
+        assert!(!prefill_layer_major_enabled(&dense_weights));
+
+        let lazy_q8_attention_q = CpuTensor::from_f32_with_source_type(
+            "blk.0.attn_q.weight",
+            vec![2, 2],
+            vec![1.0; 4],
+            Some(GgufTensorType::Q8_0),
+        )
+        .unwrap()
+        .with_q8_0_file_backing(Q8_0FileBacking::new("unused.gguf".into(), 0, 1));
+        let lazy_q8_weights = tiny_prefill_schedule_weights(lazy_q8_attention_q);
+        assert!(prefill_layer_major_enabled(&lazy_q8_weights));
+
+        std::env::set_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR", "1");
+        assert!(prefill_layer_major_enabled(&dense_weights));
+
+        for value in ["0", "false", "off", "disabled"] {
+            std::env::set_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR", value);
+            assert!(!prefill_layer_major_enabled(&lazy_q8_weights));
+        }
+
+        std::env::remove_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR");
+    }
+
     #[test]
     fn memory_timing_merge_tracks_forward_passes_and_peak_rss() {
         let mut first = LlamaForwardTimings {
