@@ -1283,6 +1283,9 @@ pub struct LlamaWeightMaterializationStats {
     pub q8_0_f32_materialized_tensor_count: usize,
     pub q8_0_f32_materialized_bytes: u64,
     pub q8_0_file_backed_tensor_count: usize,
+    pub q8_0_file_backed_storage_bytes: u64,
+    pub q8_0_file_backed_f32_bytes_avoided: u64,
+    pub q8_0_file_backed_retained_block_bytes_if_enabled: u64,
     pub q8_0_file_handle_cached_count: usize,
     pub q8_0_retained_block_tensor_count: usize,
     pub q8_0_retained_block_bytes: u64,
@@ -2084,6 +2087,15 @@ fn record_tensor_materialization(stats: &mut LlamaWeightMaterializationStats, te
         }
         if let Some(backing) = &tensor.q8_0_file_backing {
             stats.q8_0_file_backed_tensor_count += 1;
+            stats.q8_0_file_backed_storage_bytes = stats
+                .q8_0_file_backed_storage_bytes
+                .saturating_add(backing.storage_bytes());
+            stats.q8_0_file_backed_f32_bytes_avoided = stats
+                .q8_0_file_backed_f32_bytes_avoided
+                .saturating_add(backing.f32_materialization_bytes());
+            stats.q8_0_file_backed_retained_block_bytes_if_enabled = stats
+                .q8_0_file_backed_retained_block_bytes_if_enabled
+                .saturating_add(backing.retained_block_bytes());
             if backing.file_handle_cached() {
                 stats.q8_0_file_handle_cached_count += 1;
             }
@@ -7711,6 +7723,30 @@ mod tests {
         }
 
         std::env::remove_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR");
+    }
+
+    #[test]
+    fn materialization_stats_quantify_lazy_q8_file_backing_tradeoff() {
+        let lazy_q8_attention_q = CpuTensor::q8_0_file_backed_linear(
+            "blk.0.attn_q.weight",
+            crate::tensor::TensorShape { dims: vec![2, 64] },
+            Q8_0FileBacking::new("unused.gguf".into(), 0, 4),
+        );
+        let weights = tiny_prefill_schedule_weights(lazy_q8_attention_q);
+
+        let stats = collect_weight_materialization_stats(&weights);
+
+        assert_eq!(stats.q8_0_file_backed_tensor_count, 1);
+        assert_eq!(stats.q8_0_file_backed_storage_bytes, 4 * 34);
+        assert_eq!(stats.q8_0_file_backed_f32_bytes_avoided, 4 * 32 * 4);
+        assert_eq!(
+            stats.q8_0_file_backed_retained_block_bytes_if_enabled,
+            4 * std::mem::size_of::<Q8_0Block>() as u64
+        );
+        assert_eq!(stats.q8_0_retained_block_bytes, 0);
+        assert!(stats.has_lazy_q8_0_file_backing);
+        assert!(!stats.has_retained_q8_0_blocks);
+        assert!(!stats.has_q8_0_f32_materialization);
     }
 
     #[test]

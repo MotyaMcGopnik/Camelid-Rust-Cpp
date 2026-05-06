@@ -125,6 +125,22 @@ impl Q8_0FileBacking {
         self.file_handle.get().is_some()
     }
 
+    pub fn storage_bytes(&self) -> u64 {
+        const Q8_0_BLOCK_BYTES: u64 = 34;
+        (self.num_blocks as u64).saturating_mul(Q8_0_BLOCK_BYTES)
+    }
+
+    pub fn f32_materialization_bytes(&self) -> u64 {
+        const Q8_0_BLOCK_VALUES: u64 = 32;
+        (self.num_blocks as u64)
+            .saturating_mul(Q8_0_BLOCK_VALUES)
+            .saturating_mul(std::mem::size_of::<f32>() as u64)
+    }
+
+    pub fn retained_block_bytes(&self) -> u64 {
+        (self.num_blocks as u64).saturating_mul(std::mem::size_of::<Q8_0Block>() as u64)
+    }
+
     pub(crate) fn read_exact_at_cached(&self, out: &mut [u8], offset: u64) -> Result<()> {
         if out.is_empty() {
             return Ok(());
