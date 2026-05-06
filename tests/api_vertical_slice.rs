@@ -290,14 +290,14 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     assert_eq!(llama3["latest_checked_result"], "pass");
     assert_eq!(llama3["latest_checked_output"], "CMLD-204");
-    assert!(llama3["evidence"]
-        .as_str()
-        .unwrap()
-        .contains("retained-block lazy-Q8 hot-path cost probes"));
-    assert!(llama3["next_step"]
-        .as_str()
-        .unwrap()
-        .contains("bounded packs/measurements only"));
+    let llama3_evidence = llama3["evidence"].as_str().unwrap();
+    assert!(llama3_evidence.contains("one current-head passing bounded 1024-context pack"));
+    assert!(llama3_evidence.contains("one current-head passing bounded 2048-context pack"));
+    assert!(llama3_evidence.contains("without broad 8B/full-context"));
+    assert!(llama3_evidence.contains("retained-block lazy-Q8 hot-path cost probes"));
+    let llama3_next_step = llama3["next_step"].as_str().unwrap();
+    assert!(llama3_next_step.contains("bounded packs/measurements only"));
+    assert!(llama3_next_step.contains("before any broader/full-support claim"));
     let planned_quant = compatibility
         .iter()
         .find(|item| item["id"] == "llama_spm_q4_k_q5_k")
