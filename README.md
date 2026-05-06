@@ -25,7 +25,7 @@ Camelid's current milestone is not a loose compatibility demo. It is a synchroni
 
 Camelid is advancing on two tracks, and both stay gated by CI plus artifact-backed support language:
 
-- **Four-row hardening:** preserve TinyLlama as the current full gate and move the three Llama exact-row smoke lanes toward the same normalized bar without overstating them. The next promotable evidence remains model-native/larger-context behavior beyond checked packs, arbitrary/Jinja template coverage, production-throughput evidence, portability, and repeated current-head bundles. CI reliability is non-negotiable: no public support wording should move if the gate is red.
+- **Four-row hardening:** preserve TinyLlama as the current full gate and move the three Llama exact-row verified lanes toward the same normalized bar without overstating them. The next promotable evidence remains model-native/larger-context behavior beyond checked packs, arbitrary/Jinja template coverage, production-throughput evidence, portability, and repeated current-head bundles. CI reliability is non-negotiable: no public support wording should move if the gate is red.
 - **Active next-model bring-up set:** Camelid is now publicly working on four exact next-family rows — **Mistral 7B Instruct**, **Mixtral 8x7B Instruct**, **Qwen 2.5 7B Instruct**, and **Gemma 2 9B Instruct**. These are active exact-row bring-up lanes only, not support claims.
   - `Mistral-7B-Instruct-v0.3.Q8_0.gguf` — immediate closure lane; Ubuntu load/serve evidence exists, but tokenizer/template parity is still the blocker.
   - `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` — planned first MoE exact-row candidate; expert routing and bounded load/parity work still need to be proven.
@@ -82,7 +82,7 @@ The most recent four-row maintainer matrix on the cleaned support head confirmed
 
 | Exact row | Latest checked bucket | Result | Output checked |
 | --- | --- | --- | --- |
-| TinyLlama 1.1B Chat Q8_0 | direct chat smoke | PASS | `Certainly! Here` |
+| TinyLlama 1.1B Chat Q8_0 | direct chat validation | PASS | `Certainly! Here` |
 | Llama 3.2 1B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
 | Llama 3.2 3B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
 | Llama 3 8B Instruct Q8_0 | 512-context bounded recall pack | PASS | checked pack |
