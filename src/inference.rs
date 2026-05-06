@@ -5394,6 +5394,23 @@ struct QuantizedQ8_0Row {
     blocks: Vec<Q8_0Block>,
 }
 
+#[derive(Debug, Clone)]
+struct QuantizedQ8_0Rows {
+    blocks_per_row: usize,
+    blocks: Vec<Q8_0Block>,
+}
+
+impl QuantizedQ8_0Rows {
+    fn row(&self, row: usize) -> &[Q8_0Block] {
+        let start = row * self.blocks_per_row;
+        &self.blocks[start..start + self.blocks_per_row]
+    }
+
+    fn rows(&self) -> impl ExactSizeIterator<Item = &[Q8_0Block]> {
+        self.blocks.chunks_exact(self.blocks_per_row)
+    }
+}
+
 fn matmul_rhs_transposed_q8_0_block_dot(
     input: &CpuTensor,
     weight: &CpuTensor,
@@ -5444,28 +5461,50 @@ fn matmul_rhs_transposed_q8_0_block_dot(
 }
 
 fn quantize_q8_0_row(input: &[f32]) -> QuantizedQ8_0Row {
-    let blocks = input
-        .chunks_exact(Q8_0_BLOCK_VALUES)
-        .map(|block| {
-            let max_abs = block
-                .iter()
-                .fold(0.0_f32, |acc, value| acc.max(value.abs()));
-            let unrounded_scale = max_abs / 127.0;
-            let scale_bits = f32_to_f16_bits(unrounded_scale);
-            let scale = f16_bits_to_f32(scale_bits);
-            let inv_scale = if unrounded_scale == 0.0 {
-                0.0
-            } else {
-                1.0 / unrounded_scale
-            };
-            let mut quants = [0_i8; Q8_0_BLOCK_VALUES];
-            for (idx, value) in block.iter().enumerate() {
-                quants[idx] = (value * inv_scale).round().clamp(-128.0, 127.0) as i8;
-            }
-            Q8_0Block { scale, quants }
-        })
-        .collect();
-    QuantizedQ8_0Row { blocks }
+    QuantizedQ8_0Row {
+        blocks: quantize_q8_0_blocks(input),
+    }
+}
+
+fn quantize_q8_0_rows(input: &CpuTensor, input_width: usize) -> Result<QuantizedQ8_0Rows> {
+    let rows = input.dim(0)?;
+    let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    let mut blocks = Vec::with_capacity(rows * blocks_per_row);
+    for row in input.data.chunks_exact(input_width) {
+        quantize_q8_0_blocks_into(row, &mut blocks);
+    }
+    Ok(QuantizedQ8_0Rows {
+        blocks_per_row,
+        blocks,
+    })
+}
+
+fn quantize_q8_0_blocks(input: &[f32]) -> Vec<Q8_0Block> {
+    let mut blocks = Vec::with_capacity(input.len() / Q8_0_BLOCK_VALUES);
+    quantize_q8_0_blocks_into(input, &mut blocks);
+    blocks
+}
+
+fn quantize_q8_0_blocks_into(input: &[f32], blocks: &mut Vec<Q8_0Block>) {
+    debug_assert!(input.len().is_multiple_of(Q8_0_BLOCK_VALUES));
+    blocks.extend(input.chunks_exact(Q8_0_BLOCK_VALUES).map(|block| {
+        let max_abs = block
+            .iter()
+            .fold(0.0_f32, |acc, value| acc.max(value.abs()));
+        let unrounded_scale = max_abs / 127.0;
+        let scale_bits = f32_to_f16_bits(unrounded_scale);
+        let scale = f16_bits_to_f32(scale_bits);
+        let inv_scale = if unrounded_scale == 0.0 {
+            0.0
+        } else {
+            1.0 / unrounded_scale
+        };
+        let mut quants = [0_i8; Q8_0_BLOCK_VALUES];
+        for (idx, value) in block.iter().enumerate() {
+            quants[idx] = (value * inv_scale).round().clamp(-128.0, 127.0) as i8;
+        }
+        Q8_0Block { scale, quants }
+    }));
 }
 
 fn q8_0_dot_rows(weight: &[Q8_0Block], input: &[Q8_0Block]) -> f32 {
@@ -5556,11 +5595,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
             "q8_0 block-reader chunk scale count overflow".to_string(),
         )
     })?;
-    let quantized_inputs: Vec<_> = input
-        .data
-        .chunks_exact(input_width)
-        .map(quantize_q8_0_row)
-        .collect();
+    let quantized_inputs = quantize_q8_0_rows(input, input_width)?;
     with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
         with_q8_0_file_reader_chunk_scales(chunk_scales_len, |chunk_scales| {
             let mut output_idx = 0usize;
@@ -5599,7 +5634,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             .zip(scales.par_chunks_exact(blocks_per_row))
                             .for_each(|((out_value, row_bytes), row_scales)| {
                                 *out_value = dot_q8_0_encoded_row_with_scales(
-                                    &quantized_inputs[0].blocks,
+                                    quantized_inputs.row(0),
                                     row_bytes,
                                     row_scales,
                                 );
@@ -5611,7 +5646,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             .zip(scales.chunks_exact(blocks_per_row))
                         {
                             *out_value = dot_q8_0_encoded_row_with_scales(
-                                &quantized_inputs[0].blocks,
+                                quantized_inputs.row(0),
                                 row_bytes,
                                 row_scales,
                             );
@@ -5631,9 +5666,9 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             let row_bytes = &chunk[row_start..row_start + row_bytes_len];
                             let scale_start = local_output_idx * blocks_per_row;
                             let row_scales = &scales[scale_start..scale_start + blocks_per_row];
-                            for (row, quantized_input) in quantized_inputs.iter().enumerate() {
+                            for (row, quantized_input) in quantized_inputs.rows().enumerate() {
                                 values[row] = dot_q8_0_encoded_row_with_scales(
-                                    &quantized_input.blocks,
+                                    quantized_input,
                                     row_bytes,
                                     row_scales,
                                 );
@@ -5646,9 +5681,9 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                         let row_bytes = &chunk[row_start..row_start + row_bytes_len];
                         let scale_start = local_output_idx * blocks_per_row;
                         let row_scales = &scales[scale_start..scale_start + blocks_per_row];
-                        for (row, quantized_input) in quantized_inputs.iter().enumerate() {
+                        for (row, quantized_input) in quantized_inputs.rows().enumerate() {
                             values[row] = dot_q8_0_encoded_row_with_scales(
-                                &quantized_input.blocks,
+                                quantized_input,
                                 row_bytes,
                                 row_scales,
                             );
