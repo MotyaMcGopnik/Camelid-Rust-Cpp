@@ -48,6 +48,9 @@ async function validateBundle(manifestPath) {
 
   const singleRowContext = singleRowContextSchema(schema)
   if (singleRowContext) validateSingleRowContextBundle(bundleRel, manifest, singleRowContext)
+
+  const legacyPublicContext = legacyPublicContextSchema(manifest)
+  if (legacyPublicContext) validateLegacyPublicContextBundle(bundleRel, manifest, legacyPublicContext)
 }
 
 function validateSummaryAgreement(bundleRel, manifest, summary) {
@@ -223,6 +226,61 @@ function singleRowContextSchema(schema) {
     },
   }
   return schemas[schema]
+}
+
+function legacyPublicContextSchema(manifest) {
+  if (manifest.schema !== 'camelid.public-evidence-bundle.v1') return undefined
+  if (
+    manifest.model_row === 'llama32_1b_instruct_q8_0' &&
+    manifest.pack_id === 'llama3-context-2048-smoke-v1' &&
+    manifest.target_context_window === 2048
+  ) {
+    return {
+      rowId: 'llama32_1b_instruct_q8_0',
+      contextWindow: 2048,
+      maxTokens: 5,
+      minPromptTokens: 1025,
+      generatedText: 'CMLD-204',
+      generatedTokens: [34, 2735, 35, 12, 7854],
+    }
+  }
+  return undefined
+}
+
+function validateLegacyPublicContextBundle(bundleRel, manifest, expected) {
+  if (manifest.model_row !== expected.rowId) fail(bundleRel, `model_row must be ${expected.rowId}, got ${manifest.model_row}`)
+  if (manifest.target_context_window !== expected.contextWindow) fail(bundleRel, `${expected.rowId} target_context_window must be ${expected.contextWindow}`)
+  if (manifest.max_tokens !== expected.maxTokens) fail(bundleRel, `${expected.rowId} max_tokens must be ${expected.maxTokens}`)
+  if (!Number.isInteger(manifest.reference_prompt_token_count) || manifest.reference_prompt_token_count < expected.minPromptTokens) {
+    fail(bundleRel, `${expected.rowId} reference_prompt_token_count must be at least ${expected.minPromptTokens}`)
+  }
+  if (typeof manifest.boundary !== 'string' || !boundaryIsNarrow(manifest.boundary)) {
+    fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} boundary must explicitly avoid broader/full-family promotion`)
+  }
+  const result = manifest.result || {}
+  if (result.passed !== true) fail(bundleRel, `${expected.rowId} context-${expected.contextWindow} result.passed must be true`)
+  if (result.prompt_tokens_all_match !== true) fail(bundleRel, `${expected.rowId} prompt_tokens_all_match must be true`)
+  if (result.generated_tokens_all_match !== true) fail(bundleRel, `${expected.rowId} generated_tokens_all_match must be true`)
+  if (result.generated_text_all_match !== true) fail(bundleRel, `${expected.rowId} generated_text_all_match must be true`)
+  compareExactJson(bundleRel, `${expected.rowId} backend_generated_tokens`, result.backend_generated_tokens, expected.generatedTokens)
+  compareExactJson(bundleRel, `${expected.rowId} reference_generated_tokens`, result.reference_generated_tokens, expected.generatedTokens)
+  if (result.backend_text !== expected.generatedText) fail(bundleRel, `${expected.rowId} backend_text must stay ${JSON.stringify(expected.generatedText)}`)
+  if (result.reference_text !== expected.generatedText) fail(bundleRel, `${expected.rowId} reference_text must stay ${JSON.stringify(expected.generatedText)}`)
+  if (!Array.isArray(manifest.primary_artifacts) || manifest.primary_artifacts.length === 0) {
+    fail(bundleRel, `${expected.rowId} primary_artifacts must list the raw pack artifacts`)
+  } else {
+    for (const artifact of manifest.primary_artifacts) {
+      if (typeof artifact !== 'string' || artifact.startsWith('/') || artifact.includes('..')) {
+        fail(bundleRel, `${expected.rowId} primary_artifacts must be safe relative paths`)
+      }
+    }
+  }
+}
+
+function compareExactJson(bundleRel, label, actual, expected) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(bundleRel, `${label} must stay ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
 }
 
 function validateChecksObject(bundleRel, label, checks, requiredKeys) {

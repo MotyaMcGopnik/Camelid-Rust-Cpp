@@ -11,8 +11,10 @@ const badRoot = join(tempRoot, 'bad')
 
 await writeBundle(goodRoot, { mutate: false })
 await writeSingleRowContextBundle(goodRoot, { mutate: false })
+await writeLegacyPublicContextBundle(goodRoot, { mutate: false })
 await writeBundle(badRoot, { mutate: true })
 await writeSingleRowContextBundle(badRoot, { mutate: true })
+await writeLegacyPublicContextBundle(badRoot, { mutate: true })
 
 const good = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.mjs', '--root', goodRoot], {
   cwd: process.cwd(),
@@ -28,6 +30,7 @@ const bad = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.m
 assert.notEqual(bad.status, 0, 'invalid context evidence should fail')
 assert.match(bad.stderr, /generated_tokens_match must be true/)
 assert.match(bad.stderr, /source_prompt_pack must be qa\/prompt-packs\/llama3-context-1024-smoke\.json/)
+assert.match(bad.stderr, /backend_generated_tokens must stay \[34,2735,35,12,7854\]/)
 
 async function writeBundle(root, { mutate }) {
   const dir = join(root, 'four-row-context-512-test')
@@ -74,6 +77,41 @@ async function writeBundle(root, { mutate }) {
   }
   await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   await writeFile(join(dir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
+}
+
+async function writeLegacyPublicContextBundle(root, { mutate }) {
+  const dir = join(root, 'llama32-1b-context-2048-legacy-test')
+  await mkdir(dir, { recursive: true })
+  const generatedTokens = mutate ? [34, 2735, 35, 12, 4278] : [34, 2735, 35, 12, 7854]
+  const manifest = {
+    schema: 'camelid.public-evidence-bundle.v1',
+    id: 'llama32-1b-context-2048-legacy-test',
+    source_head: '62f8cbc',
+    created_at_utc: '2026-05-06T01:05:00Z',
+    model_row: 'llama32_1b_instruct_q8_0',
+    model: '$CAMELID_MODEL_DIR/Llama-3.2-1B-Instruct-Q8_0.gguf',
+    pack_id: 'llama3-context-2048-smoke-v1',
+    target_context_window: 2048,
+    reference_prompt_token_count: 1910,
+    max_tokens: 5,
+    result: {
+      passed: true,
+      prompt_tokens_all_match: true,
+      generated_tokens_all_match: true,
+      generated_text_all_match: true,
+      backend_generated_tokens: generatedTokens,
+      reference_generated_tokens: [34, 2735, 35, 12, 7854],
+      backend_text: 'CMLD-204',
+      reference_text: 'CMLD-204',
+    },
+    boundary:
+      'Closes only the third bounded 2048-context pack for the exact Llama 3.2 1B row. It does not promote neighboring rows, other quantizations, model-native/larger context buckets, arbitrary templates, broad/full Llama-family support, production throughput, or portability support.',
+    primary_artifacts: [
+      'pack/summary.json',
+      'pack/llama32-1b-q8-roughly-2048-token-recall/report.json',
+    ],
+  }
+  await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
 async function writeSingleRowContextBundle(root, { mutate }) {
