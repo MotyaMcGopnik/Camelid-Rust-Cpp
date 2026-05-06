@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support still requires normalized current-head bundles; the 1B third 2048-context pack is blocked by first-token divergence, the 3B third 2048-context pack passed, and the 8B broader 50-token, 512-context, compact chat-template-shapes, and lazy-Q8 hot-path reruns are bounded packs/measurements only; 8B 1024/2048-context promotion is paused after backend timeouts"
+        "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support still requires normalized current-head bundles; the 1B and 3B third 2048-context packs passed, and the 8B broader 50-token, 512-context, compact chat-template-shapes, and lazy-Q8 hot-path reruns are bounded packs/measurements only; 8B 1024/2048-context promotion is paused after backend timeouts"
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -114,7 +114,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_1b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_1b["tested_context"],
-        "short_api_webui_smoke_plus_first_512_and_second_1024_context_packs; third_2048_context_pack_blocked_first_token_divergence"
+        "short_api_webui_smoke_plus_first_512_second_1024_and_third_2048_context_packs"
     );
     assert_eq!(llama32_1b["chat_template_renderer"], "compact");
     assert_eq!(
@@ -145,7 +145,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_1b["bounded_context_1024_window"], 1024);
     assert_eq!(
         llama32_1b["bounded_context_2048_pack"],
-        "blocked_first_token_divergence"
+        "validated_third_pack"
     );
     assert_eq!(
         llama32_1b["bounded_context_2048_pack_id"],
@@ -155,7 +155,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert!(llama32_1b["evidence"]
         .as_str()
         .unwrap()
-        .contains("diverged on the first generated token"));
+        .contains("third bounded 2048-context parity after the RoPE frequency-factor fix"));
     let llama32_3b = compatibility
         .iter()
         .find(|item| item["id"] == "llama32_3b_instruct_q8_0")

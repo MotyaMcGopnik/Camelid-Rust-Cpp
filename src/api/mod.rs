@@ -705,7 +705,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support still requires normalized current-head bundles; the 1B third 2048-context pack is blocked by first-token divergence, the 3B third 2048-context pack passed, and the 8B broader 50-token, 512-context, compact chat-template-shapes, and lazy-Q8 hot-path reruns are bounded packs/measurements only; 8B 1024/2048-context promotion is paused after backend timeouts",
+            current_gate: "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B and Llama 3 8B Q8_0 rows are supported for exact-row smoke; broader/full support still requires normalized current-head bundles; the 1B and 3B third 2048-context packs passed, and the 8B broader 50-token, 512-context, compact chat-template-shapes, and lazy-Q8 hot-path reruns are bounded packs/measurements only; 8B 1024/2048-context promotion is paused after backend timeouts",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -752,7 +752,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "llama_bpe_decoder_exact_1b_3b_8b_q8_0",
                 status: "supported_exact_row_smoke_lanes",
-                notes: "exact Llama 3.2 1B/3B and Llama 3 8B Instruct Q8_0 have row-specific smoke support; the 1B third 2048-context pack is explicitly blocked, the 3B third 2048-context pack passed, and the 8B broader 50-token, first 512-context, compact chat-template-shapes, and retained-block lazy-Q8 hot-path passes are bounded pack/measurement evidence only; the 8B 1024/2048 context packs are blocked by backend timeout and promotion is paused; broader Llama-family/full support still waits on normalized current-head bundles, broader context/template coverage, and production performance evidence",
+                notes: "exact Llama 3.2 1B/3B and Llama 3 8B Instruct Q8_0 have row-specific smoke support; the 1B and 3B third 2048-context packs passed, and the 8B broader 50-token, first 512-context, compact chat-template-shapes, and retained-block lazy-Q8 hot-path passes are bounded pack/measurement evidence only; the 8B 1024/2048 context packs are blocked by backend timeout and promotion is paused; broader Llama-family/full support still waits on normalized current-head bundles, broader context/template coverage, and production performance evidence",
             },
         ],
         planned_model_families: vec![
@@ -813,7 +813,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 parity_audited: "compact_50_token_plus_prompt_pack_match",
                 performance_measured: "bounded_unique_chat_perf_rss_validated",
                 frontend_load_path_verified: "validated",
-                tested_context: "short_api_webui_smoke_plus_first_512_and_second_1024_context_packs; third_2048_context_pack_blocked_first_token_divergence",
+                tested_context: "short_api_webui_smoke_plus_first_512_second_1024_and_third_2048_context_packs",
                 chat_template_renderer: "compact",
                 chat_template_shape_pack: "validated_bounded_pack",
                 chat_template_shape_pack_id: "llama3-chat-template-shapes-v1",
@@ -823,11 +823,11 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_1024_pack: "validated_second_pack",
                 bounded_context_1024_pack_id: "llama3-context-1024-smoke-v1",
                 bounded_context_1024_window: 1024,
-                bounded_context_2048_pack: "blocked_first_token_divergence",
+                bounded_context_2048_pack: "validated_third_pack",
                 bounded_context_2048_pack_id: "llama3-context-2048-smoke-v1",
                 bounded_context_2048_window: 2048,
-                evidence: "the exact bartowski Llama-3.2-1B-Instruct-Q8_0 GGUF has exact-row load, completion, chat-completion, frontend-smoke evidence, compact/prompt-pack parity, first bounded 512-context parity, second bounded 1024-context parity, bounded compact template-shape coverage, and bounded unique-chat perf/RSS evidence; its third bounded 2048-context attempt matched prompt tokens but diverged on the first generated token, so Camelid supports exact-row smoke for this row only, not 2048-context or broader/full support",
-                next_step: "preserve exact-row smoke support while debugging the 2048-context first-token divergence and normalizing larger/broader context, arbitrary/Jinja template behavior, production throughput, portability, and durable full-support bundle evidence before any broader/full-support claim",
+                evidence: "the exact bartowski Llama-3.2-1B-Instruct-Q8_0 GGUF has exact-row load, completion, chat-completion, frontend-smoke evidence, compact/prompt-pack parity, first bounded 512-context parity, second bounded 1024-context parity, third bounded 2048-context parity after the RoPE frequency-factor fix, bounded compact template-shape coverage, and bounded unique-chat perf/RSS evidence; Camelid supports exact-row smoke and the checked 512/1024/2048 context packs for this row only, not model-native/larger context or broader/full support",
+                next_step: "preserve exact-row smoke plus checked 512/1024/2048 context support while normalizing model-native/larger context, arbitrary/Jinja template behavior, production throughput, portability, and durable full-support bundle evidence before any broader/full-support claim",
             },
             ModelCompatibilityTarget {
                 id: "llama32_3b_instruct_q8_0",
@@ -3144,18 +3144,13 @@ mod tests {
             .iter()
             .find(|target| target.id == "llama32_1b_instruct_q8_0")
             .expect("1B row should stay advertised");
-        assert_eq!(
-            one_b.bounded_context_2048_pack,
-            "blocked_first_token_divergence"
-        );
+        assert_eq!(one_b.bounded_context_2048_pack, "validated_third_pack");
         assert_eq!(
             one_b.bounded_context_2048_pack_id,
             "llama3-context-2048-smoke-v1"
         );
         assert_eq!(one_b.bounded_context_2048_window, 2048);
-        assert!(one_b
-            .evidence
-            .contains("diverged on the first generated token"));
+        assert!(one_b.evidence.contains("third bounded 2048-context parity"));
 
         let three_b = response
             .model_compatibility
