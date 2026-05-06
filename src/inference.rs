@@ -174,6 +174,8 @@ impl Q8BlockReader {
             .ok_or_else(|| IoError::new(ErrorKind::InvalidInput, "block offset overflow"))?;
         let mut block_data = [0u8; Self::BLOCK_SIZE_BYTES];
         file.read_exact_at(&mut block_data, block_offset)?;
+        #[cfg(test)]
+        let _guard = crate::test_support::q8_file_state_lock();
         record_q8_0_file_read(block_data.len());
 
         let scale_bits = u16::from_le_bytes(block_data[0..2].try_into().expect("2-byte scale"));
@@ -8430,6 +8432,7 @@ mod tests {
     #[test]
     fn q8_0_file_backed_batch_matmul_reuses_chunk_reads_across_input_rows() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
@@ -8492,6 +8495,7 @@ mod tests {
     #[test]
     fn q8_0_file_backed_borrowed_batch_matmul_reuses_chunk_reads_across_input_rows() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
@@ -8552,6 +8556,7 @@ mod tests {
     #[test]
     fn q8_0_file_backing_cache_reuses_exact_chunk_reads() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "1024");
 
@@ -9450,6 +9455,7 @@ mod tests {
     #[test]
     fn output_projection_diagnostics_support_q8_0_file_backed_token_major_rows() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
 

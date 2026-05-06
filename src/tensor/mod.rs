@@ -818,11 +818,15 @@ impl Q8_0FileReadStats {
 }
 
 pub(crate) fn record_q8_0_file_read(bytes: usize) {
+    #[cfg(test)]
+    let _guard = crate::test_support::q8_file_state_lock();
     Q8_0_FILE_READ_CALLS.fetch_add(1, Ordering::Relaxed);
     Q8_0_FILE_READ_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
 }
 
 pub fn q8_0_file_read_stats() -> Q8_0FileReadStats {
+    #[cfg(test)]
+    let _guard = crate::test_support::q8_file_state_lock();
     let cache_capacity_bytes = q8_file_cache_capacity_bytes();
     let (cache_entries, cache_bytes) = q8_file_cache_snapshot(cache_capacity_bytes);
     Q8_0FileReadStats {
@@ -850,6 +854,8 @@ struct Q8FileCacheEntry {
 }
 
 fn q8_file_cache_get(path: &Path, offset: u64, out: &mut [u8]) -> bool {
+    #[cfg(test)]
+    let _guard = crate::test_support::q8_file_state_lock();
     let capacity = q8_file_cache_capacity_bytes();
     let Some(cache) = Q8_FILE_CACHE.get() else {
         return false;
@@ -891,6 +897,8 @@ fn q8_file_cache_entry_covers(
 }
 
 fn q8_file_cache_insert(path: PathBuf, offset: u64, bytes: &[u8]) {
+    #[cfg(test)]
+    let _guard = crate::test_support::q8_file_state_lock();
     let capacity = q8_file_cache_capacity_bytes();
     let cache = Q8_FILE_CACHE.get_or_init(|| Mutex::new(Q8FileCache::default()));
     let mut cache = cache.lock().expect("q8 file cache mutex poisoned");
@@ -909,6 +917,8 @@ fn q8_file_cache_capacity_bytes() -> usize {
 }
 
 fn q8_file_cache_snapshot(capacity: usize) -> (u64, u64) {
+    #[cfg(test)]
+    let _guard = crate::test_support::q8_file_state_lock();
     let Some(cache) = Q8_FILE_CACHE.get() else {
         return (0, 0);
     };
@@ -1298,6 +1308,7 @@ mod tests {
     #[test]
     fn q8_file_cache_serves_matching_chunks_and_evicts_to_capacity() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "8");
         let first_path = std::path::PathBuf::from(format!(
             "/tmp/camelid-q8-cache-first-{}",
@@ -1335,6 +1346,7 @@ mod tests {
     #[test]
     fn q8_file_cache_serves_subranges_from_retained_chunks() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "16");
         let path = std::path::PathBuf::from(format!(
             "/tmp/camelid-q8-cache-subrange-{}",
@@ -1356,6 +1368,7 @@ mod tests {
     #[test]
     fn q8_file_cache_coalesces_adjacent_chunks_for_cross_boundary_reuse() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "16");
         let path = std::path::PathBuf::from(format!(
             "/tmp/camelid-q8-cache-adjacent-{}",
@@ -1380,6 +1393,7 @@ mod tests {
     #[test]
     fn q8_file_cache_coalesces_overlapping_chunks_with_newest_bytes() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "12");
         let path = std::path::PathBuf::from(format!(
             "/tmp/camelid-q8-cache-overlap-{}",

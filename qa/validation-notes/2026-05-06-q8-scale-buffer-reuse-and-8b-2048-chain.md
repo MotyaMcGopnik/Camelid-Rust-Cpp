@@ -6,6 +6,7 @@ Change:
 
 - Reused the file-backed Q8 row-chunk scale decode buffer with a thread-local `Vec<f32>`, mirroring the existing row-byte chunk reuse.
 - This removes a per-matmul allocation in both the batch block-reader path and the borrowed single-row file-reader path while keeping the same Q8 bytes, scales, dot products, cache policy, and output layout.
+- Follow-up local test hardening serializes test-only Q8 file-read/cache state assertions with a reentrant guard so global Q8 counters/cache/env-sensitive tests remain deterministic after the wide Q8 file-backed reader became parallel-capable. This guard is `#[cfg(test)]` only and does not change release runtime behavior.
 
 Remote diagnostics:
 
@@ -34,10 +35,14 @@ Remote diagnostics:
     - `backend-tail.log`: `ef68a0662d5919c495ec0b34a644570dc3be4a0bc96abd2fde339dac842c56a1`
     - `pack.stdout.log`: `9301fa14eeccd6dccfdb1909b7c770552582a7a7a51deb73846351b249197325`
     - `pack.stderr.log`: `1a7b59e9bd7f28692be0785874ab37d778003760c6e8998aebb62bb0de81c7b7`
-- The follow-on source-`f8c2d66` 8B 2048 cache hypothesis run started after the no-cache run exited; do not duplicate it:
-  - run script: `target/run-8b-2048-cache-diag-f8c2d66.sh` inside the archived validation worktree
-  - active artifact root at audit time: `target/llama3-8b-context-2048-cache320m-diag-20260506T073251Z-source-f8c2d66/` inside the archived validation worktree
+- Read-only follow-up audit of the source-`f8c2d66` 8B 2048 cache hypothesis run on the canonical Ubuntu validation lane; no duplicate long run was started:
+  - remote artifact root: `/home/ubuntu/work/Camelid-longctx-f8c2d66-20260506T061712Z/target/llama3-8b-context-2048-cache320m-diag-20260506T073251Z-source-f8c2d66/`
   - env delta: `BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES=335544320` (320 MiB)
+  - prompt/generated parity remained diagnostic PASS for the same 1910-token prompt (`prompt_tokens_match=true`, `generated_tokens_match=true`, `generated_text_match=true`)
+  - backend trace final: `q8_file_read_bytes=47285433088` (`45094.90 MiB`) plus `q8_file_cache_hit_bytes=103824336640` (`99014.60 MiB`) with cache residency `323292672` bytes (`308.32 MiB`) and RSS trace `1997468 KiB` at logits
+  - compared with the no-cache source-`f8c2d66` diagnostic above, the 320 MiB cache reduced physical Q8 file reads from `151109769728` bytes to `47285433088` bytes, while cache-hit telemetry accounts for another `103824336640` bytes served from RAM; RSS at logits increased from ~`1415552 KiB` to ~`1997468 KiB`
+  - this refines the working hypothesis: current lazy Q8 with chunked/batched reuse is measured here in the high-100-GiB logical Q8 traffic class rather than a fresh 400+ GiB physical-read result, and bounded cache reuse can materially lower file I/O only by carrying a visible RSS/cache-residency cost. Retained Q8 blocks would push that tradeoff further toward lower file I/O and heavier resident Q8 payload.
+  - remote SHA256s captured during audit: `pack/summary.json` `0a489a0c7af130d6aa6b01ebeeb611efb21808533fec331899044b39af7a099c`; `run.env.txt` `55254922889e8ece794bc246e9aa5cee213f0dd073b247a160ab8b99f2699a7c`; `backend.log` `0b09eb92b693bce93b74a68249b603aa8105f1aeaa82603b8f3f9f378a385d05`; `pack.stdout.log` `72a88069cbe9892ece7c83c9ff18685c044bd417472442fdf47ec3a9af5da25e`; `pack.stderr.log` `9b451bbc27009ca08257d421f06b6a0bad60d3f46fe8d7478b2dbb05e2b959e8`
 
 Local gates:
 
