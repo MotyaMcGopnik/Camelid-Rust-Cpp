@@ -4032,6 +4032,17 @@ fn matmul_rhs_transposed_borrowed_with_precision(
         )));
     }
     let output_width = weight.rows;
+    if let Some(backing) = borrowed_q8_0_reader_backing(weight, input_width, output_width)? {
+        let mut workspace = InferenceWorkspace::new(input_width);
+        return matmul_rhs_transposed_q8_0_block_reader(
+            input,
+            backing,
+            Q8BlockReader::new(backing.absolute_offset, backing.num_blocks),
+            output_width,
+            name,
+            &mut workspace,
+        );
+    }
     let mut output = vec![0.0; rows * output_width];
     let precision = diagnostic_linear_accumulation_precision()?;
     for row in 0..rows {
@@ -7738,6 +7749,66 @@ mod tests {
         .unwrap();
         let reads = q8_0_file_read_stats().saturating_delta_since(start);
 
+        assert_slice_close(&actual.data, &expected.data);
+        assert_eq!(reads.read_calls, 2);
+        assert_eq!(
+            reads.read_bytes,
+            (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
+        );
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
+    }
+
+    #[test]
+    fn q8_0_file_backed_borrowed_batch_matmul_reuses_chunk_reads_across_input_rows() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+        std::env::set_var(
+            "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
+            (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
+        );
+
+        let rows: Vec<Q8_0Block> = (0..4)
+            .map(|row| Q8_0Block {
+                scale: 0.125 + row as f32 * 0.03125,
+                quants: std::array::from_fn(|idx| idx as i8 - 9 + row as i8),
+            })
+            .collect();
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        for row in &rows {
+            temp_file
+                .write_all(&f32_to_f16_bits(row.scale).to_le_bytes())
+                .unwrap();
+            temp_file
+                .write_all(&row.quants.iter().map(|q| *q as u8).collect::<Vec<_>>())
+                .unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let input_values = (0..96)
+            .map(|idx| idx as f32 * 0.05 - 2.0)
+            .collect::<Vec<_>>();
+        let input = CpuTensor::from_f32("output_norm_batch", vec![3, 32], input_values).unwrap();
+        let expected_weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "expected.weight",
+            vec![4, 32],
+            dequantized_q8_0_rows(&rows),
+            rows.clone(),
+        )
+        .unwrap();
+        let expected =
+            matmul_rhs_transposed_q8_0_block_dot(&input, &expected_weight, "expected").unwrap();
+        let output_weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            crate::tensor::TensorShape { dims: vec![32, 4] },
+            Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len()),
+        );
+        let start = q8_0_file_read_stats();
+
+        let actual = output_projection_runtime(&input, &output_weight, "actual", false).unwrap();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_eq!(actual.shape.dims, vec![3, 4]);
         assert_slice_close(&actual.data, &expected.data);
         assert_eq!(reads.read_calls, 2);
         assert_eq!(
