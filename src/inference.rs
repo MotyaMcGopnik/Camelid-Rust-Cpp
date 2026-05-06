@@ -2046,15 +2046,13 @@ fn prefill_chunk_token_count(prefill_count: usize) -> usize {
 
 fn prefill_layer_major_enabled(weights: &LlamaLoadedWeights) -> bool {
     match env::var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR") {
-        Ok(value)
-            if value.eq_ignore_ascii_case("0")
-                || value.eq_ignore_ascii_case("false")
-                || value.eq_ignore_ascii_case("off")
-                || value.eq_ignore_ascii_case("disabled") =>
-        {
-            false
+        Ok(value) => {
+            let trimmed = value.trim();
+            !(trimmed.eq_ignore_ascii_case("0")
+                || trimmed.eq_ignore_ascii_case("false")
+                || trimmed.eq_ignore_ascii_case("off")
+                || trimmed.eq_ignore_ascii_case("disabled"))
         }
-        Ok(_) => true,
         Err(env::VarError::NotPresent) => weights.has_lazy_q8_0_file_backing(),
         Err(_) => weights.has_lazy_q8_0_file_backing(),
     }
@@ -7906,7 +7904,7 @@ mod tests {
         std::env::set_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR", "1");
         assert!(prefill_layer_major_enabled(&dense_weights));
 
-        for value in ["0", "false", "off", "disabled"] {
+        for value in ["0", "false", "off", "disabled", " FALSE ", "Off"] {
             std::env::set_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR", value);
             assert!(!prefill_layer_major_enabled(&lazy_q8_weights));
         }
