@@ -28,6 +28,17 @@ Camelid's public support language is intentionally narrow, evidence-bound, and e
 
 Nothing adjacent inherits support. Support does not spread across nearby sizes, neighboring quantizations, matching tokenizers, or partial runtime seams.
 
+## At-a-glance release contract
+
+Use this table when writing README copy, frontend readiness text, API summaries, or release notes. It is deliberately short so support claims are easy to audit.
+
+| Exact row | Public claim | Checked context boundary | Do not claim |
+| --- | --- | --- | --- |
+| TinyLlama 1.1B Chat Q8_0 | Supported current gate with parity, API/WebUI, template-shape, bounded context, and RSS/perf evidence. | 512 bounded pack is green. | Neighboring TinyLlama variants, different quants, or broader LLaMA-family support. |
+| Llama 3.2 1B Instruct Q8_0 | Supported exact-row smoke with load, completions, chat completions, WebUI, compact/broader parity, bounded template-shapes, unique-chat RSS/perf, and checked context packs. | 512/1024/2048 bounded packs are green; the 2048 pass depends on the RoPE frequency-factor fix. | Model-native/larger context, arbitrary/Jinja templates, production throughput, portability, or broad/full support. |
+| Llama 3.2 3B Instruct Q8_0 | Supported exact-row smoke with compact/broader 50-token parity, API/WebUI, bounded template-shapes, unique-chat RSS/perf, checked context packs, and an opt-in parallel Q8 first-token direction probe. | 512/1024/2048 bounded packs are green. | Production throughput beyond the direction probe, model-native/larger context, arbitrary/Jinja templates, portability, or broad/full support. |
+| Llama 3 8B Instruct Q8_0 | Supported exact-row smoke with compact parity, broader 50-token parity, API/WebUI, bounded memory evidence, 512-context, compact template-shapes, and lazy-Q8 hot-path measurements. | 512 bounded pack is green; 1024/2048 are timeout-blocked. | 1024/2048 context, model-native/larger context, arbitrary-template behavior, production-throughput/portability support, or broad 8B/Llama-family support. |
+
 ## Governing rules
 
 Two rules keep this matrix honest across docs, API signals, and UI copy:

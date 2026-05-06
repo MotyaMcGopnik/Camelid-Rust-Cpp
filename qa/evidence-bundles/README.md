@@ -2,6 +2,17 @@
 
 This directory is for durable, reviewable evidence manifests and checksums.
 
+## Reviewer shortcut
+
+The support story is intentionally exact-row. `COMPATIBILITY.md` is the release contract, `STATUS.md` is the narrative evidence snapshot, and this directory is the public manifest/checksum map that keeps the claims auditable without exposing private raw artifact trees.
+
+| Exact row | Public proof readers should start with | Current blocker, if any |
+| --- | --- | --- |
+| TinyLlama 1.1B Chat Q8_0 | `tinyllama-broader-template-context-perf-rss-20260505T044519Z-head-864e07b51f36/` plus the four-row API/WebUI and 512-context bundles. | None for the current supported gate; rerun on future support-contract changes. |
+| Llama 3.2 1B Instruct Q8_0 | `full-support-normalized-wp1-20260505T032406Z-head-bcf9e647d6fd/`, `llama32-1b-context-1024-20260505T081001Z-head-156ded6fc76b/`, `llama32-1b-context-2048-rope-factors-20260506T0105Z-head-62f8cbc/`, and the shared 1B/3B template/perf bundles. | Broader/full support still needs model-native/larger context, arbitrary/Jinja template, production throughput, portability, and durable full-support normalization. |
+| Llama 3.2 3B Instruct Q8_0 | `full-support-normalized-wp1-20260505T032406Z-head-bcf9e647d6fd/`, `llama32-3b-context-1024-20260505T094258Z-head-c14e5e7b5692/`, `llama32-3b-context-2048-20260505T105742Z-head-36ec8e492d65/`, the shared 1B/3B template/perf bundles, and `llama32-3b-parallel-q8-first-token-20260505T140400Z-head-ffc22b85214f/`. | Broader/full support still needs model-native/larger context, arbitrary/Jinja template, production throughput beyond the first-token direction probe, portability, and durable full-support normalization. |
+| Llama 3 8B Instruct Q8_0 | `full-support-normalized-wp2-8b-watchdog-20260505T041404Z-head-83c21f0cbf5a/`, `8b-checkmark-current-main-20260505T084931Z-head-15bfc41d15d5/`, `llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/`, `four-row-context-512-20260505T051510Z-head-b403884/`, `llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/`, and the lazy-Q8 hot-path bundles. | 1024/2048 context is frozen red: Camelid did not complete within the 900-second parity harness timeout, so no PASS parity reports exist. |
+
 Current public evidence map:
 - `four-row-public-20260503T024327Z/` preserves the sanitized carry-forward smoke boundary.
 - `four-row-perf-portability-public-20260503T025639Z/` preserves the compact perf/portability envelope.

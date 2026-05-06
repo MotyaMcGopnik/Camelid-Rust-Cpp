@@ -14,6 +14,15 @@ The goal is simple: local chat that feels sharp, legible, and dependable — wit
 
 > **Current public posture:** four exact GGUF rows have evidence-backed support boundaries: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through bounded 2048-context packs, and Llama 3 8B Q8_0 through a bounded 512-context pack. This is still exact-row support, not broad Llama-family, neighboring-model, or full/model-native-context support.
 
+## Milestone at a glance
+
+Camelid's current milestone is not a loose compatibility demo. It is a synchronized product surface: backend runtime, OpenAI-compatible API, WebUI readiness, docs, and durable evidence all point at the same exact support contract.
+
+- **Four exact Q8_0 rows are public and evidence-backed.** TinyLlama remains the full current gate; Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B are exact-row smoke-supported.
+- **The UI and API fail closed instead of guessing.** Chat unlocks only when the loaded local GGUF is `loaded_now=true`, `generation_ready=true`, and matched to an exact supported `/api/capabilities` row.
+- **The context ladder is explicit.** All four rows have a checked bounded 512-context pack; the exact Llama 3.2 1B/3B rows also have checked 1024 and 2048 packs.
+- **The biggest caveat is visible.** Llama 3 8B 1024/2048-context promotion is blocked by Camelid backend timeout in the parity harness, so the claim stays at the checked 512 pack until new PASS artifacts exist.
+
 ## Why Camelid matters
 
 Most local-model stacks sell compatibility first and precision later. Camelid flips that.
@@ -43,14 +52,14 @@ Camelid currently gives you:
 
 ## Support matrix
 
-Camelid’s public support boundary is intentionally narrow and exact-row.
+Camelid’s public support boundary is intentionally narrow and exact-row. Read each row literally; nothing adjacent inherits support.
 
-| Exact lane | Public status | What Camelid can honestly claim today |
-| --- | --- | --- |
-| TinyLlama 1.1B Chat Q8_0 | **Supported current gate** | End-to-end parity-backed support for the current validated TinyLlama row, including broader parity, bounded template-shape checks, bounded 512-context coverage, and bounded backend RSS/perf sampling. |
-| Llama 3.2 1B Instruct Q8_0 | **Supported exact-row smoke** | Exact-row load, completions, chat completions, WebUI smoke, bounded prompt-pack parity, bounded template-shape checks, bounded unique-chat perf/RSS envelope, and bounded 512/1024/2048-context packs; the 2048 pass is exact-row only after the RoPE frequency-factor fix and is not broad/model-native context support. |
-| Llama 3.2 3B Instruct Q8_0 | **Supported exact-row smoke** | Exact-row load, completions, chat completions, WebUI smoke, bounded prompt-pack parity, bounded template-shape checks, bounded unique-chat perf/RSS envelope, and bounded 512/1024/2048-context packs. |
-| Llama 3 8B Instruct Q8_0 | **Supported exact-row smoke** | Exact-row load, completions, chat completions, WebUI smoke, bounded three-prompt parity, one bounded 512-context pack, one bounded compact chat-template-shapes pack, and bounded memory evidence. |
+| Exact lane | Public status | Green evidence today | Crisp caveat |
+| --- | --- | --- | --- |
+| TinyLlama 1.1B Chat Q8_0 | **Supported current gate** | End-to-end generation, broader five-prompt/50-token parity, bounded template-shape checks, bounded 512-context coverage, and backend RSS/perf sampling. | This is the trusted current gate, not a promise about other TinyLlama variants or quants. |
+| Llama 3.2 1B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact/broader parity, bounded template-shape checks, bounded unique-chat perf/RSS, and checked 512/1024/2048-context packs. | The 2048 pass is exact-row only after the RoPE frequency-factor fix; it is not model-native/larger-context, arbitrary-template, production-throughput, or portability support. |
+| Llama 3.2 3B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact/broader 50-token parity, bounded template-shape checks, bounded unique-chat perf/RSS, checked 512/1024/2048-context packs, and an opt-in parallel Q8 first-token direction probe. | The parallel Q8 result is a direction probe, not production throughput; broader/full support still needs model-native/larger context, arbitrary-template, and portability evidence. |
+| Llama 3 8B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact parity, three-prompt 50-token parity, bounded 512-context pack, compact chat-template-shapes pack, bounded memory evidence, and lazy-Q8 hot-path measurements. | 1024/2048-context packs are blocked: the reference completed, but Camelid did not produce parity reports within the 900-second harness timeout. |
 
 ### Latest bounded model checks
 

@@ -1,8 +1,17 @@
 # Validation Matrix
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 
 Run the smallest meaningful validation lane for your change. If a change affects support language, readiness behavior, or exact-row claims, update docs and evidence references together.
+
+## Current support-surface alignment rule
+
+Every public surface should tell the same four-row story:
+
+- TinyLlama 1.1B Chat Q8_0 is the supported current gate, with checked 512-context/template/RSS evidence.
+- Llama 3.2 1B and 3B Instruct Q8_0 are exact-row smoke-supported through checked 512/1024/2048 bounded context packs.
+- Llama 3 8B Instruct Q8_0 is exact-row smoke-supported through checked 512-context evidence only.
+- Llama 3 8B 1024/2048 promotion stays closed until Camelid produces fresh PASS parity reports; the current blocker is backend non-completion within the 900-second harness timeout.
 
 | Change type | Minimum expected checks | Extra checks when relevant | Notes |
 | --- | --- | --- | --- |

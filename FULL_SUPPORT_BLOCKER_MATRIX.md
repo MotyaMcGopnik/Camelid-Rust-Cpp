@@ -1,6 +1,6 @@
 # Camelid Full-Support Blocker Matrix
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 
 This is the owner/TPM matrix for the four-row target Tim actually cares about:
 
@@ -10,6 +10,14 @@ This is the owner/TPM matrix for the four-row target Tim actually cares about:
 4. Llama 3 8B Instruct Q8_0
 
 It is intentionally stricter than the public support ledger. `COMPATIBILITY.md`, `STATUS.md`, `README.md`, `/api/capabilities`, and the WebUI may honestly describe exact-row smoke support where that is all the evidence supports. This file tracks what is still missing before anyone should call the entire four-row set “fully supported.”
+
+## Reviewer shortcut
+
+The milestone is strong, but the words stay precise:
+
+- **Closed for current support:** TinyLlama current gate; exact Llama 3.2 1B/3B smoke rows through checked 512/1024/2048 packs; exact Llama 3 8B smoke row through checked 512, broader 50-token, compact template-shapes, API/WebUI, bounded memory, and measurement-only hot-path evidence.
+- **Still not full support:** broad Llama-family claims, neighboring GGUFs, different quants, model-native/larger contexts, arbitrary/Jinja template behavior, production throughput, and portability.
+- **Hardest explicit blocker:** Llama 3 8B 1024/2048-context promotion is blocked because Camelid timed out before producing parity reports within the 900-second harness, even though the reference accepted the prompts.
 
 ## Evidence gates
 

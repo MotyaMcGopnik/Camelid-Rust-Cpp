@@ -1,17 +1,23 @@
 # Camelid Documentation Index
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 
 This index helps readers navigate the public Markdown set.
+
+## Fast reader paths
+
+- **Product/reviewer path:** start with `README.md`, then `COMPATIBILITY.md`, then the milestone snapshot in `STATUS.md`.
+- **Evidence auditor path:** start with `qa/evidence-bundles/README.md`, then follow the row-specific manifests linked from `STATUS.md`.
+- **Contributor path:** start with `docs/CONTRIBUTOR_QUICKSTART.md`, then use `docs/VALIDATION_MATRIX.md` to choose the smallest safe check lane.
 
 ## Public sources of truth
 
 Read these first:
 
-- [`README.md`](README.md) — product overview and current release contract
-- [`COMPATIBILITY.md`](COMPATIBILITY.md) — authoritative support ledger
+- [`README.md`](README.md) — product overview, milestone story, and current exact-row support table
+- [`COMPATIBILITY.md`](COMPATIBILITY.md) — authoritative support ledger and at-a-glance release contract
 - [`ROADMAP.md`](ROADMAP.md) — phase-level plan of record
-- [`STATUS.md`](STATUS.md) — current evidence snapshot
+- [`STATUS.md`](STATUS.md) — current milestone/evidence snapshot and exact blockers
 
 ## Contributor and project policy
 

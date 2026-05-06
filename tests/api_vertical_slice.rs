@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "TinyLlama Q8_0 current gate; exact Llama 3.2 1B/3B Q8_0 have checked bounded 512/1024/2048-context packs; exact Llama 3 8B Q8_0 has a checked bounded 512-context pack only; 8B 1024/2048-context promotion remains blocked_backend_timeout_900s until fresh PASS artifacts and docs/API/frontend alignment land"
+        "Four exact Q8_0 rows: TinyLlama current gate; exact Llama 3.2 1B/3B smoke rows with checked bounded 512/1024/2048-context packs; exact Llama 3 8B smoke row with checked bounded 512-context only. 8B 1024/2048 remain blocked_backend_timeout_900s until fresh PASS artifacts and docs/API/frontend alignment land."
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -82,14 +82,23 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(tinyllama["metadata_parses"], "validated");
     assert_eq!(tinyllama["generation_runs"], "validated");
     assert_eq!(tinyllama["parity_audited"], "validated");
-    assert_eq!(tinyllama["tested_context"], "short_prompt_50_token_gate");
+    assert_eq!(
+        tinyllama["tested_context"],
+        "short_50_token_gate_plus_bounded_512_context_pack"
+    );
     assert_eq!(tinyllama["chat_template_renderer"], "tinyllama-marker");
-    assert_eq!(tinyllama["chat_template_shape_pack"], "ready_to_run");
+    assert_eq!(
+        tinyllama["chat_template_shape_pack"],
+        "validated_bounded_pack"
+    );
     assert_eq!(
         tinyllama["chat_template_shape_pack_id"],
         "tinyllama-chat-template-shapes-v1"
     );
-    assert_eq!(tinyllama["bounded_context_512_pack"], "ready_to_run");
+    assert_eq!(
+        tinyllama["bounded_context_512_pack"],
+        "validated_bounded_pack"
+    );
     assert_eq!(
         tinyllama["bounded_context_512_pack_id"],
         "tinyllama-context-512-smoke-v1"
