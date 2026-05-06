@@ -2024,7 +2024,7 @@ fn env_flag_enabled(key: &str) -> bool {
 }
 
 fn prefill_chunk_token_count(prefill_count: usize) -> usize {
-    const DEFAULT_PREFILL_CHUNK_TOKENS: usize = 128;
+    const DEFAULT_PREFILL_CHUNK_TOKENS: usize = 256;
     match env::var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS") {
         Ok(value) => {
             let trimmed = value.trim();
@@ -7867,7 +7867,7 @@ mod tests {
     fn prefill_chunk_token_count_accepts_full_prompt_probe() {
         let _env_guard = env_lock();
         std::env::remove_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS");
-        assert_eq!(prefill_chunk_token_count(2047), 128);
+        assert_eq!(prefill_chunk_token_count(2047), 256);
 
         std::env::set_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS", "256");
         assert_eq!(prefill_chunk_token_count(2047), 256);
@@ -7878,7 +7878,7 @@ mod tests {
         }
 
         std::env::set_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS", "0");
-        assert_eq!(prefill_chunk_token_count(2047), 128);
+        assert_eq!(prefill_chunk_token_count(2047), 256);
         std::env::remove_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS");
     }
 
