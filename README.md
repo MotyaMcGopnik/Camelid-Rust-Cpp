@@ -12,7 +12,7 @@ It does not blur “probably works” into “supported.” Camelid publishes ex
 
 The goal is simple: local chat that feels sharp, legible, and dependable — without pretending unsupported paths are ready.
 
-> **Current public posture:** one fully validated TinyLlama lane and three intentionally narrow exact-row Llama smoke lanes. Nearby models do not inherit support.
+> **Current public posture:** four exact GGUF rows have evidence-backed support boundaries: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through bounded 2048-context packs, and Llama 3 8B Q8_0 through a bounded 512-context pack. This is still exact-row support, not broad Llama-family, neighboring-model, or full/model-native-context support.
 
 ## Why Camelid matters
 
@@ -52,12 +52,24 @@ Camelid’s public support boundary is intentionally narrow and exact-row.
 | Llama 3.2 3B Instruct Q8_0 | **Supported exact-row smoke** | Exact-row load, completions, chat completions, WebUI smoke, bounded prompt-pack parity, bounded template-shape checks, bounded unique-chat perf/RSS envelope, and bounded 512/1024/2048-context packs. |
 | Llama 3 8B Instruct Q8_0 | **Supported exact-row smoke** | Exact-row load, completions, chat completions, WebUI smoke, bounded three-prompt parity, one bounded 512-context pack, one bounded compact chat-template-shapes pack, and bounded memory evidence. |
 
+### Latest bounded model checks
+
+The most recent four-row maintainer matrix on the cleaned support head confirmed the checked rows below. These are bounded checks, not universal model claims.
+
+| Exact row | Latest checked bucket | Result | Output checked |
+| --- | --- | --- | --- |
+| TinyLlama 1.1B Chat Q8_0 | direct chat smoke | PASS | `Certainly! Here` |
+| Llama 3.2 1B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
+| Llama 3.2 3B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
+| Llama 3 8B Instruct Q8_0 | 512-context bounded recall pack | PASS | `CMLD-512` |
+
 ### Read this boundary carefully
 
 - Support does **not** inherit across model sizes, variants, quantizations, tokenizer lanes, or nearby GGUFs.
 - “Llama support” currently means only the exact rows above.
 - Checked context packs do **not** imply model-native or broader context support.
 - Bounded template-shape or perf evidence does **not** imply arbitrary template execution or production portability.
+- The next major support gap is still 8B long-context: 1024/2048-context promotion remains blocked until Camelid completes those packs within the validation timeout.
 
 Authoritative details live in [`COMPATIBILITY.md`](COMPATIBILITY.md). The current evidence snapshot lives in [`STATUS.md`](STATUS.md).
 
