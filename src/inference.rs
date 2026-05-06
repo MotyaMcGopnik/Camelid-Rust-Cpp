@@ -1439,6 +1439,8 @@ impl LlamaInferenceSession {
                     rms_norm_epsilon,
                     layer_idx,
                     base_position: chunk_base_position,
+                    chunk_start: 0,
+                    chunk_rows: token_ids.len(),
                 },
                 &mut self.kv_cache,
             )?;
@@ -1536,6 +1538,8 @@ impl LlamaInferenceSession {
                         rms_norm_epsilon,
                         layer_idx,
                         base_position: chunk_base_position,
+                        chunk_start,
+                        chunk_rows: rows_this_chunk,
                     },
                     &mut self.kv_cache,
                 );
@@ -1981,6 +1985,20 @@ fn trace_forward_memory(phase: &str) {
 fn trace_forward_layer_memory(layer_idx: usize, phase: &str) {
     if forward_memory_trace_enabled() {
         trace_forward_memory(&format!("layer_{layer_idx}_{phase}"));
+    }
+}
+
+fn trace_forward_prefill_layer_chunk_memory(
+    layer_idx: usize,
+    chunk_start: usize,
+    chunk_rows: usize,
+    base_position: usize,
+    phase: &str,
+) {
+    if forward_memory_trace_enabled() {
+        trace_forward_memory(&format!(
+            "layer_{layer_idx}_prefill_chunk_start_{chunk_start}_rows_{chunk_rows}_base_{base_position}_{phase}"
+        ));
     }
 }
 
@@ -2803,6 +2821,8 @@ struct PrefillLayerChunkParams<'a> {
     rms_norm_epsilon: f32,
     layer_idx: usize,
     base_position: usize,
+    chunk_start: usize,
+    chunk_rows: usize,
 }
 
 fn forward_layer_timed(
@@ -3215,6 +3235,16 @@ fn forward_prefill_layer_chunk_timed(
     };
     let mut memory = structured_forward_memory_enabled()
         .then(|| LlamaLayerMemoryTimings::new(layer_idx, capture_memory_sample(kv_cache)));
+    let trace_chunk_memory = |phase: &str| {
+        trace_forward_prefill_layer_chunk_memory(
+            layer_idx,
+            params.chunk_start,
+            params.chunk_rows,
+            params.base_position,
+            phase,
+        );
+    };
+    trace_chunk_memory("start");
 
     let started = Instant::now();
     let attn_norm = hidden.rms_norm(
@@ -3226,7 +3256,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_norm(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_norm_done");
+    trace_chunk_memory("attention_norm_done");
 
     let started = Instant::now();
     let q = linear_runtime(
@@ -3239,7 +3269,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_q(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_q_done");
+    trace_chunk_memory("attention_q_done");
 
     let started = Instant::now();
     let k = linear_for_role_runtime(
@@ -3253,7 +3283,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_k(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_k_done");
+    trace_chunk_memory("attention_k_done");
 
     let started = Instant::now();
     let q = apply_rope_batch(
@@ -3276,7 +3306,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_rope(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_rope_done");
+    trace_chunk_memory("attention_rope_done");
 
     let started = Instant::now();
     let v = linear_for_role_runtime(
@@ -3290,7 +3320,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_v(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_v_done");
+    trace_chunk_memory("attention_v_done");
 
     let started = Instant::now();
     write_kv_cache_batch(kv_cache, layer_idx, params.base_position, &k, &v)?;
@@ -3298,7 +3328,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_kv_cache_write(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_kv_cache_write_done");
+    trace_chunk_memory("kv_cache_write_done");
 
     let started = Instant::now();
     let context = causal_attention_context_batch(
@@ -3314,7 +3344,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_context(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_context_done");
+    trace_chunk_memory("attention_context_done");
 
     let started = Instant::now();
     let attn_out = linear_runtime(
@@ -3327,7 +3357,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_output(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_output_done");
+    trace_chunk_memory("attention_output_done");
 
     let started = Instant::now();
     let residual = hidden.add(
@@ -3338,7 +3368,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_attention_residual(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_attention_residual_done");
+    trace_chunk_memory("attention_residual_done");
 
     let started = Instant::now();
     let ffn_norm = residual.rms_norm(
@@ -3350,7 +3380,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_ffn_norm(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_ffn_norm_done");
+    trace_chunk_memory("ffn_norm_done");
 
     let activated = gated_ffn_activation_batch(
         &ffn_norm,
@@ -3365,7 +3395,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_ffn_activation(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_ffn_gate_up_activation_done");
+    trace_chunk_memory("ffn_gate_up_activation_done");
 
     let started = Instant::now();
     let ffn_out = linear_for_role_runtime(
@@ -3379,7 +3409,7 @@ fn forward_prefill_layer_chunk_timed(
     if let Some(memory) = &mut memory {
         memory.record_after_ffn_down(capture_memory_sample(kv_cache));
     }
-    trace_forward_layer_memory(layer_idx, "prefill_ffn_down_done");
+    trace_chunk_memory("ffn_down_done");
 
     let started = Instant::now();
     let output = residual.add(&ffn_out, format!("layer_{layer_idx}_prefill_ffn_residual"))?;
@@ -3388,7 +3418,8 @@ fn forward_prefill_layer_chunk_timed(
         memory.record_after_ffn_residual(capture_memory_sample(kv_cache));
         memory.record_end();
     }
-    trace_forward_layer_memory(layer_idx, "prefill_ffn_residual_done");
+    trace_chunk_memory("ffn_residual_done");
+    trace_chunk_memory("end");
     timings.total = total_started.elapsed().as_micros();
     timings.memory = memory;
 
@@ -10350,6 +10381,8 @@ mod tests {
                 rms_norm_epsilon: config.rms_norm_epsilon,
                 layer_idx: 0,
                 base_position: 0,
+                chunk_start: 0,
+                chunk_rows: 2,
             },
             &mut kv_cache,
         )
