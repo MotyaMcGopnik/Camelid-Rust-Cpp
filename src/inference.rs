@@ -5436,11 +5436,24 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                 "q8_0 block-reader row byte count overflow".to_string(),
             )
         })?;
-    let mut output = vec![0.0_f32; rows * output_width];
+    let output_len = rows.checked_mul(output_width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("q8_0 block-reader output size overflow".to_string())
+    })?;
+    let mut output = vec![0.0_f32; output_len];
     let chunk_rows = q8_0_file_reader_chunk_rows(row_bytes_len, output_width)?;
     let row_chunk_len = row_bytes_len.checked_mul(chunk_rows).ok_or_else(|| {
         BackendError::RuntimeShapeMismatch(
             "q8_0 block-reader chunk byte count overflow".to_string(),
+        )
+    })?;
+    let chunk_output_len = chunk_rows.checked_mul(rows).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 block-reader chunk output size overflow".to_string(),
+        )
+    })?;
+    let chunk_scales_len = chunk_rows.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 block-reader chunk scale count overflow".to_string(),
         )
     })?;
     let quantized_inputs: Vec<_> = input
@@ -5450,6 +5463,16 @@ fn matmul_rhs_transposed_q8_0_block_reader(
         .collect();
     with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
         let mut output_idx = 0usize;
+        let mut chunk_output = if rows > 1 {
+            vec![0.0_f32; chunk_output_len]
+        } else {
+            Vec::new()
+        };
+        let mut chunk_scales = if rows > 1 {
+            vec![0.0_f32; chunk_scales_len]
+        } else {
+            Vec::new()
+        };
         while output_idx < output_width {
             let rows_this_chunk = chunk_rows.min(output_width - output_idx);
             let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
@@ -5468,24 +5491,69 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                 })?;
             let chunk = &mut row_chunk[..chunk_bytes_len];
             backing.read_exact_at_cached(chunk, chunk_offset)?;
-            for (row, quantized_input) in quantized_inputs.iter().enumerate() {
-                let out_start = row * output_width + output_idx;
-                let output_end = out_start + rows_this_chunk;
-                let output_chunk = &mut output[out_start..output_end];
+            if rows == 1 {
+                let output_chunk = &mut output[output_idx..output_idx + rows_this_chunk];
                 if should_parallelize_linear_output(output_width) {
                     output_chunk
                         .par_iter_mut()
                         .zip(chunk.par_chunks_exact(row_bytes_len))
                         .for_each(|(out_value, row_bytes)| {
-                            *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                            *out_value =
+                                dot_q8_0_encoded_row(&quantized_inputs[0].blocks, row_bytes);
                         });
                 } else {
                     for (out_value, row_bytes) in output_chunk
                         .iter_mut()
                         .zip(chunk.chunks_exact(row_bytes_len))
                     {
-                        *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                        *out_value = dot_q8_0_encoded_row(&quantized_inputs[0].blocks, row_bytes);
                     }
+                }
+                output_idx += rows_this_chunk;
+                continue;
+            }
+            // Multi-row prefill reuses the same file-backed Q8 weight chunk across
+            // every input row. Decode each weight-block scale once per chunk row
+            // instead of re-reading/re-decoding it for every prompt row.
+            let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
+            decode_q8_0_encoded_row_scales(chunk, scales);
+            let chunk_values = &mut chunk_output[..rows_this_chunk * rows];
+            if should_parallelize_linear_output(output_width) {
+                chunk_values.par_chunks_mut(rows).enumerate().for_each(
+                    |(local_output_idx, values)| {
+                        let row_start = local_output_idx * row_bytes_len;
+                        let row_bytes = &chunk[row_start..row_start + row_bytes_len];
+                        let scale_start = local_output_idx * blocks_per_row;
+                        let row_scales = &scales[scale_start..scale_start + blocks_per_row];
+                        for (row, quantized_input) in quantized_inputs.iter().enumerate() {
+                            values[row] = dot_q8_0_encoded_row_with_scales(
+                                &quantized_input.blocks,
+                                row_bytes,
+                                row_scales,
+                            );
+                        }
+                    },
+                );
+            } else {
+                for (local_output_idx, values) in chunk_values.chunks_mut(rows).enumerate() {
+                    let row_start = local_output_idx * row_bytes_len;
+                    let row_bytes = &chunk[row_start..row_start + row_bytes_len];
+                    let scale_start = local_output_idx * blocks_per_row;
+                    let row_scales = &scales[scale_start..scale_start + blocks_per_row];
+                    for (row, quantized_input) in quantized_inputs.iter().enumerate() {
+                        values[row] = dot_q8_0_encoded_row_with_scales(
+                            &quantized_input.blocks,
+                            row_bytes,
+                            row_scales,
+                        );
+                    }
+                }
+            }
+            for local_output_idx in 0..rows_this_chunk {
+                let values_start = local_output_idx * rows;
+                let values = &chunk_values[values_start..values_start + rows];
+                for (row, value) in values.iter().copied().enumerate() {
+                    output[row * output_width + output_idx + local_output_idx] = value;
                 }
             }
             output_idx += rows_this_chunk;
@@ -5504,6 +5572,33 @@ fn dot_q8_0_encoded_row(input: &[Q8_0Block], row_bytes: &[u8]) -> f32 {
         let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
         let int_sum = q8_0_block_int_dot_horizontal_sum_encoded(&block[2..], &input_block.quants);
         sum += int_sum as f32 * scale * input_block.scale;
+    }
+    sum
+}
+
+fn decode_q8_0_encoded_row_scales(row_bytes: &[u8], scales: &mut [f32]) {
+    debug_assert_eq!(
+        row_bytes.len(),
+        scales.len() * Q8BlockReader::BLOCK_SIZE_BYTES
+    );
+    for (scale, block) in scales
+        .iter_mut()
+        .zip(row_bytes.chunks_exact(Q8BlockReader::BLOCK_SIZE_BYTES))
+    {
+        *scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    }
+}
+
+fn dot_q8_0_encoded_row_with_scales(input: &[Q8_0Block], row_bytes: &[u8], scales: &[f32]) -> f32 {
+    debug_assert_eq!(input.len(), scales.len());
+    let mut sum = 0.0_f32;
+    for ((input_block, block), scale) in input
+        .iter()
+        .zip(row_bytes.chunks_exact(Q8BlockReader::BLOCK_SIZE_BYTES))
+        .zip(scales)
+    {
+        let int_sum = q8_0_block_int_dot_horizontal_sum_encoded(&block[2..], &input_block.quants);
+        sum += int_sum as f32 * *scale * input_block.scale;
     }
     sum
 }
