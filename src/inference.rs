@@ -5491,11 +5491,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
         } else {
             Vec::new()
         };
-        let mut chunk_scales = if rows > 1 {
-            vec![0.0_f32; chunk_scales_len]
-        } else {
-            Vec::new()
-        };
+        let mut chunk_scales = vec![0.0_f32; chunk_scales_len];
         while output_idx < output_width {
             let rows_this_chunk = chunk_rows.min(output_width - output_idx);
             let chunk_bytes_len = row_bytes_len.checked_mul(rows_this_chunk).ok_or_else(|| {
@@ -5514,22 +5510,33 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                 })?;
             let chunk = &mut row_chunk[..chunk_bytes_len];
             backing.read_exact_at_cached(chunk, chunk_offset)?;
+            let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
+            decode_q8_0_encoded_row_scales(chunk, scales);
             if rows == 1 {
                 let output_chunk = &mut output[output_idx..output_idx + rows_this_chunk];
                 if should_parallelize_linear_output(output_width) {
                     output_chunk
                         .par_iter_mut()
                         .zip(chunk.par_chunks_exact(row_bytes_len))
-                        .for_each(|(out_value, row_bytes)| {
-                            *out_value =
-                                dot_q8_0_encoded_row(&quantized_inputs[0].blocks, row_bytes);
+                        .zip(scales.par_chunks_exact(blocks_per_row))
+                        .for_each(|((out_value, row_bytes), row_scales)| {
+                            *out_value = dot_q8_0_encoded_row_with_scales(
+                                &quantized_inputs[0].blocks,
+                                row_bytes,
+                                row_scales,
+                            );
                         });
                 } else {
-                    for (out_value, row_bytes) in output_chunk
+                    for ((out_value, row_bytes), row_scales) in output_chunk
                         .iter_mut()
                         .zip(chunk.chunks_exact(row_bytes_len))
+                        .zip(scales.chunks_exact(blocks_per_row))
                     {
-                        *out_value = dot_q8_0_encoded_row(&quantized_inputs[0].blocks, row_bytes);
+                        *out_value = dot_q8_0_encoded_row_with_scales(
+                            &quantized_inputs[0].blocks,
+                            row_bytes,
+                            row_scales,
+                        );
                     }
                 }
                 output_idx += rows_this_chunk;
@@ -5538,8 +5545,6 @@ fn matmul_rhs_transposed_q8_0_block_reader(
             // Multi-row prefill reuses the same file-backed Q8 weight chunk across
             // every input row. Decode each weight-block scale once per chunk row
             // instead of re-reading/re-decoding it for every prompt row.
-            let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
-            decode_q8_0_encoded_row_scales(chunk, scales);
             let chunk_values = &mut chunk_output[..rows_this_chunk * rows];
             if should_parallelize_linear_output(output_width) {
                 chunk_values.par_chunks_mut(rows).enumerate().for_each(
@@ -5876,9 +5881,15 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
             "q8_0 borrowed block-reader chunk byte count overflow".to_string(),
         )
     })?;
+    let chunk_scales_len = chunk_rows.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 borrowed block-reader chunk scale count overflow".to_string(),
+        )
+    })?;
     let quantized_input = quantize_q8_0_row(input_row);
     let output_width = output.len();
     with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
+        let mut chunk_scales = vec![0.0_f32; chunk_scales_len];
         let mut output_start = 0usize;
         while output_start < output_width {
             let rows_this_chunk = chunk_rows.min(output_width - output_start);
@@ -5897,21 +5908,33 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
                 })?;
             let chunk = &mut row_chunk[..chunk_bytes_len];
             backing.read_exact_at_cached(chunk, chunk_offset)?;
+            let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
+            decode_q8_0_encoded_row_scales(chunk, scales);
             let output_end = output_start + rows_this_chunk;
             let output_chunk = &mut output[output_start..output_end];
             if should_parallelize_linear_output(output_width) {
                 output_chunk
                     .par_iter_mut()
                     .zip(chunk.par_chunks_exact(row_bytes_len))
-                    .for_each(|(out_value, row_bytes)| {
-                        *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                    .zip(scales.par_chunks_exact(blocks_per_row))
+                    .for_each(|((out_value, row_bytes), row_scales)| {
+                        *out_value = dot_q8_0_encoded_row_with_scales(
+                            &quantized_input.blocks,
+                            row_bytes,
+                            row_scales,
+                        );
                     });
             } else {
-                for (out_value, row_bytes) in output_chunk
+                for ((out_value, row_bytes), row_scales) in output_chunk
                     .iter_mut()
                     .zip(chunk.chunks_exact(row_bytes_len))
+                    .zip(scales.chunks_exact(blocks_per_row))
                 {
-                    *out_value = dot_q8_0_encoded_row(&quantized_input.blocks, row_bytes);
+                    *out_value = dot_q8_0_encoded_row_with_scales(
+                        &quantized_input.blocks,
+                        row_bytes,
+                        row_scales,
+                    );
                 }
             }
             output_start += rows_this_chunk;
