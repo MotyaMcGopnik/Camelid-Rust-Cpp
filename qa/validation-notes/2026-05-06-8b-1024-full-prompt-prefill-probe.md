@@ -9,12 +9,12 @@ Change under probe:
 
 Canonical remote diagnostic:
 
-- Host: canonical Ubuntu lane only (`ssh -i /Users/timtoole/Documents/cert/ubuntu.pem ubuntu@54.69.75.77`).
-- Remote isolated worktree: `/home/ubuntu/work/Camelid-fullprompt-86effbf-20260506T103900Z/`.
-- Remote artifact root: `/home/ubuntu/work/Camelid-fullprompt-86effbf-20260506T103900Z/target/llama3-8b-context-1024-fullprompt-diag-20260506T103900Z-head-86effbf/`.
+- Host: canonical Ubuntu validation lane; private SSH host, key path, and address intentionally omitted.
+- Remote isolated worktree: `<validation-worktree>/`.
+- Remote artifact root: `<validation-worktree>/target/llama3-8b-context-1024-fullprompt-diag-20260506T103900Z-head-86effbf/`.
 - Local copied summary/tails: `target/remote-llama3-8b-context-1024-fullprompt-86effbf-20260506T103900Z/`.
 - Prompt pack: `qa/prompt-packs/llama3-context-1024-smoke.json` (`roughly-1024-token-recall`).
-- Model: `/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf`.
+- Model: `$CAMELID_MODEL_DIR/Meta-Llama-3-8B-Instruct-Q8_0.gguf`.
 - Env: `BACKENDINFERENCE_LAZY_Q8_0_LINEAR=1`, `BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS=0`, `BACKENDINFERENCE_PREFILL_CHUNK_TOKENS=full`, `BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES=0`, `BACKENDINFERENCE_FORWARD_MEMORY_TRACE=1`, `BACKENDINFERENCE_FORWARD_RSS_TIMINGS=1`, `RAYON_NUM_THREADS=4`.
 
 Result:
