@@ -867,14 +867,14 @@ struct Q8FileCacheEntry {
 
 fn q8_file_cache_get(path: &Path, offset: u64, out: &mut [u8]) -> bool {
     let capacity = q8_file_cache_capacity_bytes();
+    if capacity == 0 {
+        return false;
+    }
     let Some(cache) = Q8_FILE_CACHE.get() else {
         return false;
     };
     let mut cache = cache.lock().expect("q8 file cache mutex poisoned");
     cache.apply_capacity(capacity);
-    if capacity == 0 {
-        return false;
-    }
     let Some(pos) = cache
         .entries
         .iter()
@@ -908,12 +908,12 @@ fn q8_file_cache_entry_covers(
 
 fn q8_file_cache_insert(path: PathBuf, offset: u64, bytes: &[u8]) {
     let capacity = q8_file_cache_capacity_bytes();
-    let cache = Q8_FILE_CACHE.get_or_init(|| Mutex::new(Q8FileCache::default()));
-    let mut cache = cache.lock().expect("q8 file cache mutex poisoned");
-    cache.apply_capacity(capacity);
     if capacity == 0 || bytes.len() > capacity {
         return;
     }
+    let cache = Q8_FILE_CACHE.get_or_init(|| Mutex::new(Q8FileCache::default()));
+    let mut cache = cache.lock().expect("q8 file cache mutex poisoned");
+    cache.apply_capacity(capacity);
     cache.insert(path, offset, bytes.to_vec(), capacity);
 }
 
@@ -1310,6 +1310,30 @@ mod tests {
         f16_bits_to_f32, q8_0_file_read_stats, q8_file_cache_get, q8_file_cache_insert, CpuTensor,
     };
     use crate::test_support::env_lock;
+
+    #[test]
+    fn q8_file_cache_disabled_path_does_not_store_or_hit() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "0");
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-disabled-{}",
+            std::process::id()
+        ));
+
+        let start = q8_0_file_read_stats();
+        q8_file_cache_insert(path.clone(), 10, b"abcdefgh");
+        let mut out = [0_u8; 8];
+        assert!(!q8_file_cache_get(&path, 10, &mut out));
+        let stats = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_eq!(stats.cache_hits, 0);
+        assert_eq!(stats.cache_hit_bytes, 0);
+        assert_eq!(stats.cache_entries, 0);
+        assert_eq!(stats.cache_bytes, 0);
+        assert_eq!(stats.cache_capacity_bytes, 0);
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+    }
 
     #[test]
     fn q8_file_cache_serves_matching_chunks_and_evicts_to_capacity() {
