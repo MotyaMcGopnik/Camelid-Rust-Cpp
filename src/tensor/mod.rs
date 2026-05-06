@@ -917,6 +917,42 @@ fn q8_file_cache_snapshot(capacity: usize) -> (u64, u64) {
     (cache.entries.len() as u64, cache.bytes as u64)
 }
 
+fn q8_file_cache_try_merge_entries(
+    left: &Q8FileCacheEntry,
+    right: &Q8FileCacheEntry,
+    capacity: usize,
+) -> Option<Q8FileCacheEntry> {
+    if left.path != right.path {
+        return None;
+    }
+    let left_end = left.offset.checked_add(left.bytes.len() as u64)?;
+    let right_end = right.offset.checked_add(right.bytes.len() as u64)?;
+    if left_end < right.offset || right_end < left.offset {
+        return None;
+    }
+    let merged_offset = left.offset.min(right.offset);
+    let merged_end = left_end.max(right_end);
+    let merged_len = usize::try_from(merged_end.checked_sub(merged_offset)?).ok()?;
+    if merged_len > capacity {
+        return None;
+    }
+
+    let mut merged_bytes = vec![0u8; merged_len];
+    let left_start = usize::try_from(left.offset.checked_sub(merged_offset)?).ok()?;
+    merged_bytes[left_start..left_start + left.bytes.len()].copy_from_slice(&left.bytes);
+    let right_start = usize::try_from(right.offset.checked_sub(merged_offset)?).ok()?;
+    // Let the newest read win for overlapping bytes. The cache is only populated
+    // from immutable GGUF payload reads, so equal bytes are expected; this keeps
+    // the behavior deterministic for tests and any future synthetic cache probes.
+    merged_bytes[right_start..right_start + right.bytes.len()].copy_from_slice(&right.bytes);
+
+    Some(Q8FileCacheEntry {
+        path: left.path.clone(),
+        offset: merged_offset,
+        bytes: merged_bytes,
+    })
+}
+
 impl Q8FileCache {
     fn apply_capacity(&mut self, capacity: usize) {
         if capacity == 0 {
@@ -930,18 +966,26 @@ impl Q8FileCache {
     }
 
     fn insert(&mut self, path: PathBuf, offset: u64, bytes: Vec<u8>, capacity: usize) {
-        if let Some(pos) = self.entries.iter().position(|entry| {
-            entry.path == path && entry.offset == offset && entry.bytes.len() == bytes.len()
-        }) {
-            let old = self.entries.remove(pos);
-            self.bytes = self.bytes.saturating_sub(old.bytes.len());
-        }
-        self.bytes = self.bytes.saturating_add(bytes.len());
-        self.entries.push(Q8FileCacheEntry {
+        let mut entry = Q8FileCacheEntry {
             path,
             offset,
             bytes,
-        });
+        };
+        let mut pos = 0usize;
+        while pos < self.entries.len() {
+            if let Some(merged) =
+                q8_file_cache_try_merge_entries(&self.entries[pos], &entry, capacity)
+            {
+                let old = self.entries.remove(pos);
+                self.bytes = self.bytes.saturating_sub(old.bytes.len());
+                entry = merged;
+                pos = 0;
+            } else {
+                pos += 1;
+            }
+        }
+        self.bytes = self.bytes.saturating_add(entry.bytes.len());
+        self.entries.push(entry);
         while self.bytes > capacity {
             self.evict_oldest();
         }
@@ -1306,6 +1350,54 @@ mod tests {
         assert_eq!(&out, b"efgh");
         assert_eq!(stats.cache_hits, 1);
         assert_eq!(stats.cache_hit_bytes, 4);
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_file_cache_coalesces_adjacent_chunks_for_cross_boundary_reuse() {
+        let _env_guard = env_lock();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "16");
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-adjacent-{}",
+            std::process::id()
+        ));
+        q8_file_cache_insert(path.clone(), 100, b"abcdefgh");
+        q8_file_cache_insert(path.clone(), 108, b"ijklmnop");
+
+        let start = q8_0_file_read_stats();
+        let mut out = [0_u8; 8];
+        assert!(q8_file_cache_get(&path, 104, &mut out));
+        let stats = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_eq!(&out, b"efghijkl");
+        assert_eq!(stats.cache_hits, 1);
+        assert_eq!(stats.cache_hit_bytes, 8);
+        assert_eq!(stats.cache_entries, 1);
+        assert_eq!(stats.cache_bytes, 16);
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_file_cache_coalesces_overlapping_chunks_with_newest_bytes() {
+        let _env_guard = env_lock();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "12");
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-overlap-{}",
+            std::process::id()
+        ));
+        q8_file_cache_insert(path.clone(), 100, b"abcdefgh");
+        q8_file_cache_insert(path.clone(), 104, b"WXYZmnop");
+
+        let start = q8_0_file_read_stats();
+        let mut out = [0_u8; 10];
+        assert!(q8_file_cache_get(&path, 102, &mut out));
+        let stats = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_eq!(&out, b"cdWXYZmnop");
+        assert_eq!(stats.cache_hits, 1);
+        assert_eq!(stats.cache_hit_bytes, 10);
+        assert_eq!(stats.cache_entries, 1);
+        assert_eq!(stats.cache_bytes, 12);
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
     }
 
