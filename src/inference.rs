@@ -7282,17 +7282,16 @@ fn causal_attention_context_batch(
     let scale = attention_score_scale_value(head_dim, score_scale);
     let mut out = vec![0.0; rows * expected_width];
 
-    for row in 0..rows {
+    let fill_row = |row: usize, out_row: &mut [f32]| -> Result<()> {
         let position_count = base_position + row + 1;
         let query_row_start = row * expected_width;
-        let out_row_start = row * expected_width;
         if position_count == 1 {
             for attention_head in 0..attention_heads {
                 let kv_head =
                     map_attention_head_to_kv_head(attention_head, repeats, kv_heads, head_mapping);
-                let out_start = out_row_start + attention_head * head_dim;
+                let out_start = attention_head * head_dim;
                 let value_start = kv_cache_offset(kv_cache, layer_idx, 0, kv_head);
-                out[out_start..out_start + head_dim]
+                out_row[out_start..out_start + head_dim]
                     .copy_from_slice(&kv_cache.values[value_start..value_start + head_dim]);
             }
         } else {
@@ -7311,19 +7310,37 @@ fn causal_attention_context_batch(
                 );
                 let probabilities = attention_probabilities(&raw_scores)?;
 
-                let out_start = out_row_start + attention_head * head_dim;
+                let out_start = attention_head * head_dim;
                 for (position, probability) in probabilities.iter().enumerate() {
                     let value_start = kv_cache_offset(kv_cache, layer_idx, position, kv_head);
                     let value_slice = &kv_cache.values[value_start..value_start + head_dim];
                     for dim in 0..head_dim {
-                        out[out_start + dim] += probability * value_slice[dim];
+                        out_row[out_start + dim] += probability * value_slice[dim];
                     }
                 }
             }
         }
+        Ok(())
+    };
+
+    if should_parallelize_attention_context_batch(rows, attention_heads) {
+        out.par_chunks_mut(expected_width)
+            .enumerate()
+            .try_for_each(|(row, out_row)| fill_row(row, out_row))?;
+    } else {
+        for (row, out_row) in out.chunks_mut(expected_width).enumerate() {
+            fill_row(row, out_row)?;
+        }
     }
 
     CpuTensor::from_f32(name, vec![rows, expected_width], out)
+}
+
+const PARALLEL_ATTENTION_CONTEXT_MIN_UNITS: usize = 256;
+
+fn should_parallelize_attention_context_batch(rows: usize, attention_heads: usize) -> bool {
+    rayon::current_num_threads() > 1
+        && rows.saturating_mul(attention_heads) >= PARALLEL_ATTENTION_CONTEXT_MIN_UNITS
 }
 
 struct AttentionTraceParams<'a> {
@@ -10885,6 +10902,111 @@ mod tests {
         assert!(err
             .to_string()
             .contains("attention batch needs 1 cached position(s), but KV cache has 0 allocated"));
+    }
+
+    #[test]
+    fn batch_attention_parallel_context_matches_serial() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let rows = 8;
+        let attention_heads = 32;
+        let kv_heads = 8;
+        let head_dim = 2;
+        let expected_width = attention_heads * head_dim;
+        let kv_width = kv_heads * head_dim;
+        let plan = LlamaKvCachePlan {
+            max_sequence_length: rows,
+            layer_count: 1,
+            kv_head_count: kv_heads,
+            head_dim,
+            key_shape: vec![1, rows, kv_heads, head_dim],
+            value_shape: vec![1, rows, kv_heads, head_dim],
+        };
+        let mut kv_cache = LlamaKvCache::new(plan).expect("KV cache");
+        let key_data: Vec<f32> = (0..rows * kv_width)
+            .map(|idx| ((idx % 11) as f32 - 5.0) * 0.125)
+            .collect();
+        let value_data: Vec<f32> = (0..rows * kv_width)
+            .map(|idx| 10.0 + ((idx % 17) as f32) * 0.25)
+            .collect();
+        let query_data: Vec<f32> = (0..rows * expected_width)
+            .map(|idx| ((idx % 19) as f32 - 9.0) * 0.0625)
+            .collect();
+
+        let key = CpuTensor::from_f32("key", vec![rows, kv_width], key_data).unwrap();
+        let value = CpuTensor::from_f32("value", vec![rows, kv_width], value_data).unwrap();
+        write_kv_cache_batch(&mut kv_cache, 0, 0, &key, &value).unwrap();
+        let query = CpuTensor::from_f32("query", vec![rows, expected_width], query_data).unwrap();
+
+        let serial_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let serial = serial_pool
+            .install(|| {
+                assert!(!should_parallelize_attention_context_batch(
+                    rows,
+                    attention_heads
+                ));
+                causal_attention_context_batch(
+                    &kv_cache,
+                    0,
+                    0,
+                    &query,
+                    attention_heads,
+                    kv_heads,
+                    "serial",
+                )
+            })
+            .unwrap();
+
+        let parallel_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let parallel = parallel_pool
+            .install(|| {
+                assert!(should_parallelize_attention_context_batch(
+                    rows,
+                    attention_heads
+                ));
+                causal_attention_context_batch(
+                    &kv_cache,
+                    0,
+                    0,
+                    &query,
+                    attention_heads,
+                    kv_heads,
+                    "parallel",
+                )
+            })
+            .unwrap();
+
+        assert_eq!(parallel.shape.dims, serial.shape.dims);
+        assert_slice_close(&parallel.data, &serial.data);
+    }
+
+    #[test]
+    fn batch_attention_parallel_context_respects_threshold_and_thread_count() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let single_thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        single_thread_pool.install(|| {
+            assert!(!should_parallelize_attention_context_batch(16, 32));
+        });
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            assert!(!should_parallelize_attention_context_batch(7, 32));
+            assert!(should_parallelize_attention_context_batch(8, 32));
+        });
     }
 
     #[test]
