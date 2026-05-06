@@ -137,6 +137,7 @@ export function capabilityStatusTone(status = '') {
   if (
     value.includes('planned')
     || value.includes('partial')
+    || value.includes('pending')
     || value.includes('guarded')
     || value.includes('groundwork')
     || value.includes('evidence')
