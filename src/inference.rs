@@ -652,6 +652,23 @@ impl LlamaLoadedWeights {
         self.output.as_ref().unwrap_or(&self.token_embedding)
     }
 
+    fn has_lazy_q8_0_file_backing(&self) -> bool {
+        tensor_has_q8_0_file_backing(&self.token_embedding)
+            || self
+                .output
+                .as_ref()
+                .is_some_and(tensor_has_q8_0_file_backing)
+            || self.layers.iter().any(|layer| {
+                tensor_has_q8_0_file_backing(&layer.attention_q)
+                    || tensor_has_q8_0_file_backing(&layer.attention_k)
+                    || tensor_has_q8_0_file_backing(&layer.attention_v)
+                    || tensor_has_q8_0_file_backing(&layer.attention_output)
+                    || tensor_has_q8_0_file_backing(&layer.ffn_gate)
+                    || tensor_has_q8_0_file_backing(&layer.ffn_up)
+                    || tensor_has_q8_0_file_backing(&layer.ffn_down)
+            })
+    }
+
     pub fn load(store: &TensorStore, binding: &LlamaTensorBinding) -> Result<Self> {
         let load_linear = |name: &str| {
             if lazy_q8_0_linear_enabled() {
@@ -782,6 +799,10 @@ impl LlamaLoadedWeights {
 
         Ok(())
     }
+}
+
+fn tensor_has_q8_0_file_backing(tensor: &CpuTensor) -> bool {
+    tensor.source_type == Some(GgufTensorType::Q8_0) && tensor.q8_0_file_backing.is_some()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1442,6 +1463,113 @@ impl LlamaInferenceSession {
         Ok(timings)
     }
 
+    fn forward_prefill_layer_major_timed_fast(
+        &mut self,
+        token_ids: &[u32],
+        chunk_tokens: usize,
+    ) -> Result<LlamaForwardTimings> {
+        if token_ids.is_empty() {
+            return Ok(LlamaForwardTimings::default());
+        }
+        if token_ids.len() > self.kv_cache.plan.max_sequence_length - self.kv_cache.position {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "layer-major prefill of {} token(s) exceeds remaining context capacity {}",
+                token_ids.len(),
+                self.kv_cache.plan.max_sequence_length - self.kv_cache.position
+            )));
+        }
+
+        let prefill_base_position = self.kv_cache.position;
+        let forward_passes = token_ids.len().div_ceil(chunk_tokens);
+        let total_started = Instant::now();
+        let mut memory = structured_forward_memory_enabled().then(|| {
+            LlamaForwardMemoryTimings::new(
+                capture_memory_sample(&self.kv_cache),
+                collect_weight_materialization_stats(&self.weights),
+                q8_0_file_read_stats(),
+            )
+        });
+        if let Some(memory) = &mut memory {
+            memory.forward_passes = forward_passes;
+        }
+        trace_forward_memory("prefill_layer_major_start");
+        let embedding_started = Instant::now();
+        let mut hidden = self
+            .weights
+            .token_embedding
+            .embedding_lookup(token_ids, "token_embedding_prefill_layer_major")?;
+        let mut timings = LlamaForwardTimings {
+            embedding: embedding_started.elapsed().as_micros(),
+            ..LlamaForwardTimings::default()
+        };
+        if let Some(memory) = &mut memory {
+            memory.record_after_embedding(capture_memory_sample(&self.kv_cache));
+        }
+        trace_forward_memory("prefill_layer_major_embedding_done");
+
+        let layers_started = Instant::now();
+        let rms_norm_epsilon = diagnostic_rms_norm_epsilon(self.config.rms_norm_epsilon)?;
+        let hidden_width = hidden.dim(1)?;
+        for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
+            let mut next_hidden = vec![0.0_f32; hidden.data.len()];
+            let mut layer_timings = LlamaLayerTimings {
+                layer_index: layer_idx,
+                ..LlamaLayerTimings::default()
+            };
+            for chunk_start in (0..token_ids.len()).step_by(chunk_tokens) {
+                let rows_this_chunk = chunk_tokens.min(token_ids.len() - chunk_start);
+                let chunk_base_position = prefill_base_position + chunk_start;
+                let hidden_chunk = tensor_row_slice(
+                    &hidden,
+                    chunk_start,
+                    rows_this_chunk,
+                    format!("layer_{layer_idx}_prefill_layer_major_input_{chunk_start}"),
+                )?;
+                let saved_position = self.kv_cache.position;
+                self.kv_cache.position = chunk_base_position;
+                let timed = forward_prefill_layer_chunk_timed(
+                    &hidden_chunk,
+                    layer,
+                    PrefillLayerChunkParams {
+                        config: &self.config,
+                        rope_freqs: self.weights.rope_freqs.as_ref(),
+                        rms_norm_epsilon,
+                        layer_idx,
+                        base_position: chunk_base_position,
+                    },
+                    &mut self.kv_cache,
+                );
+                self.kv_cache.position = saved_position;
+                let timed = timed?;
+                copy_tensor_rows_into(&timed.output, &mut next_hidden, chunk_start, hidden_width)?;
+                layer_timings.add_assign(&timed.timings);
+            }
+            if let (Some(memory), Some(layer_memory)) = (&mut memory, &layer_timings.memory) {
+                memory.record_layer(layer_memory.clone());
+            }
+            timings.layers.push(layer_timings);
+            hidden = CpuTensor::from_f32(
+                format!("layer_{layer_idx}_prefill_layer_major_output"),
+                vec![token_ids.len(), hidden_width],
+                next_hidden,
+            )?;
+            trace_forward_memory(&format!("prefill_layer_major_layer_{layer_idx}_done"));
+        }
+        timings.layers_total = layers_started.elapsed().as_micros();
+        self.kv_cache.position = prefill_base_position + token_ids.len();
+        if let Some(memory) = &mut memory {
+            memory.record_after_layers(capture_memory_sample(&self.kv_cache));
+        }
+        trace_forward_memory("prefill_layer_major_layers_done");
+        timings.total = total_started.elapsed().as_micros();
+        if let Some(memory) = &mut memory {
+            memory.record_end(capture_memory_sample(&self.kv_cache));
+        }
+        trace_forward_memory("prefill_layer_major_end");
+        timings.memory = memory;
+        Ok(timings)
+    }
+
     fn forward_single_token_timed_internal(
         &mut self,
         token_id: u32,
@@ -1647,7 +1775,16 @@ impl LlamaInferenceSession {
         let mut first_token_timings = LlamaForwardTimings::default();
         let prefill_count = token_ids.len().saturating_sub(1);
         let prefill_chunk_tokens = prefill_chunk_token_count();
-        if prefill_count > 0 && prefill_chunk_tokens > 1 {
+        if prefill_count > 0
+            && prefill_chunk_tokens > 1
+            && prefill_layer_major_enabled(&self.weights)
+        {
+            let prefill_token_ids = &token_ids[..prefill_count];
+            let layer_major_timings = self
+                .forward_prefill_layer_major_timed_fast(prefill_token_ids, prefill_chunk_tokens)?;
+            timings.add_assign(&layer_major_timings);
+            prefill_timings.add_assign(&layer_major_timings);
+        } else if prefill_count > 0 && prefill_chunk_tokens > 1 {
             for chunk in token_ids[..prefill_count].chunks(prefill_chunk_tokens) {
                 let chunk_timings = self.forward_prefill_chunk_timed_fast(chunk)?;
                 timings.add_assign(&chunk_timings);
@@ -1693,6 +1830,69 @@ impl LlamaInferenceSession {
     }
 }
 
+fn tensor_row_slice(
+    tensor: &CpuTensor,
+    row_start: usize,
+    rows: usize,
+    name: impl Into<String>,
+) -> Result<CpuTensor> {
+    if tensor.rank() != 2 {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "tensor row slice expected rank-2 tensor {}, got {:?}",
+            tensor.name, tensor.shape.dims
+        )));
+    }
+    let total_rows = tensor.dim(0)?;
+    let width = tensor.dim(1)?;
+    let row_end = row_start.checked_add(rows).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row slice range overflows".to_string())
+    })?;
+    if rows == 0 || row_end > total_rows {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "tensor row slice {row_start}..{row_end} is outside row count {total_rows}"
+        )));
+    }
+    let data_start = row_start * width;
+    let data_end = row_end * width;
+    CpuTensor::from_f32(
+        name,
+        vec![rows, width],
+        tensor.data[data_start..data_end].to_vec(),
+    )
+}
+
+fn copy_tensor_rows_into(
+    source: &CpuTensor,
+    dest: &mut [f32],
+    dest_row_start: usize,
+    dest_width: usize,
+) -> Result<()> {
+    if source.rank() != 2 || source.dim(1)? != dest_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "tensor row copy expected source width {dest_width}, got {:?}",
+            source.shape.dims
+        )));
+    }
+    let rows = source.dim(0)?;
+    let dest_start = dest_row_start.checked_mul(dest_width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row copy offset overflows".to_string())
+    })?;
+    let dest_len = rows.checked_mul(dest_width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row copy length overflows".to_string())
+    })?;
+    let dest_end = dest_start.checked_add(dest_len).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("tensor row copy end overflows".to_string())
+    })?;
+    if dest_end > dest.len() {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "tensor row copy destination range {dest_start}..{dest_end} exceeds {} values",
+            dest.len()
+        )));
+    }
+    dest[dest_start..dest_end].copy_from_slice(&source.data);
+    Ok(())
+}
+
 fn forward_memory_trace_enabled() -> bool {
     env_flag_enabled("BACKENDINFERENCE_FORWARD_MEMORY_TRACE")
 }
@@ -1709,12 +1909,28 @@ fn env_flag_enabled(key: &str) -> bool {
 }
 
 fn prefill_chunk_token_count() -> usize {
-    const DEFAULT_PREFILL_CHUNK_TOKENS: usize = 32;
+    const DEFAULT_PREFILL_CHUNK_TOKENS: usize = 128;
     env::var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_PREFILL_CHUNK_TOKENS)
+}
+
+fn prefill_layer_major_enabled(weights: &LlamaLoadedWeights) -> bool {
+    match env::var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR") {
+        Ok(value)
+            if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled") =>
+        {
+            false
+        }
+        Ok(_) => true,
+        Err(env::VarError::NotPresent) => weights.has_lazy_q8_0_file_backing(),
+        Err(_) => weights.has_lazy_q8_0_file_backing(),
+    }
 }
 
 fn trace_forward_memory(phase: &str) {
@@ -5604,7 +5820,7 @@ fn with_q8_0_file_reader_row_chunk<T>(
 }
 
 fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Result<usize> {
-    const DEFAULT_Q8_0_FILE_READER_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+    const DEFAULT_Q8_0_FILE_READER_CHUNK_BYTES: usize = 32 * 1024 * 1024;
     if row_bytes_len == 0 {
         return Err(BackendError::RuntimeShapeMismatch(
             "q8_0 borrowed block-reader row byte count must be non-zero".to_string(),
@@ -7276,6 +7492,7 @@ mod tests {
             "BACKENDINFERENCE_GQA_HEAD_MAPPING",
             "BACKENDINFERENCE_LINEAR_ACCUMULATION",
             "BACKENDINFERENCE_OUTPUT_PROJECTION_LAYOUT",
+            "BACKENDINFERENCE_PREFILL_LAYER_MAJOR",
             "BACKENDINFERENCE_PARALLEL_LINEAR",
             "BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS",
             "BACKENDINFERENCE_Q8_0_BLOCK_DOT",
@@ -9746,7 +9963,7 @@ mod tests {
 
         std::env::set_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS", "2");
         std::env::set_var("BACKENDINFERENCE_FORWARD_RSS_TIMINGS", "1");
-        let mut chunked = LlamaInferenceSession::new(config, weights).unwrap();
+        let mut chunked = LlamaInferenceSession::new(config.clone(), weights.clone()).unwrap();
         let chunked_step = chunked
             .generate_next_token_with_history_diagnostics(
                 &prompt,
@@ -9793,7 +10010,31 @@ mod tests {
         assert_slice_close(&chunked.kv_cache.keys, &sequential.kv_cache.keys);
         assert_slice_close(&chunked.kv_cache.values, &sequential.kv_cache.values);
 
+        std::env::set_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR", "1");
+        let mut layer_major = LlamaInferenceSession::new(config, weights).unwrap();
+        let layer_major_step = layer_major
+            .generate_next_token_with_history_diagnostics(
+                &prompt,
+                LlamaSampler::Greedy,
+                &prompt,
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            layer_major_step.next_token_id,
+            sequential_step.next_token_id
+        );
+        assert_slice_close(&layer_major_step.logits.data, &sequential_step.logits.data);
+        assert_slice_close(
+            &layer_major_step.hidden_state.data,
+            &sequential_step.hidden_state.data,
+        );
+        assert_eq!(layer_major.kv_cache.position, sequential.kv_cache.position);
+        assert_slice_close(&layer_major.kv_cache.keys, &sequential.kv_cache.keys);
+        assert_slice_close(&layer_major.kv_cache.values, &sequential.kv_cache.values);
+
         std::env::remove_var("BACKENDINFERENCE_PREFILL_CHUNK_TOKENS");
+        std::env::remove_var("BACKENDINFERENCE_PREFILL_LAYER_MAJOR");
         std::env::remove_var("BACKENDINFERENCE_FORWARD_RSS_TIMINGS");
     }
 

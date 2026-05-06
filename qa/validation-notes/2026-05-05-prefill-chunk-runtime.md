@@ -14,7 +14,9 @@ Change:
 - The chunk path batches token embedding lookup, per-layer Q/K/V projections, RoPE application, KV-cache writes, causal attention context, attention output, and gated FFN activation for the prefill portion.
 - The final prompt token still runs through the existing single-token path so logits, output normalization, diagnostics, and sampling behavior remain aligned with the established generation path.
 - `matmul_rhs_transposed_q8_0_block_reader` now quantizes all input rows once and reuses each file-backed Q8_0 weight chunk across those rows before advancing the reader chunk. This reduces repeated Q8 file reads for batched prefill/projected rows.
-- `BACKENDINFERENCE_PREFILL_CHUNK_TOKENS` controls chunk size; the default is `32`. Values `0` or `1` fall back to sequential prefill.
+- `BACKENDINFERENCE_PREFILL_CHUNK_TOKENS` controls chunk size; the default is now `128`. Values `0` or `1` fall back to sequential prefill.
+- For lazy file-backed Q8_0 weights, the default prefill schedule now runs layer-major across prefill chunks so each layer's file-backed Q8_0 tensors are streamed across all prefill chunks before the next layer. Set `BACKENDINFERENCE_PREFILL_LAYER_MAJOR=0` to force the older chunk-major schedule while debugging.
+- The default borrowed/file-backed Q8_0 row-reader target chunk is now `32 MiB` via `BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES`, reducing per-layer chunk-loop read-call overhead while keeping the Q8 file cache itself opt-in.
 
 Follow-up instrumentation:
 
