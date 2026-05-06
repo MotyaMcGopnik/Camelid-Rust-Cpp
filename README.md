@@ -10,7 +10,7 @@ Many local-model stacks are easy to demo and hard to trust. Camelid is designed 
 
 Camelid does not treat “probably works” as “supported.” Support moves only when the evidence is real.
 
-> **Current public posture:** four exact GGUF rows have evidence-backed support boundaries: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through bounded 2048-context packs, and Llama 3 8B Q8_0 through a bounded 2048-context pack. This is still exact-row support, not broad Llama-family, neighboring-model, or full/model-native-context support.
+> **Current public posture:** four exact GGUF rows have evidence-backed support boundaries: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through bounded 2048-context packs, and Llama 3 8B Q8_0 through its checked bounded 512-context pack only. 8B 1024/2048 remain unpromoted until fresh row-specific PASS artifacts and synchronized docs/API/frontend updates land together.
 
 ## Milestone at a glance
 
@@ -18,8 +18,8 @@ Camelid's current milestone is not a loose compatibility demo. It is a synchroni
 
 - **Four exact Q8_0 rows are public and evidence-backed.** TinyLlama remains the full current gate; Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B are exact-row smoke-supported.
 - **The UI and API fail closed instead of guessing.** Chat unlocks only when the loaded local GGUF is `loaded_now=true`, `generation_ready=true`, and matched to an exact supported `/api/capabilities` row.
-- **The context ladder is explicit.** All four rows have checked bounded 512-context evidence; the exact Llama 3.2 1B/3B rows have checked 1024 and 2048 packs, and the exact Llama 3 8B row now has current-head checked 1024 and 2048 packs.
-- **The biggest caveat is still visible.** Llama 3 8B 1024/2048-context support is now a bounded exact-row pack claim, not broad/full 8B support; the checked 1024/2048 packs remain bounded exact-row claims only.
+- **The context ladder is explicit.** All four rows have checked bounded 512-context evidence, and the exact Llama 3.2 1B/3B rows have checked 1024 and 2048 packs. The exact Llama 3 8B row remains promoted only through the checked 512-context pack.
+- **The biggest caveat is still visible.** Llama 3 8B 1024/2048-context support remains unpromoted until fresh row-specific PASS artifacts and synchronized docs/API/frontend updates land together.
 
 ## Current work tracks
 
@@ -28,6 +28,7 @@ Camelid is advancing on two tracks, and both stay gated by CI plus artifact-back
 - **Four-row hardening:** preserve TinyLlama as the current full gate and move the three Llama exact-row smoke lanes toward the same normalized bar without overstating them. The next promotable evidence remains model-native/larger-context behavior beyond checked packs, arbitrary/Jinja template coverage, production-throughput evidence, portability, and repeated current-head bundles. CI reliability is non-negotiable: no public support wording should move if the gate is red.
 - **First Mistral exact-row bring-up:** Camelid has now chosen its first Mistral acceptance target: `Mistral-7B-Instruct-v0.2 Q8_0`. This is still planned exact-row work, not Mistral-family support. The next public milestones are tokenizer/template fixtures, known-good prompt-token checks, typed unsupported/readiness behavior, bounded load evidence, and only later generation/API/WebUI artifacts.
 - **README frontend screenshot:** add a real UI screenshot only after the demo surface is ready and shows the exact support contract honestly: loaded runtime readiness, matched exact-row support, and no implied family-wide support. This is planned polish after CI/support gates, not a distraction from the support work.
+- **Future multi-model concurrency:** add first-class support for running multiple local models at once so agents/OpenClaw workloads can use different models simultaneously for different tasks. This is a roadmap/TODO item, not current support.
 
 ## Why Camelid matters
 
@@ -65,7 +66,7 @@ Camelid’s public support boundary is intentionally narrow and exact-row. Read 
 | TinyLlama 1.1B Chat Q8_0 | **Supported current gate** | End-to-end generation, broader five-prompt/50-token parity, bounded template-shape checks, bounded 512-context coverage, and backend RSS/perf sampling. | This is the trusted current gate, not a promise about other TinyLlama variants or quants. |
 | Llama 3.2 1B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact/broader parity, bounded template-shape checks, bounded unique-chat perf/RSS, and checked 512/1024/2048-context packs. | The 2048 pass is exact-row only after the RoPE frequency-factor fix; it is not model-native/larger-context, arbitrary-template, production-throughput, or portability support. |
 | Llama 3.2 3B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact/broader 50-token parity, bounded template-shape checks, bounded unique-chat perf/RSS, checked 512/1024/2048-context packs, and an opt-in parallel Q8 first-token direction probe. | The parallel Q8 result is a direction probe, not production throughput; broader/full support still needs model-native/larger context, arbitrary-template, and portability evidence. |
-| Llama 3 8B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact parity, three-prompt 50-token parity, bounded 512-context pack, current-head bounded 1024/2048-context packs, compact chat-template-shapes pack, bounded memory evidence, and lazy-Q8 hot-path measurements. | The 1024/2048 passes are exact-row and bounded only; they do not promote model-native/larger context, production throughput, arbitrary templates, portability, or neighboring 8B/Llama rows. |
+| Llama 3 8B Instruct Q8_0 | **Supported exact-row smoke** | Load, completions, chat completions, WebUI smoke, compact parity, three-prompt 50-token parity, bounded 512-context pack, compact chat-template-shapes pack, bounded memory evidence, and lazy-Q8 hot-path measurements. | 1024/2048 remain unpromoted until fresh row-specific PASS artifacts plus docs/API/frontend alignment land together; no model-native/larger context, production throughput, arbitrary-template, portability, neighboring-row, or broad 8B/Llama claim. |
 
 ### Latest bounded model checks
 
@@ -76,7 +77,7 @@ The most recent four-row maintainer matrix on the cleaned support head confirmed
 | TinyLlama 1.1B Chat Q8_0 | direct chat smoke | PASS | `Certainly! Here` |
 | Llama 3.2 1B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
 | Llama 3.2 3B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
-| Llama 3 8B Instruct Q8_0 | 2048-context bounded recall pack | PASS | `CMLD-204` |
+| Llama 3 8B Instruct Q8_0 | 512-context bounded recall pack | PASS | prompt-token and generated-token/text parity |
 
 ### Read this boundary carefully
 
@@ -84,7 +85,7 @@ The most recent four-row maintainer matrix on the cleaned support head confirmed
 - “Llama support” currently means only the exact rows above.
 - Checked context packs do **not** imply model-native or broader context support.
 - Bounded template-shape or perf evidence does **not** imply arbitrary template execution or production portability.
-- The next major support gaps are still broader/full 8B support: the checked 1024/2048 packs are bounded exact-row proof only, while model-native/larger context, arbitrary templates, production throughput, and portability remain outside the claim.
+- The next major 8B support gaps remain 1024/2048 promotion, model-native/larger context, arbitrary templates, production throughput, and portability. 8B 1024/2048 must stay red unless fresh row-specific PASS artifacts and docs/API/frontend alignment land together.
 
 Authoritative details live in [`COMPATIBILITY.md`](COMPATIBILITY.md). The current evidence snapshot lives in [`STATUS.md`](STATUS.md).
 

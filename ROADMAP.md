@@ -77,6 +77,7 @@ Broaden the product surface only after correctness and release discipline are st
 - Measured performance optimization after correctness gates are stable.
 - Packaging and portability work across non-primary platforms.
 - Broader model-family expansion beyond current LLaMA-family priorities.
+- First-class multi-model concurrency so Camelid can keep multiple local models loaded at once and serve agent/OpenClaw workloads that need different models simultaneously.
 - For Qwen specifically, start with one exact GGUF target and do not schedule runtime-promotion work until tokenizer/chat-template fixtures, llama.cpp token-reference checks, and bounded load plus prompt-token parity are in place for that row.
 
 ## Milestone table
