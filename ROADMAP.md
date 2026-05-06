@@ -32,7 +32,7 @@ Four rules drive prioritization and sequencing:
 - **Protect the current gate first.** TinyLlama Q8_0 remains the release anchor.
 - **Remove the next honest blocker.** The highest-leverage work is the exact runtime seam that can create the next promotable artifact.
 - **Move public surfaces together.** Documentation, API signals, and frontend readiness should change in the same change window.
-- **Cite committed evidence anchors first.** The public bundle manifest/checksums, perf/portability envelope, reopened-lane API + frontend smoke manifest, 8B broader 50-token bundle, 8B 512-context bundle, 8B compact chat-template-shapes bundle, and current-head per-row manifests are the roadmap-facing evidence layer; raw `target/` artifacts are drill-down only.
+- **Cite committed evidence anchors first.** The public bundle manifest/checksums, perf/portability envelope, reopened-lane API + frontend smoke manifest, 1B/3B bounded 1024/2048-context bundles, 8B broader 50-token bundle, 8B 512-context bundle, 8B compact chat-template-shapes bundle, and current-head per-row manifests are the roadmap-facing evidence layer; raw `target/` artifacts are drill-down only.
 
 ## What changed in the support line
 
@@ -40,7 +40,7 @@ Recent work moved the release ledger only where the evidence, API, frontend, and
 
 - TinyLlama Q8_0 remains the trusted release gate.
 - Llama 3.2 1B Q8_0 is now a supported exact-row smoke lane after compact parity, broader prompt-pack parity, API smoke, frontend smoke, and bounded 512/1024/2048 context-pack evidence aligned; the 2048 pack turned green only after the RoPE frequency-factor fix.
-- Llama 3.2 3B Q8_0 is now a supported exact-row smoke lane after exact-GGUF load, compact prompt-token/1-token/5-token/50-token parity, API smoke, and frontend smoke aligned.
+- Llama 3.2 3B Q8_0 is now a supported exact-row smoke lane after exact-GGUF load, compact prompt-token/1-token/5-token/50-token parity, API smoke, frontend smoke, and bounded 512/1024/2048 context-pack evidence aligned.
 - Llama 3.2 3B no longer has the JSON-shaped broader prompt-pack blocker; the post-Q8-dot clean three-prompt 50-token rerun now passes against llama.cpp.
 - Llama 3 8B Q8_0 moved from groundwork-only to supported exact-row smoke after Ubuntu three-prompt parity, API/frontend smoke, and bounded memory evidence aligned; the current public broader-pack rerun is the three-prompt 50-token pass, and the first bounded 512-context plus compact chat-template-shapes packs are now also passing for that exact row only.
 
@@ -85,7 +85,7 @@ Broaden the product surface only after correctness and release discipline are st
 | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 supported gate | Complete | End-to-end generation parity artifacts exist and docs/API/frontend agree. |
 | Llama 3.2 1B Instruct Q8_0 exact-row smoke | Complete / narrow support | Compact parity, broader prompt-pack parity, API smoke, frontend smoke, and bounded 512/1024/2048 context packs agree for this exact 1B Q8_0 row; the 2048 pack is exact-row only after the RoPE frequency-factor fix. |
-| Llama 3.2 3B Instruct Q8_0 exact-row smoke | Complete / narrow support | Exact GGUF load, compact prompt-token/1-token/5-token/50-token parity, API smoke, and frontend smoke agree for this exact 3B Q8_0 row. |
+| Llama 3.2 3B Instruct Q8_0 exact-row smoke | Complete / narrow support | Exact GGUF load, compact prompt-token/1-token/5-token/50-token parity, broader three-prompt parity, API smoke, frontend smoke, and bounded 512/1024/2048 context packs agree for this exact 3B Q8_0 row. |
 | Llama 3 8B Instruct Q8_0 exact-row smoke | Complete / narrow support | Compact prompt-token/1-token/5-token/50-token parity, the three-prompt 50-token pack, API smoke, frontend smoke, bounded memory evidence, the first bounded 512-context pack, and the compact chat-template-shapes pack agree for this exact 8B Q8_0 row. |
 | Quantization breadth beyond Q8_0 | Planned | Each quant format has loader/runtime tests, docs, and at least one row-specific real-model artifact. |
 | Longer-context correctness | Planned | Context-length claims are backed by model-specific audits and documented limits. |
