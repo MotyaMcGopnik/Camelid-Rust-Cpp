@@ -159,18 +159,21 @@ export function guardedCapabilityCopy(item, subject = 'UI controls') {
   return `${notes}${subject} should stay disabled, labeled planned/unsupported, or require an explicit verification path until /api/capabilities reports this row as supported; callers should expect typed backend refusals and surface them directly, not silently drop parameters, downgrade behavior, or infer broad compatibility.`
 }
 
-export const TRACKED_LLAMA_PROMOTION_ROW_IDS = [
+export const TRACKED_FULL_SUPPORT_ROW_IDS = [
+  'tinyllama_1_1b_chat_q8_0',
   'llama32_1b_instruct_q8_0',
   'llama32_3b_instruct_q8_0',
   'llama3_8b_instruct_q8_0',
 ]
+
+export const TRACKED_LLAMA_PROMOTION_ROW_IDS = TRACKED_FULL_SUPPORT_ROW_IDS
 
 export function getCurrentCompatibilityTarget(capabilities) {
   const targets = capabilities?.model_compatibility || []
   return targets.find((target) => target.status === 'supported_current_gate') || null
 }
 
-export function getTrackedCompatibilityTargets(capabilities, ids = TRACKED_LLAMA_PROMOTION_ROW_IDS) {
+export function getTrackedCompatibilityTargets(capabilities, ids = TRACKED_FULL_SUPPORT_ROW_IDS) {
   const targets = capabilities?.model_compatibility || []
   return ids.map((id) => targets.find((target) => target.id === id) || null).filter(Boolean)
 }
@@ -201,7 +204,8 @@ export function findCompatibilityHint(capabilities, model, catalogItem) {
 
   if (subject.includes('tinyllama')) {
     const target = findRow((row) => row.id.includes('tinyllama'))
-    if (target && targetMatchesQuant(target, quantKey)) return { kind: 'compatibility', target, confidence: quantKey ? 'name/path + quant match' : 'name/path match' }
+    if (target && quantKey && targetMatchesQuant(target, quantKey)) return { kind: 'compatibility', target, confidence: 'name/path + quant match' }
+    if (target && !quantKey) return { kind: 'quant_missing', target, confidence: 'TinyLlama exact-row match without quant evidence' }
     const quantSpecificTarget = findCompatibilityRowForQuant(rows, 'llama_spm_decoder', quantKey)
     if (quantSpecificTarget) return { kind: 'compatibility', target: quantSpecificTarget, confidence: 'family + quant match' }
     if (target) return { kind: 'quant_mismatch', target, observedQuant: model?.quant || catalogItem?.quant || quantKey, confidence: 'name/path match with different quant' }

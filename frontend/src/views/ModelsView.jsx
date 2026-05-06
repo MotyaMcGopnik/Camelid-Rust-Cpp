@@ -633,13 +633,13 @@ export default function ModelsView({
       )}
 
       {trackedCompatibilityRows.length > 0 && (
-        <section className="panel models-section-panel" aria-label="Tracked Llama Q8 compatibility rows">
+        <section className="panel models-section-panel" aria-label="Tracked exact Q8 compatibility rows">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Exact-row contract</p>
-              <h3>Llama Q8 promotion rows</h3>
+              <p className="panel-kicker">Exact-row full-support hardening</p>
+              <h3>Current Q8 support rows</h3>
             </div>
-            <p className="model-summary">These cards mirror the shipped exact 1B/3B/8B smoke rows from /api/capabilities. Each row gets credit for its own smoke wins, but chat still unlocks only when the active local GGUF is loaded_now=true, generation_ready=true, and matched to that exact supported row.</p>
+            <p className="model-summary">These cards mirror the four current exact Q8 rows from /api/capabilities. Each row gets credit only for its own evidence, while the stricter full-support bar stays visible; chat still unlocks only when the active local GGUF is loaded_now=true, generation_ready=true, and matched to that exact supported row.</p>
           </div>
 
           <div className="models-card-grid">
@@ -673,8 +673,14 @@ export default function ModelsView({
                         latest: {formatCapabilityStatus(target.latest_checked_bucket)} → {formatCapabilityStatus(target.latest_checked_result || 'not_started')}{target.latest_checked_output && target.latest_checked_output !== 'not_applicable' ? ` (${target.latest_checked_output})` : ''}
                       </div>
                     )}
+                    <div className={`pin-badge ${evidenceTrackTone(target.full_support_status)}`}>full-support: {formatCapabilityStatus(target.full_support_status || 'not_advertised')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.performance_measured)}`}>perf: {formatCapabilityStatus(target.performance_measured || 'not_started')}</div>
                     <div className={`pin-badge ${chatUnlocked ? 'ready' : 'warm'}`}>{chatUnlocked ? 'Chat unlockable' : supported ? 'Runtime still needed' : 'Chat blocked by row status'}</div>
+                    {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge ready">TinyLlama current gate</div>}
+                    {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge ready">TinyLlama API/WebUI smoke passed</div>}
+                    {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge ready">TinyLlama five-prompt parity passed</div>}
+                    {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge ready">TinyLlama first 512-context pack passed</div>}
+                    {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge warm">TinyLlama 1024/2048 refresh not promoted</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B API/WebUI smoke passed</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B compact + broader parity passed</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B first 512-context pack passed</div>}
@@ -703,6 +709,7 @@ export default function ModelsView({
 
                   <div className="models-card-copy-stack">
                     <p className="model-summary"><b>Evidence:</b> {target.evidence}</p>
+                    <p className="model-summary"><b>Full-support blockers:</b> {target.full_support_blockers || 'Not advertised by /api/capabilities.'}</p>
                     <p className="model-summary"><b>Next step:</b> {target.next_step}</p>
                     <p className="model-summary">
                       {chatUnlocked

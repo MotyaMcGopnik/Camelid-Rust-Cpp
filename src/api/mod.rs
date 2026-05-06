@@ -3384,6 +3384,56 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_report_current_rows_with_fail_closed_full_support_bar() {
+        let response = capabilities_response();
+        let current_row_ids = [
+            "tinyllama_1_1b_chat_q8_0",
+            "llama32_1b_instruct_q8_0",
+            "llama32_3b_instruct_q8_0",
+            "llama3_8b_instruct_q8_0",
+        ];
+
+        for id in current_row_ids {
+            let target = response
+                .model_compatibility
+                .iter()
+                .find(|target| target.id == id)
+                .unwrap_or_else(|| panic!("{id} row should stay advertised"));
+
+            assert!(
+                target.frontend_readiness_gate.contains("loaded_now=true")
+                    && target
+                        .frontend_readiness_gate
+                        .contains("generation_ready=true"),
+                "{id} must keep frontend/API readiness fail-closed"
+            );
+            assert!(
+                !target.full_support_status.is_empty() && !target.full_support_blockers.is_empty(),
+                "{id} must carry the stricter full-support bar"
+            );
+        }
+
+        let tiny = response
+            .model_compatibility
+            .iter()
+            .find(|target| target.id == "tinyllama_1_1b_chat_q8_0")
+            .expect("TinyLlama current gate row should stay advertised");
+        assert_eq!(tiny.status, "supported_current_gate");
+        assert_eq!(tiny.bounded_context_1024_pack, "not_promoted");
+        assert_eq!(tiny.bounded_context_2048_pack, "not_promoted");
+
+        let mistral = response
+            .model_compatibility
+            .iter()
+            .find(|target| target.id == "mistral_7b_instruct_v0_3_q8_0")
+            .expect("Mistral exact-row bring-up lane should stay advertised");
+        assert_eq!(mistral.status, "acceptance_target");
+        assert_eq!(mistral.support_scope, "bringup_exact_row_unsupported");
+        assert_eq!(mistral.full_support_status, "blocked_unsupported_bringup");
+        assert!(mistral.frontend_readiness_gate.contains("fail-closed"));
+    }
+
+    #[test]
     fn selected_logit_diagnostics_include_rank_outside_top_count() {
         let logits =
             CpuTensor::from_f32("logits", vec![1, 5], vec![0.1, 0.5, 0.4, -1.0, 0.3]).unwrap();
