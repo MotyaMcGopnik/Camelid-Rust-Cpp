@@ -4,13 +4,11 @@
 
 ![Camelid banner](assets/camelid-banner.png)
 
-**Camelid is a Rust-native local inference backend for GGUF language models built for people who want local AI they can actually trust.**
+**Camelid is a Rust-native local inference backend for GGUF language models. It is built for teams that care about local performance, clear support boundaries, and evidence they can inspect.**
 
-Most local-model stacks are easy to demo and hard to trust. Camelid is built to close that gap: fast local inference, honest readiness signals, and support claims narrow enough to verify.
+Many local-model stacks are easy to demo and hard to trust. Camelid is designed to close that gap with disciplined support claims, straightforward readiness signals, and a product surface that stays aligned across runtime, API, UI, and documentation.
 
-It does not blur “probably works” into “supported.” Camelid publishes exact support rows, keeps the API and WebUI aligned with reality, and moves only when the evidence is real.
-
-The goal is simple: local chat that feels sharp, legible, and dependable — without pretending unsupported paths are ready.
+Camelid does not treat “probably works” as “supported.” Support moves only when the evidence is real.
 
 > **Current public posture:** four exact GGUF rows have evidence-backed support boundaries: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through bounded 2048-context packs, and Llama 3 8B Q8_0 through a bounded 2048-context pack. This is still exact-row support, not broad Llama-family, neighboring-model, or full/model-native-context support.
 
@@ -25,9 +23,9 @@ Camelid's current milestone is not a loose compatibility demo. It is a synchroni
 
 ## Why Camelid matters
 
-Most local-model stacks sell compatibility first and precision later. Camelid flips that.
+Most local-model stacks emphasize broad compatibility before they can explain what is truly production-ready. Camelid takes the opposite approach.
 
-Camelid is for teams and builders who need to answer practical questions with confidence:
+It is for teams and builders who need to answer practical questions with confidence:
 
 - **What exactly works?**
 - **What evidence backs that claim?**
@@ -101,7 +99,7 @@ Authoritative details live in [`COMPATIBILITY.md`](COMPATIBILITY.md). The curren
 
 ## Quickstart
 
-This quickstart verifies that Camelid builds and the backend starts on your machine. It is **not** a one-command end-to-end chat demo: the repository does not bundle supported GGUF model files, and supported local chat requires additional setup.
+This quickstart verifies that Camelid builds and the backend starts on your machine. It is **not** a one-command chat demo: the repository does not bundle supported GGUF model files, and end-to-end local chat requires additional setup.
 
 ### 1) Build and run the server
 
@@ -162,7 +160,7 @@ That is Camelid’s core discipline: **evidence first, broader claims later**.
 
 ## Contributing
 
-If you want to contribute, start with the docs written for safe local iteration:
+If you want to contribute, start with the docs written for safe local iteration and contributor onboarding:
 
 - [`docs/CONTRIBUTOR_QUICKSTART.md`](docs/CONTRIBUTOR_QUICKSTART.md)
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)

@@ -2,7 +2,7 @@
 
 Last updated: 2026-05-06
 
-This guide is the shortest safe path for local Camelid contributions.
+This guide is the shortest safe path to getting productive in Camelid locally.
 
 ## Start here
 
@@ -11,7 +11,7 @@ This guide is the shortest safe path for local Camelid contributions.
 3. Use this guide to get a local backend/frontend loop running.
 4. Use [`docs/VALIDATION_MATRIX.md`](VALIDATION_MATRIX.md) to choose the smallest meaningful validation lane for your change.
 
-Current public support is exact-row: TinyLlama Q8_0 is the supported gate, Llama 3.2 1B/3B Q8_0 are checked through bounded 2048-context packs, and Llama 3 8B Q8_0 is checked through bounded 512 context only. Do not broaden those claims from local experiments or adjacent GGUFs without new evidence bundles and synchronized docs/API/frontend updates.
+Current public support is exact-row: TinyLlama Q8_0 is the supported gate, Llama 3.2 1B/3B Q8_0 are checked through bounded 2048-context packs, and Llama 3 8B Q8_0 is checked through bounded 512/1024/2048-context packs. The 8B 1024/2048 passes are bounded exact-row proof only, not model-native/larger-context, arbitrary-template, production-throughput, portability, neighboring-row, or broad Llama-family support. Do not broaden those claims from local experiments or adjacent GGUFs without new evidence bundles and synchronized docs/API/frontend updates.
 
 ## Prerequisites
 
@@ -103,7 +103,7 @@ If the frontend change affects live chat, model loading, or readiness gating, al
 
 ## What is intentionally not turnkey yet
 
-These areas are still real/manual workflows and should not be described as one-command contributor setup:
+These areas still require real manual setup and should not be described as one-command contributor onboarding:
 
 - downloading or hosting large real model files
 - setting up `llama-server` and reference-model parity hosts
@@ -114,7 +114,7 @@ These areas are still real/manual workflows and should not be described as one-c
 
 Public contributor docs should cover local development, public evidence, and exact support boundaries.
 
-Maintainer-only/private operator workflows should stay out of public onboarding docs when they depend on private infrastructure, SSH access, local machine paths, or unpublished operational habits.
+Maintainer-only workflows should stay out of public onboarding docs when they depend on private infrastructure, SSH access, local machine paths, or unpublished operational habits.
 
 ## Next docs to use
 

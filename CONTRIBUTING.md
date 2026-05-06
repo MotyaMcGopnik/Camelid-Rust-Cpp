@@ -1,9 +1,8 @@
 # Contributing to Camelid
 
-Thanks for taking a look at Camelid.
+Thanks for your interest in Camelid.
 
-This repo is intentionally evidence-gated. Please optimize for correctness, explicit support
-boundaries, and reproducible validation over optimistic claims.
+Camelid is intentionally evidence-gated. Optimize for correctness, explicit support boundaries, and reproducible validation over optimistic claims.
 
 ## First principles
 
@@ -17,12 +16,11 @@ boundaries, and reproducible validation over optimistic claims.
 
 ## Before you start
 
-1. Read `README.md` for the current release contract.
+1. Read `README.md` for the current public support contract.
 2. Check `COMPATIBILITY.md` for the evidence-based support matrix.
-3. Review `ROADMAP.md` and `STATUS.md` for the current phase and open work.
+3. Review `ROADMAP.md` and `STATUS.md` for current priorities and open work.
 4. Read `docs/CONTRIBUTOR_QUICKSTART.md` for the shortest safe local setup path.
-5. If your change affects claims, docs, or readiness wording, update every source of truth in the
-   same PR.
+5. If your change affects claims, docs, or readiness wording, update every relevant source of truth in the same PR.
 
 ## Development setup
 
@@ -79,7 +77,7 @@ maintainer workstation paths, or unpublished operator procedures to public onboa
 
 ## Pull requests
 
-Please keep PRs focused and explain:
+Keep PRs focused and explain:
 
 - what changed
 - why it changed
@@ -87,7 +85,7 @@ Please keep PRs focused and explain:
 - what validation you ran
 - whether any docs or compatibility rows changed
 
-A good PR description makes it obvious whether the change is:
+A strong PR description makes it obvious whether the change is:
 
 - implementation groundwork only
 - evidence-producing validation work
@@ -114,5 +112,4 @@ When possible, include:
 
 ## Code of conduct
 
-Be respectful, clear, and evidence-driven. Strong technical disagreement is fine; hand-wavy support
-claims are not.
+Be respectful, clear, and evidence-driven. Strong technical disagreement is welcome; hand-wavy support claims are not.
