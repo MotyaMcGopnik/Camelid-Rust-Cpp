@@ -5580,7 +5580,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                 decode_q8_0_encoded_row_scales(chunk, scales);
                 if rows == 1 {
                     let output_chunk = &mut output[output_idx..output_idx + rows_this_chunk];
-                    if should_parallelize_linear_output(output_width) {
+                    if should_parallelize_q8_0_file_reader_output(output_width) {
                         output_chunk
                             .par_iter_mut()
                             .zip(chunk.par_chunks_exact(row_bytes_len))
@@ -5612,7 +5612,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                 // every input row. Decode each weight-block scale once per chunk row
                 // instead of re-reading/re-decoding it for every prompt row.
                 let chunk_values = &mut chunk_output[..rows_this_chunk * rows];
-                if should_parallelize_linear_output(output_width) {
+                if should_parallelize_q8_0_file_reader_output(output_width) {
                     chunk_values.par_chunks_mut(rows).enumerate().for_each(
                         |(local_output_idx, values)| {
                             let row_start = local_output_idx * row_bytes_len;
@@ -5980,7 +5980,7 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
                 decode_q8_0_encoded_row_scales(chunk, scales);
                 let output_end = output_start + rows_this_chunk;
                 let output_chunk = &mut output[output_start..output_end];
-                if should_parallelize_linear_output(output_width) {
+                if should_parallelize_q8_0_file_reader_output(output_width) {
                     output_chunk
                         .par_iter_mut()
                         .zip(chunk.par_chunks_exact(row_bytes_len))
@@ -6041,6 +6041,22 @@ fn with_q8_0_file_reader_chunk_scales<T>(
         }
         f(&mut scales[..len])
     })
+}
+
+fn should_parallelize_q8_0_file_reader_output(output_width: usize) -> bool {
+    const DEFAULT_Q8_0_FILE_READER_PARALLEL_MIN_OUTPUTS: usize = 1024;
+    if rayon::current_num_threads() <= 1 {
+        return false;
+    }
+    if env::var("BACKENDINFERENCE_PARALLEL_LINEAR").is_ok() {
+        return should_parallelize_linear_output(output_width);
+    }
+    let min_outputs = env::var("BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_Q8_0_FILE_READER_PARALLEL_MIN_OUTPUTS);
+    output_width >= min_outputs
 }
 
 fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Result<usize> {
@@ -8314,6 +8330,51 @@ mod tests {
 
         assert_eq!(actual.shape.dims, expected.shape.dims);
         assert_slice_close(&actual.data, &expected.data);
+    }
+
+    #[test]
+    fn q8_0_file_reader_parallelizes_wide_outputs_by_default() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+
+        pool.install(|| {
+            assert!(!should_parallelize_q8_0_file_reader_output(1023));
+            assert!(should_parallelize_q8_0_file_reader_output(1024));
+        });
+    }
+
+    #[test]
+    fn q8_0_file_reader_parallel_respects_explicit_linear_off() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR", "off");
+        std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS", "1");
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+
+        pool.install(|| assert!(!should_parallelize_q8_0_file_reader_output(14336)));
+    }
+
+    #[test]
+    fn q8_0_file_reader_parallel_uses_existing_linear_threshold_env() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS", "2048");
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+
+        pool.install(|| {
+            assert!(!should_parallelize_q8_0_file_reader_output(2047));
+            assert!(should_parallelize_q8_0_file_reader_output(2048));
+        });
     }
 
     #[test]
