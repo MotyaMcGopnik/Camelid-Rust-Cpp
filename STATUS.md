@@ -38,7 +38,7 @@ Reading rule for the matrix: each row should answer three questions in plain Eng
 
 For a fast read, the current answer is:
 
-- **Supported generation gates:** TinyLlama 1.1B Chat Q8_0 remains supported, and the exact Llama 3.2 1B/3B plus Llama 3 8B Instruct Q8_0 rows are now smoke-supported for short local chat/parity after exact-row load, completion, chat-completion, frontend smoke, and parity evidence.
+- **Verified support gates:** TinyLlama 1.1B Chat Q8_0 remains verified, and the exact Llama 3.2 1B/3B plus Llama 3 8B Instruct Q8_0 rows now have verified support within their validated bounds after exact-row load, completion, chat-completion, frontend validation, and parity evidence.
 - **Scope boundary:** Llama support is exact-row only: model version/size, Instruct variant, Q8_0 quantization, loaded runtime readiness, and the tested smoke/parity envelope all matter.
 - **8B promotion:** Llama 3 8B Instruct Q8_0 has end-to-end short-context generation parity artifacts: compact parity, a three-prompt 50-token Ubuntu parity run, the bounded compact chat-template-shapes pack, API/frontend smoke, and bounded-memory evidence all agree for the exact tracked Q8_0 GGUF. The 8B 1024 and 2048 bounded context boxes are now promoted from clean-current-main `e146d3b` public PASS bundles.
 - **Explicit non-claim:** no broad Llama-family support exists today; neighboring variants remain unsupported unless they have their own exact row and evidence.
@@ -50,7 +50,7 @@ Two standing rules apply to every row:
 
 For the formal support ledger, see [`COMPATIBILITY.md`](COMPATIBILITY.md). For sequencing, see [`ROADMAP.md`](ROADMAP.md).
 
-Bottom line for reviewers: Camelid has the original TinyLlama supported gate plus three exact Llama Q8_0 short-chat/parity smoke rows: Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B. That is a real end-to-end support expansion, but it is not a broad Llama-family claim.
+Bottom line for reviewers: Camelid has the original TinyLlama verified support gate plus three exact Llama Q8_0 rows with verified support within validated bounds: Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B. That is a real end-to-end support expansion, but it is not a broad Llama-family claim.
 
 ## Durable evidence anchors
 
