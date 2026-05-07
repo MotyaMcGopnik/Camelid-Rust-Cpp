@@ -6204,6 +6204,11 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
     output: &mut [f32],
 ) -> Result<()> {
     let input_width = input_row.len();
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "q8_0 borrowed block-reader input width {input_width} is not a multiple of {Q8_0_BLOCK_VALUES}"
+        )));
+    }
     let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
     let row_bytes_len = blocks_per_row
         .checked_mul(Q8BlockReader::BLOCK_SIZE_BYTES)
@@ -9027,6 +9032,23 @@ mod tests {
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
         );
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
+    }
+
+    #[test]
+    fn q8_0_file_backed_accumulate_rejects_unaligned_input_width() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, 1);
+        let input = vec![0.0_f32; Q8_0_BLOCK_VALUES + 1];
+        let mut output = vec![0.0_f32; 1];
+
+        let err = accumulate_transposed_linear_row_q8_0_file_reader(&input, &backing, &mut output)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not a multiple of 32"));
     }
 
     #[test]
