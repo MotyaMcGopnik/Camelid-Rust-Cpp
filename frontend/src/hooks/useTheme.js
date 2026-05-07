@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 export function useTheme() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('camelid-theme') || 'dark')
+  const [theme, setTheme] = useState(() => localStorage.getItem('camelid-theme') || 'light')
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme

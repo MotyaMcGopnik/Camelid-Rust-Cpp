@@ -128,15 +128,27 @@ export default function ChatWorkspace({
   const guardedFeatureSummary = summarizeGuardedFeatures(apiFeatures)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
   const emptyHeroTitle = selectedModelRunnable
-    ? <>Ask Camelid anything <span>local.</span></>
+    ? <>Ask Camelid <span>locally.</span></>
     : supportBlocked
-      ? <>Exact support row <span>required.</span></>
-      : <>Load a proven <span>local model.</span></>
+      ? <>Support row <span>needed.</span></>
+      : <>Start with a <span>ready model.</span></>
   const emptyHeroSummary = selectedModelRunnable
-    ? 'A clean, Gemini-like chat surface for bounded local replies. Camelid keeps the readiness contract visible before it presents anything as supported.'
+    ? 'A quiet Gemini-like chat surface for bounded local replies. The readiness contract stays visible without turning the UI into an ops dashboard.'
     : supportBlocked
-      ? 'The runtime sees a loaded GGUF, but chat stays locked until /api/capabilities matches that exact supported row.'
-      : 'Choose a GGUF, then Camelid unlocks chat only when health and the compatibility contract agree on that exact model.'
+      ? 'Camelid sees a loaded GGUF, but chat stays locked until /api/capabilities names the exact supported row.'
+      : 'Pick or load a local GGUF. Chat unlocks only when runtime health and the support contract agree on that exact model.'
+  const emptySurfaceStatus = selectedModelRunnable
+    ? 'Ready for bounded local chat'
+    : supportBlocked
+      ? 'Loaded, but blocked by support contract'
+      : selectedModel
+        ? 'Selected model is not chat-ready yet'
+        : 'No chat-ready model selected'
+  const emptySurfaceDetail = selectedModelRunnable
+    ? 'Send a short prompt; Camelid will show raw local-output notes and first-token diagnostics when available.'
+    : supportBlocked
+      ? 'This is intentional fail-closed behavior: runtime readiness alone is not enough to claim support.'
+      : 'Use Models to load a proven local GGUF, or inspect the API contract before treating a row as supported.'
   const readinessFacts = [
     {
       label: 'Runtime',
@@ -160,21 +172,7 @@ export default function ChatWorkspace({
   const proofPills = [
     selectedModelRunnable ? 'Chat unlocked' : 'Chat guarded',
     selectedModel ? selectedModelName : 'Local GGUF required',
-    `Demo cap ${CHAT_DEMO_TOKEN_CAP} tokens`,
-  ]
-  const starterTiles = [
-    {
-      title: 'Short local prompt',
-      copy: selectedModelRunnable ? 'Send a compact test and inspect the raw bounded response.' : 'Available after runtime health and support match.',
-    },
-    {
-      title: 'Support boundary',
-      copy: selectedCompatibilityLabel,
-    },
-    {
-      title: 'Proof stays visible',
-      copy: selectedModelRunnable ? speedLabel : 'Readiness cards explain why chat is locked.',
-    },
+    selectedCompatibilityLabel,
   ]
 
   const renderCapabilityStrip = (stage = false) => (
@@ -272,23 +270,21 @@ export default function ChatWorkspace({
                 </div>
               </div>
 
-              <div className="chat-empty-readiness chat-empty-readiness-ledger" aria-label="Local chat readiness summary">
-                {readinessFacts.map((item) => (
-                  <div key={item.label} className={`chat-empty-readiness-card is-${item.tone}`}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                    <small>{item.copy}</small>
-                  </div>
-                ))}
-              </div>
-
-              <div className="chat-empty-starters" aria-label="Safe local chat starting points">
-                {starterTiles.map((tile) => (
-                  <div key={tile.title} className="chat-empty-starter-card">
-                    <strong>{tile.title}</strong>
-                    <span>{tile.copy}</span>
-                  </div>
-                ))}
+              <div className="chat-empty-support-card" aria-label="Local chat readiness and support boundary">
+                <div className="chat-empty-support-copy">
+                  <span>Readiness</span>
+                  <strong>{emptySurfaceStatus}</strong>
+                  <p>{emptySurfaceDetail}</p>
+                </div>
+                <div className="chat-empty-support-grid">
+                  {readinessFacts.map((item) => (
+                    <div key={item.label} className={`chat-empty-support-item is-${item.tone}`}>
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                      <small>{item.copy}</small>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean">

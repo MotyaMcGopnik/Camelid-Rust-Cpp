@@ -1450,8 +1450,8 @@
 .chat-empty-stage-clean {
   position: relative;
   isolation: isolate;
-  width: min(100%, 820px);
-  gap: 14px;
+  width: min(100%, 780px);
+  gap: 16px;
 }
 
 .chat-empty-stage-clean::before {
@@ -1472,12 +1472,107 @@
   content: '';
   position: absolute;
   z-index: -1;
-  inset: -28px -32px -24px;
-  border: 1px solid color-mix(in srgb, var(--color-border-soft) 44%, transparent);
-  border-radius: 44px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 34%, transparent), transparent 72%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  inset: -30px -34px -28px;
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 58%, transparent);
+  border-radius: 42px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 78%, transparent), color-mix(in srgb, var(--color-bg) 44%, transparent) 72%),
+    color-mix(in srgb, var(--color-surface) 34%, transparent);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   pointer-events: none;
+}
+
+.chat-empty-support-card {
+  width: min(100%, 760px);
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1.35fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 64%, transparent);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 84%, transparent), color-mix(in srgb, var(--color-surface-strong) 36%, transparent)),
+    color-mix(in srgb, var(--color-bg-elevated) 64%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 50px rgba(0, 0, 0, 0.12);
+}
+
+.chat-empty-support-copy {
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  min-height: 132px;
+  padding: 18px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--color-info) 11%, transparent), transparent 44%),
+    color-mix(in srgb, var(--color-bg-elevated) 54%, transparent);
+  text-align: left;
+}
+
+.chat-empty-support-copy span,
+.chat-empty-support-item span {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 780;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chat-empty-support-copy strong {
+  color: var(--color-text);
+  font-size: clamp(1.08rem, 1.6vw, 1.28rem);
+  font-weight: 680;
+  letter-spacing: -0.03em;
+}
+
+.chat-empty-support-copy p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.52;
+}
+
+.chat-empty-support-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chat-empty-support-item {
+  --status-color: var(--color-border-strong);
+  min-height: 132px;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 15px 13px;
+  border: 1px solid color-mix(in srgb, var(--status-color) 36%, var(--color-border-soft));
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--status-color) 7%, transparent);
+}
+
+.chat-empty-support-item.is-ready {
+  --status-color: var(--color-ready);
+}
+
+.chat-empty-support-item.is-warning {
+  --status-color: var(--color-warning);
+}
+
+.chat-empty-support-item.is-waiting {
+  --status-color: var(--color-info);
+}
+
+.chat-empty-support-item strong {
+  color: var(--color-text);
+  font-size: 0.92rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.chat-empty-support-item small {
+  color: var(--color-text-muted);
+  font-size: 0.73rem;
+  line-height: 1.4;
 }
 
 .chat-empty-readiness {
@@ -1683,7 +1778,7 @@
 
 .chat-empty-hero-clean h2 {
   max-width: 13ch;
-  font-size: clamp(2.85rem, 4.8vw, 4.7rem);
+  font-size: clamp(2.65rem, 4.5vw, 4.35rem);
   line-height: 0.98;
   letter-spacing: -0.06em;
 }
@@ -1824,12 +1919,12 @@
 
 .composer-gemini-stage-clean {
   border-color: color-mix(in srgb, var(--color-border-strong) 30%, transparent);
-  border-radius: 30px;
+  border-radius: 28px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 98%, rgba(255, 255, 255, 0.04)), color-mix(in srgb, var(--color-surface-strong) 88%, rgba(255, 255, 255, 0.025))),
     radial-gradient(circle at top left, color-mix(in srgb, var(--color-info) 8%, transparent), transparent 44%),
     radial-gradient(circle at top right, color-mix(in srgb, var(--color-ready) 6%, transparent), transparent 46%);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(22px);
   padding: 16px 18px 14px;
 }
@@ -4218,6 +4313,15 @@
     min-height: 56px;
   }
 
+  .chat-empty-support-card {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-empty-support-copy,
+  .chat-empty-support-item {
+    min-height: auto;
+  }
+
   .chat-empty-starters {
     grid-template-columns: 1fr;
   }
@@ -4327,7 +4431,8 @@
   }
 
   .chat-empty-readiness,
-  .chat-empty-starters {
+  .chat-empty-starters,
+  .chat-empty-support-grid {
     grid-template-columns: 1fr;
   }
 
