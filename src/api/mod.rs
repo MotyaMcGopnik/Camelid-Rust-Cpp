@@ -3491,6 +3491,41 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_report_next_family_rows_stay_planned_and_fail_closed() {
+        let response = capabilities_response();
+        let planned_rows = [
+            "mixtral_8x7b_instruct_v0_1_q8_0",
+            "qwen25_7b_instruct_q8_0",
+            "gemma2_9b_it_q8_0",
+        ];
+
+        for id in planned_rows {
+            let target = response
+                .model_compatibility
+                .iter()
+                .find(|target| target.id == id)
+                .unwrap_or_else(|| panic!("{id} planned row should stay advertised"));
+
+            assert_eq!(target.status, "planned_exact_row_candidate");
+            assert_eq!(target.support_scope, "future_exact_row_planning_only");
+            assert_eq!(
+                target.full_support_status,
+                "not_applicable_until_runtime_support"
+            );
+            assert_eq!(target.tensors_load, "not_started");
+            assert_eq!(target.generation_runs, "not_started");
+            assert_eq!(target.parity_audited, "not_started");
+            assert_eq!(target.performance_measured, "not_started");
+            assert_eq!(target.bounded_context_512_pack, "not_started");
+            assert_eq!(target.bounded_context_1024_pack, "not_started");
+            assert_eq!(target.bounded_context_2048_pack, "not_started");
+            assert_eq!(target.latest_checked_result, "planning_only");
+            assert!(target.frontend_readiness_gate.contains("fail-closed"));
+            assert!(target.evidence.contains("planning only"));
+        }
+    }
+
+    #[test]
     fn selected_logit_diagnostics_include_rank_outside_top_count() {
         let logits =
             CpuTensor::from_f32("logits", vec![1, 5], vec![0.1, 0.5, 0.4, -1.0, 0.3]).unwrap();
