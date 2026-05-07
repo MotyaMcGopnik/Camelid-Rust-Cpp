@@ -8974,6 +8974,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
             "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
@@ -9014,10 +9015,18 @@ mod tests {
 
         let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
         let mut actual = vec![0.0; rows.len()];
+        let start = q8_0_file_read_stats();
         accumulate_transposed_linear_row_q8_0_file_reader(&input_values, &backing, &mut actual)
             .unwrap();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
 
         assert_slice_close(&actual, &expected.data);
+        assert_eq!(reads.read_calls, 2);
+        assert_eq!(
+            reads.read_bytes,
+            (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
+        );
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
     }
 
     #[test]
