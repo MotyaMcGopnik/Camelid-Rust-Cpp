@@ -15,6 +15,8 @@ const chatParityScript = resolve(args.get('chat-parity-script') || process.env.C
 const backendBase = (args.get('backend') || process.env.BACKENDINFERENCE_API_BASE || 'http://127.0.0.1:8181').replace(/\/$/, '')
 const llamaBase = (args.get('llama-url') || process.env.LLAMA3_LLAMA_SERVER_URL || 'http://127.0.0.1:8183').replace(/\/$/, '')
 const waitMs = Number.parseInt(args.get('wait-ms') || process.env.LLAMA3_WAIT_MS || '120000', 10)
+const llamaFlashAttn = args.get('llama-flash-attn') || process.env.LLAMA3_LLAMA_FLASH_ATTN || 'auto'
+validateLlamaFlashAttn(llamaFlashAttn)
 const requirePromptMatch = args.has('require-prompt-match') || process.env.LLAMA3_CHAT_REQUIRE_PROMPT_MATCH === '1'
 const requireGeneratedMatch = args.has('require-generated-match') || process.env.LLAMA3_CHAT_REQUIRE_GENERATED_MATCH === '1'
 const passthroughFlags = [
@@ -61,6 +63,7 @@ const summary = {
   wait_ms: waitMs,
   require_prompt_match: requirePromptMatch,
   require_generated_match: requireGeneratedMatch,
+  llama_flash_attn: llamaFlashAttn,
   prompts: [],
 }
 
@@ -85,6 +88,7 @@ for (let index = 0; index < prompts.length; index += 1) {
     '--model-id', modelId,
     '--max-tokens', String(maxTokens),
     '--wait-ms', String(waitMs),
+    '--llama-flash-attn', llamaFlashAttn,
     '--diagnostics-out', diagnosticsPath,
   ]
   const renderMode = prompt.render_mode
@@ -164,6 +168,12 @@ console.log(`generated_text_all_match=${summary.generated_text_all_match}`)
 console.log(`summary_json=${join(outDir, 'summary.json')}`)
 
 if (hadFailure) process.exitCode = 1
+
+function validateLlamaFlashAttn(value) {
+  if (!['off', 'on', 'auto'].includes(value)) {
+    throw new Error(`--llama-flash-attn must be off, on, or auto, got ${value}`)
+  }
+}
 
 function parseArgs(argv) {
   const parsed = new Map()

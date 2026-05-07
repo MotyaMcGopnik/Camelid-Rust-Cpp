@@ -25,6 +25,8 @@ const requireGeneratedMatch = args.has('require-generated-match') || process.env
 const collectBackendDenseDiagnostics = args.has('backend-dense-diagnostics') || process.env.LLAMA3_CHAT_BACKEND_DENSE_DIAGNOSTICS === '1'
 const waitMs = Number.parseInt(args.get('wait-ms') || process.env.LLAMA3_WAIT_MS || '120000', 10)
 const explicitLlamaContext = parseOptionalPositiveInt(args.get('llama-context') || process.env.LLAMA3_LLAMA_CONTEXT, 'llama-context')
+const llamaFlashAttn = args.get('llama-flash-attn') || process.env.LLAMA3_LLAMA_FLASH_ATTN || 'auto'
+validateLlamaFlashAttn(llamaFlashAttn)
 
 if (!Number.isInteger(maxTokens) || maxTokens < 1) {
   throw new Error(`--max-tokens must be a positive integer, got ${args.get('max-tokens')}`)
@@ -48,16 +50,19 @@ const referenceContext = resolveReferenceContext({
 let child
 let childSpawnError
 try {
+  let llamaServerArgs = null
   if (startLlamaServer) {
     const url = new URL(llamaBase)
-    child = spawn(llamaServerBin, [
+    llamaServerArgs = [
       '--host', url.hostname,
       '--port', url.port || '8183',
       '-m', modelPath,
       '-ngl', '0',
       '-c', String(referenceContext),
       '--no-warmup',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+      '-fa', llamaFlashAttn,
+    ]
+    child = spawn(llamaServerBin, llamaServerArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
     child.once('error', err => { childSpawnError = err })
     child.stdout.on('data', chunk => process.stderr.write(`[llama-server] ${chunk}`))
     child.stderr.on('data', chunk => process.stderr.write(`[llama-server] ${chunk}`))
@@ -141,6 +146,8 @@ try {
     expected_prompt_char_count: expectedPrompt.length,
     reference_prompt_token_count: referencePromptTokens.length,
     reference_context: referenceContext,
+    llama_flash_attn: llamaFlashAttn,
+    llama_server_args: llamaServerArgs,
     prompt_tokens_match: promptMatch,
     generated_tokens_match: generatedTokensMatch,
     generated_text_match: textMatch,
@@ -170,6 +177,7 @@ try {
   console.log(`expected_prompt_char_count=${expectedPrompt.length}`)
   console.log(`reference_prompt_token_count=${referencePromptTokens.length}`)
   console.log(`reference_context=${referenceContext}`)
+  console.log(`llama_flash_attn=${llamaFlashAttn}`)
   console.log(`backend_prompt_tokens=${JSON.stringify(backendPromptTokens)}`)
   console.log(`reference_prompt_tokens=${JSON.stringify(referencePromptTokens)}`)
   console.log(`prompt_tokens_match=${promptMatch}`)
@@ -243,6 +251,12 @@ function parseOptionalPositiveInt(value, name) {
     throw new Error(`--${name} must be a positive integer, got ${value}`)
   }
   return parsed
+}
+
+function validateLlamaFlashAttn(value) {
+  if (!['off', 'on', 'auto'].includes(value)) {
+    throw new Error(`--llama-flash-attn must be off, on, or auto, got ${value}`)
+  }
 }
 
 async function fetchJson(url, options = {}) {
