@@ -10,7 +10,7 @@ Many local-model stacks are easy to demo and hard to trust. Camelid is designed 
 
 Camelid does not treat “probably works” as “supported.” Support moves only when the evidence is real.
 
-> **Current public posture:** four exact GGUF rows have evidence-backed support boundaries: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through checked bounded 2048-context packs, and Llama 3 8B Q8_0 through checked bounded 2048-context packs. These are exact-row bounded-pack claims only; wider model-native context, production throughput, portability, arbitrary templates, and broad-family support remain outside the claim.
+> **Current public posture:** Camelid achieves 1:1 parity with llama.cpp for four exact GGUF rows within a bounded published validation envelope: TinyLlama at the current validated gate, Llama 3.2 1B/3B Q8_0 through checked bounded 2048-context packs, and Llama 3 8B Q8_0 through checked bounded 2048-context packs. These are exact-row bounded-pack claims only; wider model-native context, production throughput, portability, arbitrary templates, and broad-family support remain outside the claim.
 
 ## Milestone at a glance
 
