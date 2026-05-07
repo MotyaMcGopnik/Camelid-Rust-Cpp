@@ -7899,6 +7899,7 @@ mod tests {
 
     #[test]
     fn q8_0_block_reader_smoke() {
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         let scale_bits = 0x3c00u16;
         let mut block_data = vec![0u8; Q8BlockReader::BLOCK_SIZE_BYTES];
@@ -8737,6 +8738,7 @@ mod tests {
 
     #[test]
     fn q8_0_block_reader_linear_matches_existing_q8_path() {
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         let row0 = Q8_0Block {
             scale: 0.5,
@@ -8793,6 +8795,7 @@ mod tests {
     #[test]
     fn q8_0_block_reader_linear_matches_q8_path_with_parallel_chunks() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR", "on");
         std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS", "1");
@@ -8931,6 +8934,7 @@ mod tests {
     #[test]
     fn q8_0_file_backed_accumulate_matches_q8_block_dot_across_chunks() {
         let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::set_var(
             "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
