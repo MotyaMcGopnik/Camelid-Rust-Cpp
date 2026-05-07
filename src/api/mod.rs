@@ -3337,6 +3337,7 @@ fn tokenizer_error_code(err: &BackendError) -> &'static str {
 mod tests {
     use std::{
         collections::{BTreeSet, HashMap},
+        fs,
         path::PathBuf,
         sync::{Arc, Mutex},
     };
@@ -3438,6 +3439,60 @@ mod tests {
         assert!(eight_b
             .evidence
             .contains("exact-row bounded-pack support only"));
+    }
+
+    #[test]
+    fn capabilities_report_8b_long_context_promotion_requires_public_pass_artifact() {
+        let response = capabilities_response();
+        let eight_b = response
+            .model_compatibility
+            .iter()
+            .find(|target| target.id == "llama3_8b_instruct_q8_0")
+            .expect("8B row should stay advertised");
+
+        assert_eq!(eight_b.bounded_context_1024_pack, "validated_second_pack");
+        assert_eq!(eight_b.bounded_context_2048_pack, "validated_third_pack");
+
+        let manifest_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260507T075407Z-head-4191ef9fcc28/manifest.json"
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(manifest_path).expect("8B 1024/2048 manifest must be committed"),
+        )
+        .expect("8B 1024/2048 manifest should parse as JSON");
+
+        assert_eq!(manifest["passed"], true);
+        assert_eq!(manifest["checkout_clean"], true);
+        assert_eq!(manifest["model"]["row_id"], eight_b.id);
+        assert_eq!(
+            manifest["claim_boundary"],
+            "Promotes only exact llama3_8b_instruct_q8_0 bounded 1024/2048 prompt packs at this git head; does not promote model-native/larger context, arbitrary templates, neighboring rows, broad 8B, or full Llama-family support."
+        );
+
+        let rows = manifest["rows"]
+            .as_array()
+            .expect("8B 1024/2048 manifest should include row results");
+        for (window, pack_id, expected_text) in [
+            (1024_u64, eight_b.bounded_context_1024_pack_id, "CMLD-102"),
+            (2048_u64, eight_b.bounded_context_2048_pack_id, "CMLD-204"),
+        ] {
+            let row = rows
+                .iter()
+                .find(|row| row["context_window"].as_u64() == Some(window))
+                .unwrap_or_else(|| panic!("8B manifest missing {window}-context row"));
+            assert_eq!(row["row_id"], eight_b.id);
+            assert_eq!(row["passed"], true);
+            assert_eq!(row["prompt_tokens_match"], true);
+            assert_eq!(row["generated_tokens_match"], true);
+            assert_eq!(row["generated_text_match"], true);
+            assert_eq!(row["generated_text"], expected_text);
+            assert!(manifest["pack"]["ids"]
+                .as_array()
+                .expect("8B manifest should list pack IDs")
+                .iter()
+                .any(|id| id == pack_id));
+        }
     }
 
     #[test]
