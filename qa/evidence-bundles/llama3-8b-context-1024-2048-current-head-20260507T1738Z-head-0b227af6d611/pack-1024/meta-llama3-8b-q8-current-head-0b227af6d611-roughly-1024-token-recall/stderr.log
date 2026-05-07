@@ -9,7 +9,7 @@ init: using 15 threads for HTTP server
 start: binding port with default address family
 [llama-server] main: loading model
 srv    load_model: loading model '/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf'
-[llama-server] common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
 common_params_fit_impl: getting device memory data for initial parameters:
 [llama-server] common_memory_breakdown_print: | memory breakdown [MiB] | total   free    self   model   context   compute    unaccounted |
 common_memory_breakdown_print: |   - Host               |                  927 =   533 +     128 +     266                |
@@ -17,7 +17,7 @@ common_memory_breakdown_print: |   - AMX                |                 8498 =
 [llama-server] common_params_fit_impl: projected to use 927 MiB of host memory vs. 126759 MiB of total host memory
 common_params_fit_impl: will leave 125831 >= 1024 MiB of system memory, no changes needed
 common_fit_params: successfully fit params to free device memory
-common_fit_params: fitting params to free memory took 0.34 seconds
+common_fit_params: fitting params to free memory took 0.33 seconds
 [llama-server] llama_model_loader: loaded meta data with 26 key-value pairs and 291 tensors from /home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = llama
@@ -55,7 +55,7 @@ print_info: file size   = 7.95 GiB (8.50 BPW)
 [llama-server] load: printing all EOG tokens:
 load:   - 128001 ('<|end_of_text|>')
 load:   - 128009 ('<|eot_id|>')
-load: special tokens cache size = 256
+[llama-server] load: special tokens cache size = 256
 [llama-server] load: token to piece cache size = 0.8000 MB
 print_info: arch                  = llama
 print_info: vocab_only            = 0
@@ -110,7 +110,7 @@ print_info: max token length      = 256
 load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)
 [llama-server] load_tensors:          AMX model buffer size =  8498.94 MiB
 load_tensors:   CPU_Mapped model buffer size =  8137.64 MiB
-[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] ..[llama-server] .
+[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server] .[llama-server]
 [llama-server] common_init_result: added <|end_of_text|> logit bias = -inf
 [llama-server] common_init_result: added <|eot_id|> logit bias = -inf
 [llama-server] llama_context: constructing llama_context
@@ -138,7 +138,7 @@ sched_reserve: fused Gated Delta Net (chunked) enabled
 [llama-server] sched_reserve:        CPU compute buffer size =   266.50 MiB
 sched_reserve: graph nodes  = 999
 sched_reserve: graph splits = 1
-sched_reserve: reserve took 2.43 ms, sched copies = 1
+sched_reserve: reserve took 2.36 ms, sched copies = 1
 srv    load_model: initializing slots, n_slots = 4
 [llama-server] no implementations specified for speculative decoding
 slot   load_model: id  0 | task -1 | new slot, n_ctx = 1024
@@ -165,7 +165,7 @@ How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 '
 [llama-server] srv          init: init: chat template, thinking = 0
 main: model loaded
-main: server is listening on http://127.0.0.1:8473
+main: server is listening on http://127.0.0.1:8493
 main: starting the main loop...
 srv  update_slots: all slots are idle
 [llama-server] slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
@@ -177,16 +177,16 @@ slot launch_slot_: id  3 | task -1 | sampler chain: logits -> ?penalties -> ?dry
 slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
 slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 1024, n_keep = 0, task.n_tokens = 881
 slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
-slot init_sampler: id  3 | task 0 | init sampler, took 0.12 ms, tokens: text = 881, total = 881
+slot init_sampler: id  3 | task 0 | init sampler, took 0.13 ms, tokens: text = 881, total = 881
 slot update_slots: id  3 | task 0 | prompt processing done, n_tokens = 881, batch.n_tokens = 881
 [llama-server] slot print_timing: id  3 | task 0 |
-prompt eval time =   13277.35 ms /   881 tokens (   15.07 ms per token,    66.35 tokens per second)
-       eval time =     723.15 ms /     5 tokens (  144.63 ms per token,     6.91 tokens per second)
-      total time =   14000.51 ms /   886 tokens
+prompt eval time =   12892.18 ms /   881 tokens (   14.63 ms per token,    68.34 tokens per second)
+       eval time =     705.77 ms /     5 tokens (  141.15 ms per token,     7.08 tokens per second)
+      total time =   13597.95 ms /   886 tokens
 slot      release: id  3 | task 0 | stop processing: n_tokens = 885, truncated = 0
 srv  update_slots: all slots are idle
 [llama-server] srv  log_server_r: done request: POST /completion 127.0.0.1 200
 [llama-server] srv    operator(): operator(): cleaning up before exit...
-common_memory_breakdown_print: | memory breakdown [MiB] | total   free    self   model   context   compute    unaccounted |
+[llama-server] common_memory_breakdown_print: | memory breakdown [MiB] | total   free    self   model   context   compute    unaccounted |
 common_memory_breakdown_print: |   - Host               |                 8532 =  8137 +     128 +     266                |
 common_memory_breakdown_print: |   - AMX                |                 8498 =  8498 +       0 +       0                |
