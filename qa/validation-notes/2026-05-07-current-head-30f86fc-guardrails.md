@@ -7,8 +7,8 @@ Scope: cron `Camelid overnight all-models fixer` safe guardrail slice on current
 Starting state:
 
 - Local `main` was clean at `30f86fcae3d4ae69741fed5995cf679ae385b14a` (`Polish guarded chat landing`) and aligned with `origin/main`.
-- Canonical Ubuntu validation host check used `ssh -i /Users/timtoole/Documents/cert/ubuntu.pem ubuntu@54.69.75.77` and found an already-active Llama 3 8B 1024/2048 long-context run, so no duplicate 8B long-context run was launched.
-- Active 8B run observed: `/home/ubuntu/work/Camelid-current-head-8b-1024-2048-20260507T1357Z-head-72fccb3e95b9/target/llama3-8b-context-1024-2048-current-head-20260507T1357Z-head-72fccb3e95b9/run.log` at source head `72fccb3e95b99d7bd501384e45dc7429818b0c61`. Because this is older than `30f86fc`, it cannot be used to call current `main` 8B-green.
+- Canonical Ubuntu validation host check used the project-approved validation host and found an already-active Llama 3 8B 1024/2048 long-context run, so no duplicate 8B long-context run was launched.
+- Active 8B run observed under a scrubbed remote validation checkout at source head `72fccb3e95b99d7bd501384e45dc7429818b0c61`. Because this is older than `30f86fc`, it cannot be used to call current `main` 8B-green.
 
 Current-head gates:
 

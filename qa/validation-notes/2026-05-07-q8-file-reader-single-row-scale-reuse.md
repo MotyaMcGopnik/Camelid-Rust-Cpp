@@ -19,7 +19,7 @@ Validation:
 - `./scripts/with-rustup-cargo.sh clippy --all-targets -- -D warnings`
 
 Canonical Ubuntu lane check:
-- Verified only with `ssh -i /Users/timtoole/Documents/cert/ubuntu.pem ubuntu@54.69.75.77`.
+- Verified only on the project-approved Ubuntu validation host.
 - Host responded `host_ok` at `2026-05-07 15:16:36 UTC`.
 - The host was already busy with existing backend/frontend processes and separate non-8B Q8 hot-path bench jobs under `parallel-bringup-20260506T2258Z`; no duplicate long 8B context/parity run was launched.
 

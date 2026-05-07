@@ -1,7 +1,7 @@
 # Current-head 8B guardrail alignment — 2026-05-07
 
 - Local branch/head before commit: `main` at `17a56f7a1ba6998b7b59653f2dcd2cae326b3945`, matching `origin/main`.
-- Canonical remote checked with `ssh -i /Users/timtoole/Documents/cert/ubuntu.pem ubuntu@54.69.75.77` at 2026-05-07 15:48 UTC.
+- Canonical remote was checked at 2026-05-07 15:48 UTC using the project-approved Ubuntu validation host.
 - No new long 8B 1024/2048 validation was launched in this slice. Remote showed only existing `backendinference serve` processes on ports 8181/8311/8312/8313/8391 and no active `run-llama3-prompt-pack`/current 8B 1024/2048 runner to duplicate.
 
 ## Guardrail decision
