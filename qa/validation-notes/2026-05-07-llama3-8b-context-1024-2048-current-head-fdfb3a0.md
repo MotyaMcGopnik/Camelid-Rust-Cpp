@@ -1,10 +1,10 @@
 # Llama 3 8B current-head bounded 1024/2048 pass
 
-Run: 2026-05-07T1249Z on the canonical Ubuntu validation host `ubuntu@54.69.75.77`.
+Run: 2026-05-07T1249Z on the canonical Ubuntu validation host.
 
 Git head: `fdfb3a0354e9d13eab55a1eb9995811ace0c9113` (`Accept Q8 byte-count suffix knobs`).
 
-Remote repo/run path: `/home/ubuntu/work/Camelid-current-8b-1024-2048-20260507T1249Z`.
+Remote repo/run path: scrubbed validation checkout `Camelid-current-8b-1024-2048-20260507T1249Z`.
 Remote artifact root: `target/llama3-8b-context-1024-2048-current-head-20260507T1249Z-head-fdfb3a0354e9`.
 
 Commands inspected:

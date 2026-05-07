@@ -1,10 +1,10 @@
 # Llama 3 8B current-head bounded 1024/2048 pass after capabilities alignment
 
-Run: 2026-05-07T1325Z on the canonical Ubuntu validation host `ubuntu@54.69.75.77`.
+Run: 2026-05-07T1325Z on the canonical Ubuntu validation host.
 
 Git head: `8f3c76a87eeb1e1819c2329f3137dd875979fc93` (`Align capabilities with 8B bounded packs`).
 
-Remote repo/run path: `/home/ubuntu/work/Camelid-api-align-20260507T1320Z`.
+Remote repo/run path: scrubbed validation checkout `Camelid-api-align-20260507T1320Z`.
 Remote artifact root: `target/llama3-8b-context-1024-2048-current-head-20260507T1325Z-head-8f3c76a87eeb`.
 
 Commands executed:
