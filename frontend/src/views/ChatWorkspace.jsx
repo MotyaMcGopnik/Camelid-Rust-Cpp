@@ -128,36 +128,53 @@ export default function ChatWorkspace({
   const guardedFeatureSummary = summarizeGuardedFeatures(apiFeatures)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
   const emptyHeroTitle = selectedModelRunnable
-    ? 'Ask Camelid anything local.'
+    ? <>Ask Camelid anything <span>local.</span></>
     : supportBlocked
-      ? 'Exact row required.'
-      : 'Load a proven local model.'
+      ? <>Exact support row <span>required.</span></>
+      : <>Load a proven <span>local model.</span></>
   const emptyHeroSummary = selectedModelRunnable
-    ? 'A quiet, Gemini-like chat surface for bounded local replies. Readiness stays visible without turning filenames into support claims.'
+    ? 'A clean, Gemini-like chat surface for bounded local replies. Camelid keeps the readiness contract visible before it presents anything as supported.'
     : supportBlocked
-      ? 'The runtime sees a loaded GGUF, but chat stays locked until /api/capabilities matches its exact supported row.'
+      ? 'The runtime sees a loaded GGUF, but chat stays locked until /api/capabilities matches that exact supported row.'
       : 'Choose a GGUF, then Camelid unlocks chat only when health and the compatibility contract agree on that exact model.'
   const readinessFacts = [
     {
       label: 'Runtime',
       value: selectedModel ? (selectedRuntimeReady ? 'Ready' : 'Waiting') : 'No model',
-      copy: 'active_model_id + loaded_now + generation_ready',
+      copy: selectedModel ? 'Health must report active + generation-ready' : 'Register or load a local GGUF first',
+      tone: selectedRuntimeReady ? 'ready' : 'waiting',
     },
     {
       label: 'Contract',
       value: selectedModelRunnable ? 'Matched' : supportBlocked ? 'Missing row' : capabilityGate,
-      copy: selectedModel ? selectedCompatibilityLabel : 'No inferred compatibility before selection',
+      copy: selectedModel ? selectedCompatibilityLabel : 'No inferred support before selection',
+      tone: selectedModelRunnable ? 'ready' : supportBlocked ? 'warning' : 'waiting',
     },
     {
       label: 'Boundary',
-      value: 'Exact evidence only',
+      value: 'Evidence only',
       copy: 'No filename, path, or neighboring-family optimism',
+      tone: 'neutral',
     },
   ]
   const proofPills = [
     selectedModelRunnable ? 'Chat unlocked' : 'Chat guarded',
     selectedModel ? selectedModelName : 'Local GGUF required',
     `Demo cap ${CHAT_DEMO_TOKEN_CAP} tokens`,
+  ]
+  const starterTiles = [
+    {
+      title: 'Short local prompt',
+      copy: selectedModelRunnable ? 'Send a compact test and inspect the raw bounded response.' : 'Available after runtime health and support match.',
+    },
+    {
+      title: 'Support boundary',
+      copy: selectedCompatibilityLabel,
+    },
+    {
+      title: 'Proof stays visible',
+      copy: selectedModelRunnable ? speedLabel : 'Readiness cards explain why chat is locked.',
+    },
   ]
 
   const renderCapabilityStrip = (stage = false) => (
@@ -248,20 +265,28 @@ export default function ChatWorkspace({
                   <i />
                 </div>
                 <p className="chat-empty-greeting">Camelid local chat</p>
-                <h2>{emptyHeroTitle}</h2>
+                <h2 className="chat-empty-title">{emptyHeroTitle}</h2>
                 <p className="hero-summary">{emptyHeroSummary}</p>
                 <div className="chat-empty-proofbar" aria-label="Current chat guard summary">
                   {proofPills.map((pill) => <span key={pill}>{pill}</span>)}
                 </div>
-                <p className="chat-empty-contract-note">Chat opens only when /v1/health and /api/capabilities agree on the selected exact GGUF.</p>
               </div>
 
               <div className="chat-empty-readiness chat-empty-readiness-ledger" aria-label="Local chat readiness summary">
                 {readinessFacts.map((item) => (
-                  <div key={item.label} className="chat-empty-readiness-card">
+                  <div key={item.label} className={`chat-empty-readiness-card is-${item.tone}`}>
                     <span>{item.label}</span>
                     <strong>{item.value}</strong>
                     <small>{item.copy}</small>
+                  </div>
+                ))}
+              </div>
+
+              <div className="chat-empty-starters" aria-label="Safe local chat starting points">
+                {starterTiles.map((tile) => (
+                  <div key={tile.title} className="chat-empty-starter-card">
+                    <strong>{tile.title}</strong>
+                    <span>{tile.copy}</span>
                   </div>
                 ))}
               </div>
@@ -279,7 +304,7 @@ export default function ChatWorkspace({
                 </div>
               </div>
 
-              <p className="chat-empty-status-note">{selectedModelMeta}</p>
+              <p className="chat-empty-status-note">Chat opens only when /v1/health and /api/capabilities agree on the selected exact GGUF. Current state: {selectedModelMeta}.</p>
             </div>
           </div>
         ) : (
