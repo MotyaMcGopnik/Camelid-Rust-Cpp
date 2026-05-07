@@ -1450,129 +1450,21 @@
 .chat-empty-stage-clean {
   position: relative;
   isolation: isolate;
-  width: min(100%, 780px);
+  width: min(100%, 760px);
   gap: 16px;
 }
 
 .chat-empty-stage-clean::before {
   content: '';
   position: absolute;
-  z-index: -2;
-  inset: -86px -98px -54px;
-  border-radius: 60px;
-  background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-info) 24%, transparent), transparent 40%),
-    radial-gradient(circle at 14% 74%, color-mix(in srgb, var(--color-ready) 12%, transparent), transparent 32%),
-    radial-gradient(circle at 88% 66%, color-mix(in srgb, var(--color-selected-row) 20%, transparent), transparent 36%);
-  filter: blur(2px);
-  pointer-events: none;
-}
-
-.chat-empty-stage-clean::after {
-  content: '';
-  position: absolute;
   z-index: -1;
-  inset: -30px -34px -28px;
-  border: 1px solid color-mix(in srgb, var(--color-border-soft) 58%, transparent);
-  border-radius: 42px;
+  inset: -64px -72px -44px;
+  border-radius: 52px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 78%, transparent), color-mix(in srgb, var(--color-bg) 44%, transparent) 72%),
-    color-mix(in srgb, var(--color-surface) 34%, transparent);
-  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-info) 18%, transparent), transparent 42%),
+    radial-gradient(circle at 18% 74%, rgba(255, 255, 255, 0.055), transparent 34%),
+    radial-gradient(circle at 86% 64%, color-mix(in srgb, var(--color-selected-row) 15%, transparent), transparent 36%);
   pointer-events: none;
-}
-
-.chat-empty-support-card {
-  width: min(100%, 760px);
-  display: grid;
-  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1.35fr);
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--color-border-soft) 64%, transparent);
-  border-radius: 28px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 84%, transparent), color-mix(in srgb, var(--color-surface-strong) 36%, transparent)),
-    color-mix(in srgb, var(--color-bg-elevated) 64%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 50px rgba(0, 0, 0, 0.12);
-}
-
-.chat-empty-support-copy {
-  display: grid;
-  align-content: center;
-  gap: 7px;
-  min-height: 132px;
-  padding: 18px;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--color-info) 11%, transparent), transparent 44%),
-    color-mix(in srgb, var(--color-bg-elevated) 54%, transparent);
-  text-align: left;
-}
-
-.chat-empty-support-copy span,
-.chat-empty-support-item span {
-  color: var(--color-text-muted);
-  font-size: 0.68rem;
-  font-weight: 780;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.chat-empty-support-copy strong {
-  color: var(--color-text);
-  font-size: clamp(1.08rem, 1.6vw, 1.28rem);
-  font-weight: 680;
-  letter-spacing: -0.03em;
-}
-
-.chat-empty-support-copy p {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 0.86rem;
-  line-height: 1.52;
-}
-
-.chat-empty-support-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.chat-empty-support-item {
-  --status-color: var(--color-border-strong);
-  min-height: 132px;
-  display: grid;
-  align-content: start;
-  gap: 7px;
-  padding: 15px 13px;
-  border: 1px solid color-mix(in srgb, var(--status-color) 36%, var(--color-border-soft));
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--status-color) 7%, transparent);
-}
-
-.chat-empty-support-item.is-ready {
-  --status-color: var(--color-ready);
-}
-
-.chat-empty-support-item.is-warning {
-  --status-color: var(--color-warning);
-}
-
-.chat-empty-support-item.is-waiting {
-  --status-color: var(--color-info);
-}
-
-.chat-empty-support-item strong {
-  color: var(--color-text);
-  font-size: 0.92rem;
-  font-weight: 680;
-  letter-spacing: -0.02em;
-}
-
-.chat-empty-support-item small {
-  color: var(--color-text-muted);
-  font-size: 0.73rem;
-  line-height: 1.4;
 }
 
 .chat-empty-readiness {
@@ -1588,36 +1480,18 @@
 }
 
 .chat-empty-readiness-card {
-  min-height: 92px;
+  min-height: 96px;
   display: grid;
   align-content: start;
   gap: 6px;
-  padding: 14px 15px 14px 17px;
+  padding: 14px 15px;
   border: 1px solid color-mix(in srgb, var(--color-border-soft) 58%, transparent);
-  border-left-color: color-mix(in srgb, var(--status-color, var(--color-border-soft)) 56%, var(--color-border-soft));
-  border-left-width: 3px;
-  border-radius: 20px;
+  border-radius: 22px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 78%, rgba(255, 255, 255, 0.04)), color-mix(in srgb, var(--color-surface-strong) 32%, transparent)),
-    color-mix(in srgb, var(--status-color, var(--color-chip)) 7%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 26px rgba(0, 0, 0, 0.1);
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 72%, rgba(255, 255, 255, 0.035)), color-mix(in srgb, var(--color-surface-strong) 28%, transparent)),
+    color-mix(in srgb, var(--color-chip) 34%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 14px 30px rgba(0, 0, 0, 0.1);
   text-align: left;
-}
-
-.chat-empty-readiness-card.is-ready {
-  --status-color: var(--color-ready);
-}
-
-.chat-empty-readiness-card.is-warning {
-  --status-color: var(--color-warning);
-}
-
-.chat-empty-readiness-card.is-waiting {
-  --status-color: var(--color-info);
-}
-
-.chat-empty-readiness-card.is-neutral {
-  --status-color: var(--color-border-strong);
 }
 
 .chat-empty-readiness-card span {
@@ -1709,42 +1583,6 @@
   text-overflow: ellipsis;
 }
 
-.chat-empty-starters {
-  width: min(100%, 760px);
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.chat-empty-starter-card {
-  min-height: 74px;
-  display: grid;
-  gap: 6px;
-  align-content: start;
-  padding: 13px 14px;
-  border: 1px solid color-mix(in srgb, var(--color-border-soft) 46%, transparent);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--color-bg-elevated) 38%, transparent);
-  text-align: left;
-}
-
-.chat-empty-starter-card strong {
-  color: var(--color-text);
-  font-size: 0.86rem;
-  font-weight: 660;
-  letter-spacing: -0.015em;
-}
-
-.chat-empty-starter-card span {
-  color: var(--color-text-muted);
-  font-size: 0.76rem;
-  line-height: 1.42;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
 .chat-empty-hero-clean .chat-empty-greeting {
   color: color-mix(in srgb, var(--color-text-muted) 82%, white 18%);
   font-size: 0.8rem;
@@ -1778,16 +1616,9 @@
 
 .chat-empty-hero-clean h2 {
   max-width: 13ch;
-  font-size: clamp(2.65rem, 4.5vw, 4.35rem);
+  font-size: clamp(2.85rem, 4.8vw, 4.7rem);
   line-height: 0.98;
   letter-spacing: -0.06em;
-}
-
-.chat-empty-title span {
-  color: transparent;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--color-info) 76%, white 24%), color-mix(in srgb, var(--color-ready) 72%, white 16%));
-  -webkit-background-clip: text;
-  background-clip: text;
 }
 
 .chat-empty-hero .hero-summary {
@@ -1795,7 +1626,7 @@
 }
 
 .chat-empty-hero-clean .hero-summary {
-  max-width: 48ch;
+  max-width: 43ch;
   color: var(--color-text-muted);
   font-size: 1rem;
   line-height: 1.58;
@@ -1918,14 +1749,13 @@
 }
 
 .composer-gemini-stage-clean {
-  border-color: color-mix(in srgb, var(--color-border-strong) 30%, transparent);
-  border-radius: 28px;
+  border-color: color-mix(in srgb, var(--color-border-strong) 24%, transparent);
+  border-radius: 30px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 98%, rgba(255, 255, 255, 0.04)), color-mix(in srgb, var(--color-surface-strong) 88%, rgba(255, 255, 255, 0.025))),
-    radial-gradient(circle at top left, color-mix(in srgb, var(--color-info) 8%, transparent), transparent 44%),
-    radial-gradient(circle at top right, color-mix(in srgb, var(--color-ready) 6%, transparent), transparent 46%);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(22px);
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 98%, rgba(255, 255, 255, 0.035)), color-mix(in srgb, var(--color-surface-strong) 88%, rgba(255, 255, 255, 0.02))),
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.065), transparent 58%);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(20px);
   padding: 16px 18px 14px;
 }
 
@@ -4313,23 +4143,6 @@
     min-height: 56px;
   }
 
-  .chat-empty-support-card {
-    grid-template-columns: 1fr;
-  }
-
-  .chat-empty-support-copy,
-  .chat-empty-support-item {
-    min-height: auto;
-  }
-
-  .chat-empty-starters {
-    grid-template-columns: 1fr;
-  }
-
-  .chat-empty-starter-card {
-    min-height: auto;
-  }
-
   .models-summary-pill {
     min-width: calc(50% - 5px);
     flex: 1 1 calc(50% - 5px);
@@ -4430,14 +4243,11 @@
     padding-top: 6px;
   }
 
-  .chat-empty-readiness,
-  .chat-empty-starters,
-  .chat-empty-support-grid {
+  .chat-empty-readiness {
     grid-template-columns: 1fr;
   }
 
-  .chat-empty-readiness-card,
-  .chat-empty-starter-card {
+  .chat-empty-readiness-card {
     min-height: auto;
   }
 
