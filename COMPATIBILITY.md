@@ -135,11 +135,11 @@ Reopened-lane API + frontend smoke: `qa/evidence-bundles/four-row-api-webui-2026
 
 #### Llama 3 8B Instruct Q8_0
 - **Family / quant:** LLaMA decoder + Llama 3 BPE, Q8_0
-- **Validated now:** metadata/config/template handling, tokenizer reference parity, compact `hello` prompt-token/1-token/5-token/50-token parity, the three-prompt 50-token Ubuntu parity run, the checked 512 bounded context pack, the bounded compact chat-template-shapes pack, `/v1/completions`, `/v1/chat/completions`, frontend smoke, bounded-memory evidence, and retained-block lazy-Q8 hot-path cost probes are validated for the exact 8B Instruct Q8_0 row only
-- **Bounded-only context:** 512 bounded pack is green for this exact row only; 1024/2048, model-native/larger context, and broad/full 8B support remain unpromoted
+- **Validated now:** metadata/config/template handling, tokenizer reference parity, compact `hello` prompt-token/1-token/5-token/50-token parity, the three-prompt 50-token Ubuntu parity run, checked 512/1024/2048 bounded context packs, the bounded compact chat-template-shapes pack, `/v1/completions`, `/v1/chat/completions`, frontend smoke, bounded-memory evidence, and retained-block lazy-Q8 hot-path cost probes are validated for the exact 8B Instruct Q8_0 row only
+- **Bounded-only context:** checked 512/1024/2048 bounded packs are green for this exact row only; the 1024/2048 claim is limited to `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260507T1738Z-head-0b227af6d611/manifest.json`; model-native/larger context and broad/full 8B support remain unpromoted
 - **Runtime follow-up:** chunked prefill/Q8 read-reuse and lazy-Q8 runtime work remains a performance/memory lane; broader/full support still needs separate production-throughput, portability, arbitrary-template, and larger/model-native-context evidence
 - **Missing gates:** model-native/larger context beyond the checked packs, performance/memory architecture work for KV/cache and attention behavior, Q8 matmul/output-projection hot paths, dense/f32 materialization avoidance, measured production throughput, portable packaging evidence, and broader chat-template coverage
-- **Support boundary:** supported exact-row smoke plus the checked 512 bounded pack for this exact Llama 3 8B Instruct Q8_0 row; no broader/full-support, larger/model-native-context beyond checked packs, arbitrary-template, or neighboring-row claim yet
+- **Support boundary:** supported exact-row smoke plus the checked 512/1024/2048 bounded packs for this exact Llama 3 8B Instruct Q8_0 row; no broader/full-support, larger/model-native-context beyond checked packs, arbitrary-template, or neighboring-row claim yet
 
 ### Planned lanes
 
