@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
   LLAMA32_3B_ACCEPTANCE_AVAILABILITY,
@@ -151,6 +152,18 @@ const capabilityFixture = {
     { id: 'gemma2_9b_it_q8_0', family: 'gemma2', quantization: 'Q8_0', status: 'planned_unsupported', support_scope: 'future_exact_row_planning_only', full_support_status: 'not_applicable_until_runtime_support', full_support_blockers: 'gemma2 runtime, control-token/template fixtures, bounded load/readiness, API/WebUI, RSS/timing, context, and durable bundle evidence are missing', evidence: 'Gemma 2 planning row only; no support evidence exists' },
   ],
 }
+const modelsViewSource = readFileSync(new URL('../src/views/ModelsView.jsx', import.meta.url), 'utf8')
+assert.match(
+  modelsViewSource,
+  /pin-badge warm[^>]*>8B 1024\/2048 not promoted</,
+  'ModelsView must keep the hardcoded 8B 1024/2048 badge warm until row-specific PASS promotion is aligned across docs/API/frontend',
+)
+assert.doesNotMatch(
+  modelsViewSource,
+  /8B 1024\/2048 bounded packs passed/,
+  'ModelsView must not hardcode a green 8B 1024/2048 support claim while API capabilities mark those buckets not_promoted',
+)
+
 const trackedTargets = getTrackedCompatibilityTargets(capabilityFixture)
 assert.deepEqual(
   trackedTargets.map((target) => target.id),
