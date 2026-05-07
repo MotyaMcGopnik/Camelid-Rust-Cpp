@@ -86,6 +86,7 @@ function validateSummaryAgreement(bundleRel, manifest, summary) {
       compareRowField(bundleRel, rowId, manifestRow, summaryRow, 'reference_prompt_token_count')
       compareRowField(bundleRel, rowId, manifestRow, summaryRow, 'max_tokens')
       compareRowField(bundleRel, rowId, manifestRow, summaryRow, 'max_resident_set_kib')
+      compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow)
       if (typeof summaryRow.passed === 'boolean') {
         const manifestPassed = rowPassed(manifestRow)
         if (manifestPassed !== summaryRow.passed) fail(bundleRel, `${rowId} summary passed=${summaryRow.passed} disagrees with manifest row checks`)
@@ -372,6 +373,42 @@ function compareRowField(bundleRel, rowId, manifestRow, summaryRow, field) {
   if (manifestRow[field] !== summaryRow[field]) {
     fail(bundleRel, `${rowId} ${field} mismatch: manifest=${JSON.stringify(manifestRow[field])} summary=${JSON.stringify(summaryRow[field])}`)
   }
+}
+
+function compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow) {
+  const manifestStats = manifestRow.q8_file_reads
+  const summaryStats = summaryRow.q8_file_reads
+  if (manifestStats === undefined && summaryStats === undefined) return
+  if (!isPlainObject(manifestStats) || !isPlainObject(summaryStats)) {
+    fail(bundleRel, `${rowId} q8_file_reads must be present in both manifest and summary when recorded`)
+    return
+  }
+  const keys = [
+    'read_calls',
+    'read_bytes',
+    'cache_hits',
+    'cache_hit_bytes',
+    'cache_misses',
+    'cache_miss_bytes',
+    'cache_inserts',
+    'cache_insert_bytes',
+    'cache_evictions',
+    'cache_evicted_bytes',
+    'cache_merges',
+    'cache_merged_bytes',
+    'cache_entries',
+    'cache_bytes',
+    'cache_capacity_bytes',
+  ]
+  for (const key of keys) {
+    if (manifestStats[key] !== summaryStats[key]) {
+      fail(bundleRel, `${rowId} q8_file_reads.${key} mismatch: manifest=${JSON.stringify(manifestStats[key])} summary=${JSON.stringify(summaryStats[key])}`)
+    }
+  }
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 async function findManifestPaths(root) {

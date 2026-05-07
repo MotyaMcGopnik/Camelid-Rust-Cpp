@@ -12,10 +12,12 @@ const badRoot = join(tempRoot, 'bad')
 await writeBundle(goodRoot, { mutate: false })
 await writeSingleRowContextBundle(goodRoot, { mutate: false })
 await writeEightBContextBundle(goodRoot, { mutate: false })
+await writeEightBContext1024And2048Bundle(goodRoot, { mutate: false })
 await writeLegacyPublicContextBundle(goodRoot, { mutate: false })
 await writeBundle(badRoot, { mutate: true })
 await writeSingleRowContextBundle(badRoot, { mutate: true })
 await writeEightBContextBundle(badRoot, { mutate: true })
+await writeEightBContext1024And2048Bundle(badRoot, { mutate: true })
 await writeLegacyPublicContextBundle(badRoot, { mutate: true })
 
 const good = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.mjs', '--root', goodRoot], {
@@ -32,6 +34,7 @@ const bad = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.m
 assert.notEqual(bad.status, 0, 'invalid context evidence should fail')
 assert.match(bad.stderr, /generated_tokens_match must be true/)
 assert.match(bad.stderr, /source_prompt_pack must be qa\/prompt-packs\/llama3-context-1024-smoke\.json/)
+assert.match(bad.stderr, /q8_file_reads\.read_bytes mismatch/)
 assert.match(bad.stderr, /backend_generated_tokens must stay \[34,2735,35,12,7854\]/)
 
 async function writeBundle(root, { mutate }) {
@@ -170,7 +173,62 @@ async function writeEightBContextBundle(root, { mutate }) {
   await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
-function contextRow({ rowId, contextWindow, promptId, generatedText, rawArtifact }) {
+async function writeEightBContext1024And2048Bundle(root, { mutate }) {
+  const dir = join(root, 'llama3-8b-context-1024-2048-test')
+  await mkdir(dir, { recursive: true })
+  const boundary = 'Promotes only exact llama3_8b_instruct_q8_0 bounded 1024/2048 prompt packs. It does not promote neighboring rows, other quantizations, model-native/larger context buckets, arbitrary templates, broad/full Llama-family support, production throughput, or portability support.'
+  const rows = [
+    contextRow({
+      rowId: 'llama3_8b_instruct_q8_0',
+      contextWindow: 1024,
+      promptId: 'roughly-1024-token-recall',
+      generatedText: 'CMLD-102',
+      rawArtifact: 'target/llama3-8b-context-1024-2048-test/pack-1024/report.json',
+      q8FileReads: q8FileReads({ readCalls: 3210, readBytes: 54703408384 }),
+    }),
+    contextRow({
+      rowId: 'llama3_8b_instruct_q8_0',
+      contextWindow: 2048,
+      promptId: 'roughly-2048-token-recall',
+      generatedText: 'CMLD-204',
+      rawArtifact: 'target/llama3-8b-context-1024-2048-test/pack-2048/report.json',
+      q8FileReads: q8FileReads({ readCalls: 4879, readBytes: 69538945536 }),
+    }),
+  ]
+  const summaryRows = rows.map((row) => ({
+    row_id: row.row_id,
+    context_window: row.context_window,
+    reference_prompt_token_count: row.reference_prompt_token_count,
+    max_tokens: row.max_tokens,
+    max_resident_set_kib: row.max_resident_set_kib,
+    passed: row.passed,
+    q8_file_reads: { ...row.q8_file_reads },
+  }))
+  if (mutate) summaryRows[1].q8_file_reads.read_bytes += 1
+  const manifest = {
+    schema: 'camelid.llama3_8b_context_1024_2048_current_head_public_evidence.v1',
+    passed: true,
+    checkout_clean: true,
+    pack: {
+      max_tokens: 5,
+      ids: ['llama3-context-1024-smoke-v1', 'llama3-context-2048-smoke-v1'],
+      source_prompt_packs: ['qa/prompt-packs/llama3-context-1024-smoke.json', 'qa/prompt-packs/llama3-context-2048-smoke.json'],
+    },
+    rows,
+    claim_boundary: boundary,
+  }
+  const summary = {
+    schema: 'camelid.llama3_8b_context_1024_2048_current_head_summary.v1',
+    source_manifest: 'manifest.json',
+    passed: true,
+    rows: summaryRows,
+    claim_boundary: boundary,
+  }
+  await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  await writeFile(join(dir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
+}
+
+function contextRow({ rowId, contextWindow, promptId, generatedText, rawArtifact, q8FileReads }) {
   return {
     row_id: rowId,
     context_window: contextWindow,
@@ -186,6 +244,27 @@ function contextRow({ rowId, contextWindow, promptId, generatedText, rawArtifact
     model_sha256: 'b'.repeat(64),
     raw_artifact: rawArtifact,
     passed: true,
+    ...(q8FileReads ? { q8_file_reads: q8FileReads } : {}),
+  }
+}
+
+function q8FileReads({ readCalls, readBytes }) {
+  return {
+    read_calls: readCalls,
+    read_bytes: readBytes,
+    cache_hits: 0,
+    cache_hit_bytes: 0,
+    cache_misses: 0,
+    cache_miss_bytes: 0,
+    cache_inserts: 0,
+    cache_insert_bytes: 0,
+    cache_evictions: 0,
+    cache_evicted_bytes: 0,
+    cache_merges: 0,
+    cache_merged_bytes: 0,
+    cache_entries: 0,
+    cache_bytes: 0,
+    cache_capacity_bytes: 0,
   }
 }
 
