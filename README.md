@@ -20,6 +20,10 @@ Camelid's current milestone is not a loose compatibility demo. It is a synchroni
 - **The UI and API fail closed instead of guessing.** Chat unlocks only when the loaded local GGUF is `loaded_now=true`, `generation_ready=true`, and matched to an exact supported `/api/capabilities` row.
 - **The context ladder is explicit.** All four rows have checked bounded 512-context evidence, and the exact Llama 3.2 1B/3B/8B rows have checked 1024 and 2048 packs.
 
+![Camelid WebUI chat surface](docs/assets/chat-surface-gemini-clean-20260506.png)
+
+The WebUI screenshot above is intentionally readiness-first: the chat surface is simple, but it still shows that local chat remains locked until runtime health and an exact support-contract row agree. It is not a broad model-family or arbitrary-GGUF support claim.
+
 ## Current work tracks
 
 Camelid is advancing on two tracks, and both stay gated by CI plus artifact-backed support language:
@@ -30,7 +34,7 @@ Camelid is advancing on two tracks, and both stay gated by CI plus artifact-back
   - `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` — planned first MoE exact-row candidate; expert routing and bounded load/parity work still need to be proven.
   - `Qwen2.5-7B-Instruct-Q8_0.gguf` — planned exact-row candidate; tokenizer/template and architecture mapping still need row-specific proof.
   - `gemma-2-9b-it-Q8_0.gguf` — planned exact-row candidate; tokenizer/template and Gemma2 runtime behavior still need row-specific proof.
-- **README frontend screenshot:** add a real UI screenshot only after the demo surface is ready and shows the exact support contract honestly: loaded runtime readiness, matched exact-row support, and no implied family-wide support. This is planned polish after CI/support gates, not a distraction from the support work.
+- **README frontend surface:** keep the built-in UI polished, honest, and product-ready so the runtime, API, docs, and WebUI all tell the same support story without implying family-wide, arbitrary-GGUF, portability, or production-throughput support.
 - **Future multi-model concurrency:** add first-class support for running multiple local models at once so agents/OpenClaw workloads can use different models simultaneously for different tasks. This is a roadmap/TODO item, not current support.
 
 ## Why Camelid matters
@@ -150,7 +154,17 @@ For a first supported local run, TinyLlama is the clearest path — but it is **
 
 ## Frontend
 
-Camelid includes a React/Vite frontend in [`frontend/`](frontend/).
+Camelid includes a built-in React/Vite frontend in [`frontend/`](frontend/) so the local runtime ships with a real product surface, not just a backend API.
+
+![Camelid WebUI screenshot](docs/assets/ui-screenshot-v2.png)
+
+The UI is designed to feel straightforward and approachable while still staying honest about model readiness. It keeps the main path simple — pick a local model, see whether Camelid reports it as ready, and start chatting when the runtime and support contract agree.
+
+A few principles define the WebUI:
+
+- **Chat-first and intuitive:** the interface emphasizes the primary action instead of burying it in operator-only controls.
+- **Honest readiness signals:** chat only unlocks when the loaded model is runtime-ready and matched to an exact supported support-contract row.
+- **One product story across surfaces:** the backend, API, UI, and docs are intended to agree instead of sending mixed signals about what is actually supported.
 
 ```bash
 cd frontend

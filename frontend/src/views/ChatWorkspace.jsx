@@ -93,7 +93,7 @@ export default function ChatWorkspace({
     : !selectedModelRunnable
       ? describeModelState(selectedModel)
       : runtime?.loaded_now && runtime?.active_model_id === selectedModelId
-      ? (isFreshThread ? `Loaded + generation-ready · ${CHAT_DEMO_TOKEN_CAP}-token demo cap` : `${speedLabel} · ${CHAT_DEMO_TOKEN_CAP}-token cap`)
+      ? (isFreshThread ? 'Loaded + generation-ready' : speedLabel)
       : isFreshThread
         ? 'Ready to chat'
         : speedLabel
@@ -212,7 +212,25 @@ export default function ChatWorkspace({
               <div className="chat-empty-hero chat-empty-hero-gemini chat-empty-hero-clean">
                 <p className="chat-empty-greeting">Camelid</p>
                 <h2>{selectedModelRunnable ? 'How can I help?' : supportBlocked ? 'This model is not ready for chat' : 'Load a local model to begin'}</h2>
-                <p className="hero-summary">{selectedModelRunnable ? 'Start a clean local conversation.' : supportBlocked ? 'Pick a supported loaded model to start chatting.' : 'Choose a generation-ready local model and the chat box will unlock.'}</p>
+                <p className="hero-summary">{selectedModelRunnable ? 'Start a focused local conversation. Camelid will keep the runtime and support contract visible while you chat.' : supportBlocked ? 'This loaded model is outside the exact support row, so chat stays locked instead of guessing.' : 'Choose a generation-ready local model and Camelid unlocks chat only after the exact support row matches.'}</p>
+              </div>
+
+              <div className="chat-empty-readiness" aria-label="Local chat readiness summary">
+                <div className="chat-empty-readiness-card">
+                  <span>Runtime</span>
+                  <strong>{selectedModel ? (selectedRuntimeReady ? 'Loaded + ready' : 'Not generation-ready') : 'No model loaded'}</strong>
+                  <small>Requires loaded_now=true and generation_ready=true from /v1/health.</small>
+                </div>
+                <div className="chat-empty-readiness-card">
+                  <span>Support contract</span>
+                  <strong>{capabilityGate}</strong>
+                  <small>{selectedModel ? selectedCompatibilityLabel : 'Pick an exact supported GGUF row before chat can unlock.'}</small>
+                </div>
+                <div className="chat-empty-readiness-card">
+                  <span>Boundary</span>
+                  <strong>No broad claims</strong>
+                  <small>Filenames and neighboring model families never count as support evidence.</small>
+                </div>
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean">
