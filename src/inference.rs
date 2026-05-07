@@ -3556,8 +3556,10 @@ fn forward_prefill_layer_chunk_timed(
     trace_chunk_memory("attention_output_done");
 
     let started = Instant::now();
-    let residual = hidden.add(
-        &attn_out,
+    let mut residual = attn_out;
+    add_tensor_in_place(
+        &mut residual,
+        hidden,
         format!("layer_{layer_idx}_prefill_attention_residual"),
     )?;
     timings.attention_residual = started.elapsed().as_micros();
@@ -3608,7 +3610,12 @@ fn forward_prefill_layer_chunk_timed(
     trace_chunk_memory("ffn_down_done");
 
     let started = Instant::now();
-    let output = residual.add(&ffn_out, format!("layer_{layer_idx}_prefill_ffn_residual"))?;
+    let mut output = ffn_out;
+    add_tensor_in_place(
+        &mut output,
+        &residual,
+        format!("layer_{layer_idx}_prefill_ffn_residual"),
+    )?;
     timings.ffn_residual = started.elapsed().as_micros();
     if let Some(memory) = &mut memory {
         memory.record_after_ffn_residual(capture_memory_sample(kv_cache));
@@ -4446,6 +4453,27 @@ fn zero_like(tensor: &CpuTensor, name: impl Into<String>) -> Result<CpuTensor> {
         tensor.shape.dims.clone(),
         vec![0.0; tensor.data.len()],
     )
+}
+
+fn add_tensor_in_place(
+    tensor: &mut CpuTensor,
+    rhs: &CpuTensor,
+    name: impl Into<String>,
+) -> Result<()> {
+    if tensor.shape != rhs.shape {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "shape mismatch: lhs {:?}, rhs {:?}",
+            tensor.shape.dims, rhs.shape.dims
+        )));
+    }
+    for (left, right) in tensor.data.iter_mut().zip(&rhs.data) {
+        *left += right;
+    }
+    tensor.name = name.into();
+    tensor.source_type = None;
+    tensor.q8_0_blocks = None;
+    tensor.q8_0_file_backing = None;
+    Ok(())
 }
 
 fn output_projection_runtime(
