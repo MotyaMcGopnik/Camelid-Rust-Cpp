@@ -5754,7 +5754,13 @@ fn matmul_rhs_transposed_q8_0_block_reader(
         BackendError::RuntimeShapeMismatch("q8_0 block-reader output size overflow".to_string())
     })?;
     let mut output = vec![0.0_f32; output_len];
-    let chunk_rows = q8_0_file_reader_chunk_rows_for_batch(row_bytes_len, output_width, rows)?;
+    let parallelize_output = should_parallelize_q8_0_file_reader_output(output_width);
+    let chunk_rows = q8_0_file_reader_chunk_rows_for_batch(
+        row_bytes_len,
+        output_width,
+        rows,
+        parallelize_output,
+    )?;
     let row_chunk_len = row_bytes_len.checked_mul(chunk_rows).ok_or_else(|| {
         BackendError::RuntimeShapeMismatch(
             "q8_0 block-reader chunk byte count overflow".to_string(),
@@ -5795,7 +5801,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                         let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
                         decode_q8_0_encoded_row_scales(chunk, scales);
                         let output_chunk = &mut output[output_idx..output_idx + rows_this_chunk];
-                        if should_parallelize_q8_0_file_reader_output(output_width) {
+                        if parallelize_output {
                             output_chunk
                                 .par_iter_mut()
                                 .zip(chunk.par_chunks_exact(row_bytes_len))
@@ -5861,7 +5867,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                     // loop rescanned the full chunk once per input row; that kept RSS low but
                     // turned long-context prefill into unnecessary memory-bandwidth pressure.
                     let output_rows = &mut output[..rows * output_width];
-                    if should_parallelize_q8_0_file_reader_output(output_width) {
+                    if parallelize_output {
                         let scratch_len = rows_this_chunk.checked_mul(rows).ok_or_else(|| {
                             BackendError::RuntimeShapeMismatch(
                                 "q8_0 block-reader output scratch size overflow".to_string(),
@@ -6379,9 +6385,10 @@ fn q8_0_file_reader_chunk_rows_for_batch(
     row_bytes_len: usize,
     output_width: usize,
     input_rows: usize,
+    uses_output_scratch: bool,
 ) -> Result<usize> {
     let weight_chunk_rows = q8_0_file_reader_chunk_rows(row_bytes_len, output_width)?;
-    if input_rows <= 1 || output_width == 0 {
+    if input_rows <= 1 || output_width == 0 || !uses_output_scratch {
         return Ok(weight_chunk_rows);
     }
     let scratch_chunk_rows = q8_0_file_reader_output_scratch_chunk_rows(input_rows, output_width)?;
@@ -8072,12 +8079,16 @@ mod tests {
 
         assert_eq!(q8_0_file_reader_chunk_rows(32, 100).unwrap(), 32);
         assert_eq!(
-            q8_0_file_reader_chunk_rows_for_batch(32, 100, 1).unwrap(),
+            q8_0_file_reader_chunk_rows_for_batch(32, 100, 1, true).unwrap(),
             32
         );
         assert_eq!(
-            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8).unwrap(),
+            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8, true).unwrap(),
             2
+        );
+        assert_eq!(
+            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8, false).unwrap(),
+            32
         );
 
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES", "1 KiB");
@@ -8087,8 +8098,12 @@ mod tests {
         );
         assert_eq!(q8_0_file_reader_chunk_rows(32, 100).unwrap(), 32);
         assert_eq!(
-            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8).unwrap(),
+            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8, true).unwrap(),
             2
+        );
+        assert_eq!(
+            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8, false).unwrap(),
+            32
         );
 
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
