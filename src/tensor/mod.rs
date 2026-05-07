@@ -920,8 +920,46 @@ fn q8_file_cache_insert(path: PathBuf, offset: u64, bytes: &[u8]) {
 fn q8_file_cache_capacity_bytes() -> usize {
     env::var(Q8_FILE_CACHE_BYTES_ENV)
         .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
+        .and_then(|value| parse_byte_count(&value))
         .unwrap_or(DEFAULT_Q8_FILE_CACHE_BYTES)
+}
+
+pub(crate) fn parse_byte_count_env(key: &str) -> Option<usize> {
+    env::var(key)
+        .ok()
+        .and_then(|value| parse_byte_count(&value))
+}
+
+fn parse_byte_count(value: &str) -> Option<usize> {
+    let normalized = value
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace() && *ch != '_')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let digits_len = normalized
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit())
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .last()
+        .unwrap_or(0);
+    if digits_len == 0 {
+        return None;
+    }
+
+    let base = normalized[..digits_len].parse::<usize>().ok()?;
+    let multiplier = match &normalized[digits_len..] {
+        "" | "b" => 1usize,
+        "k" | "kb" | "kib" => 1024usize,
+        "m" | "mb" | "mib" => 1024usize.checked_mul(1024)?,
+        "g" | "gb" | "gib" => 1024usize.checked_mul(1024)?.checked_mul(1024)?,
+        _ => return None,
+    };
+    base.checked_mul(multiplier)
 }
 
 fn q8_file_cache_snapshot(capacity: usize) -> (u64, u64) {
@@ -1361,7 +1399,8 @@ fn f16_bits_to_f32(bits: u16) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        f16_bits_to_f32, q8_0_file_read_stats, q8_file_cache_get, q8_file_cache_insert, CpuTensor,
+        f16_bits_to_f32, parse_byte_count, q8_0_file_read_stats, q8_file_cache_get,
+        q8_file_cache_insert, CpuTensor,
     };
     use crate::test_support::env_lock;
 
@@ -1387,6 +1426,17 @@ mod tests {
         assert_eq!(stats.cache_bytes, 0);
         assert_eq!(stats.cache_capacity_bytes, 0);
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_byte_count_env_parser_accepts_binary_suffixes() {
+        assert_eq!(parse_byte_count("1024"), Some(1024));
+        assert_eq!(parse_byte_count("1 KiB"), Some(1024));
+        assert_eq!(parse_byte_count("2_mib"), Some(2 * 1024 * 1024));
+        assert_eq!(parse_byte_count("3GB"), Some(3 * 1024 * 1024 * 1024));
+        assert_eq!(parse_byte_count(""), None);
+        assert_eq!(parse_byte_count("1.5MiB"), None);
+        assert_eq!(parse_byte_count("many"), None);
     }
 
     #[test]

@@ -17,8 +17,9 @@ use crate::{
     gguf::GgufTensorType,
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
     tensor::{
-        dot_product, q8_0_file_read_stats, record_q8_0_file_read, should_parallelize_linear_output,
-        CpuTensor, Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, TensorShape, TensorStore,
+        dot_product, parse_byte_count_env, q8_0_file_read_stats, record_q8_0_file_read,
+        should_parallelize_linear_output, CpuTensor, Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats,
+        TensorShape, TensorStore,
     },
     BackendError, Result,
 };
@@ -6333,9 +6334,7 @@ fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Res
     if output_width == 0 {
         return Ok(1);
     }
-    let chunk_bytes = env::var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
+    let chunk_bytes = parse_byte_count_env("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES")
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_Q8_0_FILE_READER_CHUNK_BYTES);
     Ok((chunk_bytes / row_bytes_len).max(1).min(output_width))
@@ -6362,11 +6361,10 @@ fn q8_0_file_reader_output_scratch_chunk_rows(
     if output_width == 0 {
         return Ok(1);
     }
-    let scratch_bytes = env::var("BACKENDINFERENCE_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES);
+    let scratch_bytes =
+        parse_byte_count_env("BACKENDINFERENCE_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES")
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES);
     let bytes_per_output_row = input_rows
         .checked_mul(std::mem::size_of::<f32>())
         .ok_or_else(|| {
@@ -8041,6 +8039,17 @@ mod tests {
             q8_0_file_reader_chunk_rows_for_batch(32, 100, 1).unwrap(),
             32
         );
+        assert_eq!(
+            q8_0_file_reader_chunk_rows_for_batch(32, 100, 8).unwrap(),
+            2
+        );
+
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES", "1 KiB");
+        std::env::set_var(
+            "BACKENDINFERENCE_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES",
+            "64_B",
+        );
+        assert_eq!(q8_0_file_reader_chunk_rows(32, 100).unwrap(), 32);
         assert_eq!(
             q8_0_file_reader_chunk_rows_for_batch(32, 100, 8).unwrap(),
             2
