@@ -23,7 +23,7 @@ Current program posture:
 
 Nothing inherits support from a nearby size, quantization, family, tokenizer lane, API surface, or UI state.
 
-Near-term thesis: protect the trusted TinyLlama gate, the exact Llama 3.2 1B/3B bounded-2048 rows, and the exact Llama 3 8B bounded-512 row; broaden only with stronger row-specific evidence while every public surface stays synchronized with the exact support boundary.
+Near-term thesis: protect the trusted TinyLlama gate and the exact Llama 3.2 1B/3B plus Llama 3 8B bounded-2048 rows; broaden only with stronger row-specific evidence while every public surface stays synchronized with the exact support boundary.
 
 ## Roadmap operating rules
 

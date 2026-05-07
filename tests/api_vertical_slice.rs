@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "Four exact Q8_0 rows: TinyLlama current gate; exact Llama 3.2 1B/3B smoke rows have checked bounded 512/1024/2048-context packs; exact Llama 3 8B smoke row remains bounded to the checked 512-context pack. Llama 3 8B 1024/2048-context packs remain unpromoted without fresh PASS artifacts and synchronized docs/API/frontend alignment. Model-native/larger context, throughput, portability, and broad family support remain unsupported."
+        "Four exact Q8_0 rows: TinyLlama current gate; exact Llama 3.2 1B/3B and Llama 3 8B smoke rows have checked bounded 512/1024/2048-context packs. These are exact-row bounded-pack claims only; model-native/larger context, arbitrary-template behavior, throughput, portability, neighboring rows, and broad family support remain unsupported."
     );
     assert!(body["supported_quantization"]
         .as_array()
@@ -265,7 +265,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     assert_eq!(
         llama3["tested_context"],
-        "short_api_webui_smoke_with_broader_50_token_plus_first_512_context_pack"
+        "short_api_webui_smoke_with_broader_50_token_plus_checked_512_1024_2048_context_packs"
     );
     assert_eq!(llama3["chat_template_renderer"], "compact");
     assert_eq!(llama3["chat_template_shape_pack"], "validated_compact_pack");
@@ -279,25 +279,33 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "llama3-context-512-smoke-v1"
     );
     assert_eq!(llama3["bounded_context_window"], 512);
-    assert_eq!(llama3["bounded_context_1024_pack"], "not_promoted");
-    assert_eq!(llama3["bounded_context_1024_pack_id"], "not_selected");
+    assert_eq!(llama3["bounded_context_1024_pack"], "validated_second_pack");
+    assert_eq!(
+        llama3["bounded_context_1024_pack_id"],
+        "llama3-context-1024-smoke-v1"
+    );
     assert_eq!(llama3["bounded_context_1024_window"], 1024);
-    assert_eq!(llama3["bounded_context_2048_pack"], "not_promoted");
-    assert_eq!(llama3["bounded_context_2048_pack_id"], "not_selected");
+    assert_eq!(llama3["bounded_context_2048_pack"], "validated_third_pack");
+    assert_eq!(
+        llama3["bounded_context_2048_pack_id"],
+        "llama3-context-2048-smoke-v1"
+    );
     assert_eq!(llama3["bounded_context_2048_window"], 2048);
     assert_eq!(
         llama3["latest_checked_bucket"],
-        "llama3-context-512-smoke-v1"
+        "llama3-context-1024-2048-current-head-v1"
     );
     assert_eq!(llama3["latest_checked_result"], "pass");
-    assert_eq!(llama3["latest_checked_output"], "bounded_512_pack_pass");
+    assert_eq!(
+        llama3["latest_checked_output"],
+        "bounded_1024_2048_pack_pass"
+    );
     let llama3_evidence = llama3["evidence"].as_str().unwrap();
-    assert!(llama3_evidence.contains("checked 512-context pack"));
-    assert!(llama3_evidence.contains("1024/2048-context buckets remain unpromoted"));
+    assert!(llama3_evidence.contains("checked 512/1024/2048-context packs"));
+    assert!(llama3_evidence.contains("only as exact-row bounded-pack passes"));
     assert!(llama3_evidence.contains("retained-block lazy-Q8 hot-path cost probes"));
     let llama3_next_step = llama3["next_step"].as_str().unwrap();
-    assert!(llama3_next_step.contains("checked 512-context support"));
-    assert!(llama3_next_step.contains("fresh 1024/2048 PASS artifacts"));
+    assert!(llama3_next_step.contains("checked 512/1024/2048-context support"));
     assert!(llama3_next_step.contains("model-native/larger-context"));
     assert!(llama3_next_step.contains("broader/full-support"));
     let mistral = compatibility
