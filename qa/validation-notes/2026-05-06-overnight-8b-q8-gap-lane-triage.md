@@ -9,7 +9,7 @@ Starting state:
 
 Evidence reviewed on the canonical Ubuntu lane:
 
-- Remote artifact root: `/home/ubuntu/work/Camelid-gap-lane-20260507T005918Z/target/gap-lane-patched-20260507T010345Z-head-3907e6c8bef9-dirty/`
+- Remote artifact root: private canonical Ubuntu gap-lane path omitted from the public note; the run was tagged `head-3907e6c8bef9-dirty`.
 - Unit gates captured there:
   - `q8-tests.log`: 9 Q8/file-backed reader tests passed, including batch chunk-read reuse and parallel-reader guardrails.
   - `prefill-chunk-tests.log`: `prefill_layer_major_chunk_token_count_has_separate_headroom_default` passed.
@@ -26,4 +26,4 @@ Local follow-up in this slice:
 Claim boundary:
 
 - The reviewed Ubuntu artifact root is useful diagnostic/performance evidence, but it is tagged `dirty` and is not a copied/scrubbed public promotion bundle from current local head.
-- Current support surfaces must keep Llama 3 8B 1024/2048 red/not-promoted until row-specific PASS artifacts and docs/API/frontend alignment land together in a deliberate promotion slice.
+- Superseded by the later current-head public bundle `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260507T040332Z-head-78d58b866692/manifest.json`, which promotes only the exact 8B bounded 1024/2048 packs after docs/API/frontend alignment.
