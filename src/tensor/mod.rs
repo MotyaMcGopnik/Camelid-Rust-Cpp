@@ -2351,6 +2351,76 @@ mod tests {
     }
 
     #[test]
+    fn q8_file_cache_retains_decoded_scales_after_coalesced_trim() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        std::env::set_var(
+            "BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES",
+            (Q8_0_BLOCK_BYTES * 3).to_string(),
+        );
+        let _ = q8_0_file_read_stats();
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-scale-trim-{}",
+            std::process::id()
+        ));
+        let mut bytes = Vec::new();
+        for scale_bits in [0x3c00_u16, 0x4000, 0x4200, 0x4400] {
+            bytes.extend_from_slice(&scale_bits.to_le_bytes());
+            bytes.extend(std::iter::repeat(0_u8).take(Q8_0_BLOCK_BYTES - 2));
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let backing = Q8_0FileBacking::new(path.clone(), 0, 4);
+
+        let mut first = vec![0_u8; Q8_0_BLOCK_BYTES * 2];
+        let mut first_scales = vec![-1.0_f32; 2];
+        let first_reused = backing
+            .read_exact_at_cached_with_q8_0_scales(&mut first, 0, &mut first_scales)
+            .unwrap();
+        assert!(!first_reused);
+        assert_eq!(first_scales, vec![1.0, 2.0]);
+
+        let mut second = vec![0_u8; Q8_0_BLOCK_BYTES * 2];
+        let mut second_scales = vec![-1.0_f32; 2];
+        let second_reused = backing
+            .read_exact_at_cached_with_q8_0_scales(
+                &mut second,
+                (Q8_0_BLOCK_BYTES * 2) as u64,
+                &mut second_scales,
+            )
+            .unwrap();
+        assert!(!second_reused);
+        assert_eq!(second_scales, vec![3.0, 4.0]);
+
+        let after_trim = q8_0_file_read_stats();
+        let mut retained = vec![0_u8; Q8_0_BLOCK_BYTES * 3];
+        let mut retained_scales = vec![-1.0_f32; 3];
+        let retained_reused = backing
+            .read_exact_at_cached_with_q8_0_scales(
+                &mut retained,
+                Q8_0_BLOCK_BYTES as u64,
+                &mut retained_scales,
+            )
+            .unwrap();
+        let retained_stats = q8_0_file_read_stats().saturating_delta_since(after_trim);
+
+        assert!(retained_reused);
+        assert_eq!(retained, bytes[Q8_0_BLOCK_BYTES..]);
+        assert_eq!(retained_scales, vec![2.0, 3.0, 4.0]);
+        assert_eq!(retained_stats.read_calls, 0);
+        assert_eq!(retained_stats.read_bytes, 0);
+        assert_eq!(retained_stats.cache_hits, 1);
+        assert_eq!(
+            retained_stats.cache_hit_bytes,
+            (Q8_0_BLOCK_BYTES * 3) as u64
+        );
+        assert_eq!(retained_stats.cache_entries, 1);
+        assert_eq!(retained_stats.cache_bytes, (Q8_0_BLOCK_BYTES * 3) as u64);
+
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn q8_file_cache_promotes_decoded_scales_after_byte_only_hit() {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();

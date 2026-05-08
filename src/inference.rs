@@ -10004,6 +10004,8 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "0");
+        let _ = q8_0_file_read_stats();
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "1024");
 
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
@@ -10033,6 +10035,7 @@ mod tests {
         assert_eq!(after_second.cache_entries, 1);
         assert_eq!(after_second.cache_bytes, 4);
         assert_eq!(after_second.cache_capacity_bytes, 1024);
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
     }
 
     #[test]
