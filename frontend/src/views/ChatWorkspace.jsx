@@ -486,20 +486,7 @@ export default function ChatWorkspace({
                       </div>
                     </article>
                   )}
-                  <article className="message-row message-row-gemini assistant pending">
-                    <div className="message-thinking-loader camelid-walk-loader" aria-hidden="true">
-                      <span className="camelid-walk-ground" />
-                      <span className="camelid-walk-body" />
-                      <span className="camelid-walk-hump" />
-                      <span className="camelid-walk-neck" />
-                      <span className="camelid-walk-head" />
-                      <span className="camelid-walk-ear" />
-                      <span className="camelid-walk-tail" />
-                      <span className="camelid-walk-leg camelid-walk-leg-1" />
-                      <span className="camelid-walk-leg camelid-walk-leg-2" />
-                      <span className="camelid-walk-leg camelid-walk-leg-3" />
-                      <span className="camelid-walk-leg camelid-walk-leg-4" />
-                    </div>
+                  <article className="message-row message-row-gemini assistant pending is-streaming">
                     <div className="message-bubble message-bubble-gemini assistant pending">
                       <div className="message-heading message-heading-clean">
                         <span className="message-micro-meta">Generating locally · {generationElapsedSeconds}s elapsed</span>
