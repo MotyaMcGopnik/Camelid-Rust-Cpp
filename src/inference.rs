@@ -2530,9 +2530,13 @@ fn add_q8_file_read_stats_delta(target: &mut Q8_0FileReadStats, delta: Q8_0FileR
     target.cache_decoded_scale_hit_blocks = target
         .cache_decoded_scale_hit_blocks
         .saturating_add(delta.cache_decoded_scale_hit_blocks);
-    target.cache_entries = delta.cache_entries;
-    target.cache_bytes = delta.cache_bytes;
-    target.cache_capacity_bytes = delta.cache_capacity_bytes;
+    // These fields are point-in-time cache state, not additive counters.  A merged timing window
+    // can span a scoped Q8 cache override (for example layer-major prefill) followed by a later
+    // single-token pass after the override has been restored to zero.  Keep the peak observed
+    // state so aggregate diagnostics still show that bounded cache/reuse was active.
+    target.cache_entries = target.cache_entries.max(delta.cache_entries);
+    target.cache_bytes = target.cache_bytes.max(delta.cache_bytes);
+    target.cache_capacity_bytes = target.cache_capacity_bytes.max(delta.cache_capacity_bytes);
 }
 
 fn add_q8_file_read_phase_trace(
@@ -9204,6 +9208,38 @@ mod tests {
                 .kv_cache_allocated_sequence_length,
             2
         );
+    }
+
+    #[test]
+    fn q8_file_read_stats_merge_keeps_peak_cache_state() {
+        let mut target = Q8_0FileReadStats {
+            read_calls: 2,
+            read_bytes: 128,
+            cache_entries: 4,
+            cache_bytes: 1024,
+            cache_capacity_bytes: 2048,
+            ..Q8_0FileReadStats::default()
+        };
+        let delta = Q8_0FileReadStats {
+            read_calls: 3,
+            read_bytes: 256,
+            cache_hits: 1,
+            cache_hit_bytes: 64,
+            cache_entries: 0,
+            cache_bytes: 0,
+            cache_capacity_bytes: 0,
+            ..Q8_0FileReadStats::default()
+        };
+
+        add_q8_file_read_stats_delta(&mut target, delta);
+
+        assert_eq!(target.read_calls, 5);
+        assert_eq!(target.read_bytes, 384);
+        assert_eq!(target.cache_hits, 1);
+        assert_eq!(target.cache_hit_bytes, 64);
+        assert_eq!(target.cache_entries, 4);
+        assert_eq!(target.cache_bytes, 1024);
+        assert_eq!(target.cache_capacity_bytes, 2048);
     }
 
     #[test]
