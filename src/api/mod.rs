@@ -711,7 +711,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist; Mistral 7B Instruct v0.3 Q8_0 has first-token exact-row smoke support from checked tokenizer/template plus 1-token parity evidence. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
+            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -734,7 +734,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "Q8_0",
                 status: "supported_current_gate",
-                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 rows have checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist; exact Mistral 7B Instruct v0.3 Q8_0 has first-token smoke support at the checked Mistral instruct prompt boundary. These are exact bounded/first-token lanes only; no model-native/larger-context beyond checked packs, arbitrary-template, production-throughput, portability, neighboring-row, or broad-family support is implied.",
+                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 rows have checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger-context beyond the checked packs, arbitrary-template, production-throughput, portability, neighboring-row, or broad-family support is implied.",
             },
         ],
         planned_quantization: vec![
@@ -760,17 +760,17 @@ fn capabilities_response() -> CapabilitiesResponse {
                 status: "supported_exact_row_smoke_lanes",
                 notes: "exact Llama 3.2 1B/3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist; broader 50-token, compact chat-template-shapes, and retained-block lazy-Q8 hot-path evidence remain exact-row bounded pack/measurement evidence only, and broad/full support still needs separate proof.",
             },
-            SupportItem {
-                id: "mistral_instruct_exact_7b_v0_3_q8_0",
-                status: "supported_exact_row_first_token_smoke",
-                notes: "exact Mistral 7B Instruct v0.3 Q8_0 has checked tokenizer/chat-template prompt references and 1-token reference-runtime parity for the Mistral instruct renderer at a 512-token reference context; this unlocks only exact-row first-token smoke, not broader Mistral-family support, longer contexts, 50-token output, throughput, portability, or neighboring rows.",
-            },
         ],
         planned_model_families: vec![
             SupportItem {
                 id: "larger_llama_instruct",
                 status: "planned",
                 notes: "broader LLaMA-family instruct support after row-specific parity, API, WebUI, memory/perf, and portability evidence",
+            },
+            SupportItem {
+                id: "mistral",
+                status: "active_validation_unsupported",
+                notes: "public readiness: in active validation for Mistral-7B-Instruct-v0.3.Q8_0.gguf only; not supported yet. Ubuntu load/serve evidence exists, but exact tokenizer/template references plus 1-token generation parity evidence block support",
             },
             SupportItem {
                 id: "mixtral_moe",
@@ -1008,36 +1008,36 @@ fn capabilities_response() -> CapabilitiesResponse {
                 id: "mistral_7b_instruct_v0_3_q8_0",
                 family: "mistral",
                 quantization: "Q8_0",
-                status: "supported_exact_row_first_token_smoke",
-                support_scope: "exact_row_first_token_smoke_only",
-                full_support_status: "blocked_pending_normalized_full_support",
-                full_support_blockers: "50-token output parity, broader prompt packs, API/WebUI smoke bundles, RSS/timing envelopes, checked 1024/2048 contexts, production throughput, portability, arbitrary/Jinja template behavior, and repeated current-head evidence are still missing",
-                metadata_parses: "validated_exact_row",
-                tokenizer_works: "validated_reference_pack",
-                tensors_load: "local_load_ready_plus_ubuntu_load_serve_observed",
-                generation_runs: "one_token_chat_parity_validated",
-                parity_audited: "prompt_tokens_and_first_generated_token_match_llama_cpp",
+                status: "active_validation_unsupported",
+                support_scope: "bringup_exact_row_unsupported",
+                full_support_status: "blocked_unsupported_bringup",
+                full_support_blockers: "source/SHA/license, exact tokenizer/template references, 1-token generation parity, bounded load/readiness, API/WebUI, RSS/timing, scrubbed manifest, checksums, and durable row-specific bundle evidence are not complete as promotion evidence",
+                metadata_parses: "target_selected",
+                tokenizer_works: "parity_blocked",
+                tensors_load: "ubuntu_load_serve_observed",
+                generation_runs: "not_promoted",
+                parity_audited: "tokenizer_template_blocked",
                 performance_measured: "not_promoted",
-                frontend_load_path_verified: "contract_supported_runtime_gate_required",
-                frontend_readiness_gate: "green only when this exact GGUF row plus Q8_0 quant match /api/capabilities and the runtime reports loaded_now=true, generation_ready=true, and matching active_model_id",
-                tested_context: "first_token_512_reference_context_only",
-                chat_template_renderer: "mistral_instruct",
-                chat_template_shape_pack: "validated_reference_pack",
+                frontend_load_path_verified: "fail_closed_planned",
+                frontend_readiness_gate: "fail-closed until an exact supported row plus runtime readiness exist",
+                tested_context: "pre_generation_readiness_only",
+                chat_template_renderer: "mistral_instruct_v0_3_planned",
+                chat_template_shape_pack: "not_started",
                 chat_template_shape_pack_id: "mistral-instruct-v0.3-chat-template-pack-v1",
-                bounded_context_512_pack: "first_token_parity_pass",
-                bounded_context_512_pack_id: "mistral-context-512-first-token-smoke-v1",
+                bounded_context_512_pack: "not_started",
+                bounded_context_512_pack_id: "mistral-context-512-smoke-v1",
                 bounded_context_window: 512,
-                bounded_context_1024_pack: "not_promoted",
+                bounded_context_1024_pack: "not_started",
                 bounded_context_1024_pack_id: "mistral-context-1024-smoke-v1",
                 bounded_context_1024_window: 1024,
-                bounded_context_2048_pack: "not_promoted",
+                bounded_context_2048_pack: "not_started",
                 bounded_context_2048_pack_id: "mistral-context-2048-smoke-v1",
                 bounded_context_2048_window: 2048,
-                latest_checked_bucket: "mistral-context-512-first-token-smoke-v1",
-                latest_checked_result: "pass",
-                latest_checked_output: " Hello",
-                evidence: "the exact Mistral-7B-Instruct-v0.3 Q8_0 GGUF has SHA256 404857e776114baada71a08ebd3bba79d721ec7fca99705e7e7b892ae8bc583f, checked tokenizer/chat-template prompt references, Camelid-vs-reference prompt-token parity [1,3,29473,7080,29477,29473,4], and 1-token generated-token/text parity [23325] / ' Hello' in qa/evidence-bundles/mistral-7b-v0.3-q8-1tok-parity-20260508T1847Z-head-fa7efc086c0e/manifest.json; this is exact-row first-token smoke only",
-                next_step: "add broader prompt packs, 50-token generation parity, API/WebUI smoke, RSS/timing, checked 1024/2048 contexts, and repeated current-head evidence before any broader or full Mistral support claim",
+                latest_checked_bucket: "ubuntu_load_serve_only",
+                latest_checked_result: "blocked_on_tokenizer_template_parity",
+                latest_checked_output: "not_applicable",
+                evidence: "first exact-row closure target is Mistral-7B-Instruct-v0.3.Q8_0.gguf; Ubuntu load/serve evidence exists, but exact tokenizer/template references plus 1-token generation parity are not support-promoted, so there is no Mistral support claim",
+                next_step: "land exact tokenizer/chat-template fixtures plus known-good prompt-token references and 1-token generation parity for the exact Mistral-7B-Instruct-v0.3.Q8_0.gguf row before any generation, API, or WebUI support claim",
             },
             ModelCompatibilityTarget {
                 id: "mixtral_8x7b_instruct_v0_1_q8_0",
@@ -3681,19 +3681,11 @@ mod tests {
             .iter()
             .find(|target| target.id == "mistral_7b_instruct_v0_3_q8_0")
             .expect("Mistral exact-row bring-up lane should stay advertised");
-        assert_eq!(mistral.status, "supported_exact_row_first_token_smoke");
-        assert_eq!(mistral.support_scope, "exact_row_first_token_smoke_only");
-        assert_eq!(
-            mistral.full_support_status,
-            "blocked_pending_normalized_full_support"
-        );
-        assert!(mistral
-            .frontend_readiness_gate
-            .contains("generation_ready=true"));
-        assert_eq!(mistral.latest_checked_result, "pass");
-        assert!(mistral
-            .evidence
-            .contains("1-token generated-token/text parity"));
+        assert_eq!(mistral.status, "active_validation_unsupported");
+        assert_eq!(mistral.support_scope, "bringup_exact_row_unsupported");
+        assert_eq!(mistral.full_support_status, "blocked_unsupported_bringup");
+        assert!(mistral.frontend_readiness_gate.contains("fail-closed"));
+        assert!(mistral.evidence.contains("no Mistral support claim"));
     }
 
     #[test]
