@@ -14,6 +14,7 @@ use std::{
 
 const RETAIN_Q8_BLOCKS_ENV: &str = "BACKENDINFERENCE_RETAIN_Q8_0_BLOCKS";
 const Q8_FILE_CACHE_BYTES_ENV: &str = "BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES";
+const Q8_0_BLOCK_BYTES: usize = 34;
 // Keep lazy Q8_0 file reads memory-safe by default. The bounded chunk cache is an
 // explicit diagnostic/performance probe until long-context prefill has row-specific evidence.
 const DEFAULT_Q8_FILE_CACHE_BYTES: usize = 0;
@@ -143,8 +144,45 @@ impl Q8_0FileBacking {
     }
 
     pub(crate) fn read_exact_at_cached(&self, out: &mut [u8], offset: u64) -> Result<()> {
+        self.read_exact_at_cached_impl(out, offset, None)
+            .map(|_| ())
+    }
+
+    pub(crate) fn read_exact_at_cached_with_q8_0_scales(
+        &self,
+        out: &mut [u8],
+        offset: u64,
+        scales: &mut [f32],
+    ) -> Result<bool> {
+        let expected_len = scales.len().checked_mul(Q8_0_BLOCK_BYTES).ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "q8_0 cached scale read byte length overflow".to_string(),
+            )
+        })?;
+        if out.len() != expected_len {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "q8_0 cached scale read expected {} bytes for {} scales, got {}",
+                expected_len,
+                scales.len(),
+                out.len()
+            )));
+        }
+
+        let reused_scales = self.read_exact_at_cached_impl(out, offset, Some(&mut *scales))?;
+        if !reused_scales {
+            decode_q8_0_scales_from_bytes(out, scales);
+        }
+        Ok(reused_scales)
+    }
+
+    fn read_exact_at_cached_impl(
+        &self,
+        out: &mut [u8],
+        offset: u64,
+        cached_scales: Option<&mut [f32]>,
+    ) -> Result<bool> {
         if out.is_empty() {
-            return Ok(());
+            return Ok(cached_scales.is_some_and(|scales| scales.is_empty()));
         }
         let relative_start = offset.checked_sub(self.absolute_offset).ok_or_else(|| {
             BackendError::RuntimeShapeMismatch(format!(
@@ -169,10 +207,15 @@ impl Q8_0FileBacking {
                 storage_bytes
             )));
         }
-        let Q8FileCacheRead::Missing { ranges } =
-            q8_file_cache_prepare_read(&self.path, offset, out)
-        else {
-            return Ok(());
+        let cache_decoded_q8_0_scales = cached_scales
+            .as_ref()
+            .and_then(|scales| scales.len().checked_mul(Q8_0_BLOCK_BYTES))
+            .is_some_and(|scale_bytes| out.len() == scale_bytes);
+        let ranges = match q8_file_cache_prepare_read(&self.path, offset, out, cached_scales) {
+            Q8FileCacheRead::Hit {
+                decoded_scales_reused,
+            } => return Ok(decoded_scales_reused),
+            Q8FileCacheRead::Missing { ranges } => ranges,
         };
         let file = self.file()?;
         for range in ranges {
@@ -189,8 +232,13 @@ impl Q8_0FileBacking {
                 })?;
             record_q8_0_file_read(range.len);
         }
-        q8_file_cache_insert(self.path.clone(), offset, out);
-        Ok(())
+        let decoded_scales = if cache_decoded_q8_0_scales {
+            decode_q8_0_scales_from_cache_bytes(out)
+        } else {
+            None
+        };
+        q8_file_cache_insert_with_decoded_scales(self.path.clone(), offset, out, decoded_scales);
+        Ok(false)
     }
 }
 
@@ -968,11 +1016,14 @@ struct Q8FileCacheEntry {
     path: PathBuf,
     offset: u64,
     bytes: Vec<u8>,
+    decoded_q8_0_scales: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Q8FileCacheRead {
-    Hit,
+    Hit {
+        decoded_scales_reused: bool,
+    },
     Missing {
         ranges: Vec<Q8FileCacheMissingRange>,
     },
@@ -984,8 +1035,17 @@ struct Q8FileCacheMissingRange {
     len: usize,
 }
 
-fn q8_file_cache_prepare_read(path: &Path, offset: u64, out: &mut [u8]) -> Q8FileCacheRead {
+fn q8_file_cache_prepare_read(
+    path: &Path,
+    offset: u64,
+    out: &mut [u8],
+    mut cached_scales: Option<&mut [f32]>,
+) -> Q8FileCacheRead {
     let out_len = out.len();
+    let mut decoded_scales_reused = cached_scales
+        .as_ref()
+        .and_then(|scales| scales.len().checked_mul(Q8_0_BLOCK_BYTES))
+        .is_some_and(|scale_bytes| out_len == scale_bytes);
     let capacity = q8_file_cache_capacity_bytes();
     if capacity == 0 {
         q8_file_cache_apply_capacity(0);
@@ -1034,6 +1094,17 @@ fn q8_file_cache_prepare_read(path: &Path, offset: u64, out: &mut [u8]) -> Q8Fil
                 let copy_len = copy_end - copy_start;
                 out[copy_start..copy_end]
                     .copy_from_slice(&entry.bytes[entry_start..entry_start + copy_len]);
+                if decoded_scales_reused {
+                    decoded_scales_reused = cached_scales.as_deref_mut().is_some_and(|scales| {
+                        q8_file_cache_copy_decoded_scales(
+                            entry,
+                            entry_start,
+                            copy_start,
+                            copy_len,
+                            scales,
+                        )
+                    });
+                }
                 hit_bytes += copy_len;
                 touched = true;
                 if missing.out_start < copy_start {
@@ -1069,7 +1140,9 @@ fn q8_file_cache_prepare_read(path: &Path, offset: u64, out: &mut [u8]) -> Q8Fil
     Q8_0_FILE_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
     Q8_0_FILE_CACHE_HIT_BYTES.fetch_add(hit_bytes as u64, Ordering::Relaxed);
     if missing_ranges.is_empty() {
-        return Q8FileCacheRead::Hit;
+        return Q8FileCacheRead::Hit {
+            decoded_scales_reused,
+        };
     }
     let miss_bytes = missing_ranges.iter().map(|range| range.len as u64).sum();
     Q8_0_FILE_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
@@ -1098,6 +1171,102 @@ fn q8_file_cache_mark_used(cache: &mut Q8FileCache, indices: &[usize]) {
     }
     entries.reverse();
     cache.entries.extend(entries);
+}
+
+fn q8_file_cache_copy_decoded_scales(
+    entry: &Q8FileCacheEntry,
+    entry_start: usize,
+    out_start: usize,
+    len: usize,
+    out_scales: &mut [f32],
+) -> bool {
+    if entry_start % Q8_0_BLOCK_BYTES != 0
+        || out_start % Q8_0_BLOCK_BYTES != 0
+        || len % Q8_0_BLOCK_BYTES != 0
+    {
+        return false;
+    }
+    let Some(entry_scales) = entry.decoded_q8_0_scales.as_ref() else {
+        return false;
+    };
+    let entry_scale_start = entry_start / Q8_0_BLOCK_BYTES;
+    let out_scale_start = out_start / Q8_0_BLOCK_BYTES;
+    let scale_len = len / Q8_0_BLOCK_BYTES;
+    let Some(entry_scale_end) = entry_scale_start.checked_add(scale_len) else {
+        return false;
+    };
+    let Some(out_scale_end) = out_scale_start.checked_add(scale_len) else {
+        return false;
+    };
+    if entry_scale_end > entry_scales.len() || out_scale_end > out_scales.len() {
+        return false;
+    }
+    out_scales[out_scale_start..out_scale_end]
+        .copy_from_slice(&entry_scales[entry_scale_start..entry_scale_end]);
+    true
+}
+
+fn q8_file_cache_merge_decoded_scales(
+    left: &Q8FileCacheEntry,
+    right: &Q8FileCacheEntry,
+    merged_len: usize,
+    left_start: usize,
+    right_start: usize,
+) -> Option<Vec<f32>> {
+    if !merged_len.is_multiple_of(Q8_0_BLOCK_BYTES)
+        || left_start % Q8_0_BLOCK_BYTES != 0
+        || right_start % Q8_0_BLOCK_BYTES != 0
+        || !left.bytes.len().is_multiple_of(Q8_0_BLOCK_BYTES)
+        || !right.bytes.len().is_multiple_of(Q8_0_BLOCK_BYTES)
+    {
+        return None;
+    }
+    let left_scales = left.decoded_q8_0_scales.as_ref()?;
+    let right_scales = right.decoded_q8_0_scales.as_ref()?;
+    let mut merged_scales = vec![0.0_f32; merged_len / Q8_0_BLOCK_BYTES];
+    let left_scale_start = left_start / Q8_0_BLOCK_BYTES;
+    let right_scale_start = right_start / Q8_0_BLOCK_BYTES;
+    if left_scale_start + left_scales.len() > merged_scales.len()
+        || right_scale_start + right_scales.len() > merged_scales.len()
+    {
+        return None;
+    }
+    merged_scales[left_scale_start..left_scale_start + left_scales.len()]
+        .copy_from_slice(left_scales);
+    // Let the newest read win for overlapping Q8 blocks, matching the byte merge.
+    merged_scales[right_scale_start..right_scale_start + right_scales.len()]
+        .copy_from_slice(right_scales);
+    Some(merged_scales)
+}
+
+fn q8_file_cache_trim_decoded_scales(
+    entry: &Q8FileCacheEntry,
+    trim_start: usize,
+    trim_end: usize,
+) -> Option<Vec<f32>> {
+    if trim_start % Q8_0_BLOCK_BYTES != 0 || trim_end % Q8_0_BLOCK_BYTES != 0 {
+        return None;
+    }
+    let scales = entry.decoded_q8_0_scales.as_ref()?;
+    let scale_start = trim_start / Q8_0_BLOCK_BYTES;
+    let scale_end = trim_end / Q8_0_BLOCK_BYTES;
+    Some(scales.get(scale_start..scale_end)?.to_vec())
+}
+
+fn decode_q8_0_scales_from_cache_bytes(bytes: &[u8]) -> Option<Vec<f32>> {
+    if !bytes.len().is_multiple_of(Q8_0_BLOCK_BYTES) {
+        return None;
+    }
+    let mut scales = vec![0.0_f32; bytes.len() / Q8_0_BLOCK_BYTES];
+    decode_q8_0_scales_from_bytes(bytes, &mut scales);
+    Some(scales)
+}
+
+fn decode_q8_0_scales_from_bytes(bytes: &[u8], scales: &mut [f32]) {
+    debug_assert_eq!(bytes.len(), scales.len() * Q8_0_BLOCK_BYTES);
+    for (scale, block) in scales.iter_mut().zip(bytes.chunks_exact(Q8_0_BLOCK_BYTES)) {
+        *scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    }
 }
 
 #[cfg(test)]
@@ -1150,7 +1319,17 @@ fn q8_file_cache_entry_covers(
     entry.path == path && entry.offset <= offset && request_end <= entry_end
 }
 
+#[cfg(test)]
 fn q8_file_cache_insert(path: PathBuf, offset: u64, bytes: &[u8]) {
+    q8_file_cache_insert_with_decoded_scales(path, offset, bytes, None);
+}
+
+fn q8_file_cache_insert_with_decoded_scales(
+    path: PathBuf,
+    offset: u64,
+    bytes: &[u8],
+    decoded_q8_0_scales: Option<Vec<f32>>,
+) {
     let capacity = q8_file_cache_capacity_bytes();
     if capacity == 0 || bytes.len() > capacity {
         if capacity == 0 {
@@ -1161,7 +1340,7 @@ fn q8_file_cache_insert(path: PathBuf, offset: u64, bytes: &[u8]) {
     let cache = Q8_FILE_CACHE.get_or_init(|| Mutex::new(Q8FileCache::default()));
     let mut cache = cache.lock().expect("q8 file cache mutex poisoned");
     cache.apply_capacity(capacity);
-    cache.insert(path, offset, bytes.to_vec(), capacity);
+    cache.insert(path, offset, bytes.to_vec(), decoded_q8_0_scales, capacity);
 }
 
 fn q8_file_cache_capacity_bytes() -> usize {
@@ -1259,6 +1438,13 @@ fn q8_file_cache_try_merge_entries(
     let merged = Q8FileCacheEntry {
         path: left.path.clone(),
         offset: merged_offset,
+        decoded_q8_0_scales: q8_file_cache_merge_decoded_scales(
+            left,
+            right,
+            merged_len,
+            left_start,
+            right_start,
+        ),
         bytes: merged_bytes,
     };
     Some(q8_file_cache_trim_merged_entry_to_capacity(
@@ -1302,6 +1488,7 @@ fn q8_file_cache_trim_merged_entry_to_capacity(
     };
     let trim_start = (window_start - entry.offset) as usize;
     let trim_end = trim_start + capacity;
+    entry.decoded_q8_0_scales = q8_file_cache_trim_decoded_scales(&entry, trim_start, trim_end);
     entry.bytes = entry.bytes[trim_start..trim_end].to_vec();
     entry.offset = window_start;
     entry
@@ -1319,7 +1506,14 @@ impl Q8FileCache {
         }
     }
 
-    fn insert(&mut self, path: PathBuf, offset: u64, bytes: Vec<u8>, capacity: usize) {
+    fn insert(
+        &mut self,
+        path: PathBuf,
+        offset: u64,
+        bytes: Vec<u8>,
+        decoded_q8_0_scales: Option<Vec<f32>>,
+        capacity: usize,
+    ) {
         if let Some(pos) = self
             .entries
             .iter()
@@ -1336,6 +1530,7 @@ impl Q8FileCache {
         let mut entry = Q8FileCacheEntry {
             path,
             offset,
+            decoded_q8_0_scales,
             bytes,
         };
         let mut pos = 0usize;
@@ -1667,6 +1862,7 @@ mod tests {
     use super::{
         f16_bits_to_f32, parse_byte_count, q8_0_file_read_stats, q8_file_cache_get,
         q8_file_cache_insert, with_q8_file_cache_capacity_override, CpuTensor, Q8_0FileBacking,
+        Q8_0_BLOCK_BYTES,
     };
     use crate::test_support::env_lock;
 
@@ -2040,6 +2236,57 @@ mod tests {
         assert_eq!(cached_stats.cache_hit_bytes, 16);
         assert_eq!(cached_stats.cache_misses, 0);
         assert_eq!(cached_stats.cache_miss_bytes, 0);
+
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn q8_file_cache_reuses_decoded_scales_on_full_block_hits() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "128");
+        let _ = q8_0_file_read_stats();
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-scales-{}",
+            std::process::id()
+        ));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x3c00_u16.to_le_bytes());
+        bytes.extend(std::iter::repeat(0_u8).take(Q8_0_BLOCK_BYTES - 2));
+        bytes.extend_from_slice(&0x4000_u16.to_le_bytes());
+        bytes.extend(std::iter::repeat(0_u8).take(Q8_0_BLOCK_BYTES - 2));
+        std::fs::write(&path, &bytes).unwrap();
+        let backing = Q8_0FileBacking::new(path.clone(), 0, 2);
+
+        let start = q8_0_file_read_stats();
+        let mut first = vec![0_u8; Q8_0_BLOCK_BYTES * 2];
+        let mut first_scales = vec![0.0_f32; 2];
+        let first_reused = backing
+            .read_exact_at_cached_with_q8_0_scales(&mut first, 0, &mut first_scales)
+            .unwrap();
+        let first_stats = q8_0_file_read_stats().saturating_delta_since(start);
+        assert!(!first_reused);
+        assert_eq!(first, bytes);
+        assert_eq!(first_scales, vec![1.0, 2.0]);
+        assert_eq!(first_stats.read_calls, 1);
+        assert_eq!(first_stats.cache_misses, 1);
+
+        let after_first = q8_0_file_read_stats();
+        let mut second = vec![0_u8; Q8_0_BLOCK_BYTES * 2];
+        let mut second_scales = vec![-1.0_f32; 2];
+        let second_reused = backing
+            .read_exact_at_cached_with_q8_0_scales(&mut second, 0, &mut second_scales)
+            .unwrap();
+        let second_stats = q8_0_file_read_stats().saturating_delta_since(after_first);
+
+        assert!(second_reused);
+        assert_eq!(second, bytes);
+        assert_eq!(second_scales, vec![1.0, 2.0]);
+        assert_eq!(second_stats.read_calls, 0);
+        assert_eq!(second_stats.read_bytes, 0);
+        assert_eq!(second_stats.cache_hits, 1);
+        assert_eq!(second_stats.cache_hit_bytes, (Q8_0_BLOCK_BYTES * 2) as u64);
 
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
         let _ = std::fs::remove_file(path);

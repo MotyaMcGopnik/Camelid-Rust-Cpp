@@ -5932,9 +5932,12 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                                 )
                             })?;
                         let chunk = &mut row_chunk[..chunk_bytes_len];
-                        backing.read_exact_at_cached(chunk, chunk_offset)?;
                         let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
-                        decode_q8_0_encoded_row_scales(chunk, scales);
+                        backing.read_exact_at_cached_with_q8_0_scales(
+                            chunk,
+                            chunk_offset,
+                            scales,
+                        )?;
                         let output_chunk = &mut output[output_idx..output_idx + rows_this_chunk];
                         if parallelize_output {
                             output_chunk
@@ -6008,9 +6011,8 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             )
                         })?;
                     let chunk = &mut row_chunk[..chunk_bytes_len];
-                    backing.read_exact_at_cached(chunk, chunk_offset)?;
                     let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
-                    decode_q8_0_encoded_row_scales(chunk, scales);
+                    backing.read_exact_at_cached_with_q8_0_scales(chunk, chunk_offset, scales)?;
                     // Multi-row prefill reuses the same file-backed Q8 weight chunk across
                     // every input row. Decode each weight-block scale once per chunk row,
                     // then walk output columns outermost so each compact weight row stays hot
@@ -6461,9 +6463,8 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
                             )
                         })?;
                     let chunk = &mut row_chunk[..chunk_bytes_len];
-                    backing.read_exact_at_cached(chunk, chunk_offset)?;
                     let scales = &mut chunk_scales[..rows_this_chunk * blocks_per_row];
-                    decode_q8_0_encoded_row_scales(chunk, scales);
+                    backing.read_exact_at_cached_with_q8_0_scales(chunk, chunk_offset, scales)?;
                     let output_end = output_start + rows_this_chunk;
                     let output_chunk = &mut output[output_start..output_end];
                     if should_parallelize_q8_0_file_reader_output(output_width) {
