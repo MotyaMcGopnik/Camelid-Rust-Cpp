@@ -212,7 +212,7 @@ function modelFromBackend(item, health, currentModel, localRecord, apiBase) {
 
   return {
     id: item.id,
-    name: localRecord?.name || item.id,
+    name: localRecord?.name || item.name || item.id,
     provider_kind: 'local',
     status: generationReady ? 'ready' : localRecord?.status || 'registered',
     model_path: modelPath,

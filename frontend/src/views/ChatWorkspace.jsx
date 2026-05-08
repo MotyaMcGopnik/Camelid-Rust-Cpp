@@ -128,41 +128,21 @@ export default function ChatWorkspace({
   const guardedFeatureSummary = summarizeGuardedFeatures(apiFeatures)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
   const emptyHeroEyebrow = selectedModelRunnable
-    ? 'Local chat · supported runtime'
+    ? 'Local chat preview'
     : supportBlocked
-      ? 'Support contract gate closed'
+      ? 'Support match needed'
       : 'Camelid local chat'
-  const emptyHeroTitle = selectedModelRunnable
-    ? 'How can Camelid help?'
-    : supportBlocked
-      ? 'Support row required'
-      : 'Bring a local model online.'
-  const emptyHeroSummary = selectedModelRunnable
-    ? `Local chat is enabled for the loaded supported runtime. Replies stay inside the ${CHAT_DEMO_TOKEN_CAP}-token preview cap while longer generation is validated.`
-    : supportBlocked
-      ? 'The runtime can see this GGUF, but chat stays locked until /api/capabilities names the exact supported model and quant row.'
-      : 'Choose a GGUF and load it. Chat unlocks only after runtime health and the exact support contract agree.'
   const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
-    ? 'Ready for local chat'
+    ? 'Preview chat ready'
     : supportBlocked
-      ? 'Exact support row required'
+      ? 'Support match needed'
       : selectedModel
-        ? 'Waiting for runtime readiness'
+        ? 'Waiting on model readiness'
         : 'Choose a model to begin'
   const runtimeGateCopy = selectedModel
     ? `loaded_now=${selectedRuntimeReady ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready && runtime?.active_model_id === selectedModelId ? 'true' : 'false'}`
     : 'No model selected'
-  const supportBoundaryTitle = selectedModelRunnable
-    ? 'Local chat enabled for this exact supported row'
-    : supportBlocked
-      ? 'Runtime is ready, but exact support is not'
-      : selectedModel
-        ? 'Waiting for runtime and support contract agreement'
-        : 'No support is inferred until a model is selected'
-  const supportBoundaryCopy = selectedModel
-    ? `${selectedCompatibilityLabel}. ${runtimeGateCopy}. ${CHAT_DEMO_TOKEN_CAP}-token preview; exact-row only, with no broad-family or production-throughput claim.`
-    : `Choose a saved GGUF first. ${CHAT_DEMO_TOKEN_CAP}-token preview cap; filenames and paths do not create support claims.`
   const starterPrompts = [
     {
       label: 'Smoke reply',
@@ -177,6 +157,50 @@ export default function ChatWorkspace({
       prompt: 'Explain in plain English why Camelid requires loaded_now, generation_ready, and an exact compatibility row before chat unlocks.',
     },
   ]
+  const productHeroTitle = selectedModelRunnable
+    ? 'How can Camelid help locally?'
+    : supportBlocked
+      ? 'This model needs a support match.'
+      : 'Local chat, only when ready.'
+  const productHeroSummary = selectedModelRunnable
+    ? `${selectedModelName} is ready for short local prompts. Longer replies, production throughput, arbitrary templates, and neighboring model rows remain guarded.`
+    : supportBlocked
+      ? 'Camelid can see this GGUF, but chat stays locked until the support contract matches this exact model and quantization.'
+      : 'A clean Gemini-like prompt surface that stays locked until the model is loaded, generation-ready, and support-matched.'
+  const productProofCards = [
+    {
+      label: 'Runtime',
+      value: selectedRuntimeReady ? 'Ready' : runtime?.loaded_now ? 'Loaded, gated' : 'Waiting',
+      detail: selectedRuntimeReady ? 'Loaded model can generate short local replies.' : selectedModel ? runtimeGateCopy : 'No active local model selected.',
+      tone: selectedRuntimeReady ? 'ready' : 'waiting',
+    },
+    {
+      label: 'Supported model',
+      value: selectedCompatibilitySupported ? 'Matched' : 'Needs match',
+      detail: selectedCompatibilitySupported ? 'Model and Q8_0 quantization match the support contract.' : 'No support is inferred from filenames or broad families.',
+      tone: selectedCompatibilitySupported ? 'ready' : supportBlocked ? 'blocked' : 'waiting',
+    },
+    {
+      label: 'Reply scope',
+      value: 'Short preview',
+      detail: `${CHAT_DEMO_TOKEN_CAP} output tokens while longer generation is validated.`,
+      tone: selectedModelRunnable ? 'ready' : 'waiting',
+    },
+  ]
+  const honestyTitle = selectedModelRunnable
+    ? 'Short local chat is available'
+    : supportBlocked
+      ? 'Loaded is not enough'
+      : selectedModel
+        ? 'Still waiting on readiness'
+        : 'Choose a model first'
+  const honestyCopy = selectedModelRunnable
+    ? `Only ${selectedModelName} in this supported Q8_0 row is unlocked here; broader model support and long polished generation are not implied.`
+    : supportBlocked
+      ? 'The UI will not turn a visible GGUF path into a support claim without a matching capabilities row.'
+      : selectedModel
+        ? 'The composer unlocks after the selected model is loaded, generation-ready, and support-matched.'
+        : 'Saved paths, filenames, and catalog names do not create support claims by themselves.'
 
   const renderCapabilityStrip = (stage = false) => (
     <div className={`chat-capability-strip ${stage ? 'chat-capability-strip-stage' : ''}`} aria-label="Camelid support contract and chat readiness">
@@ -272,13 +296,24 @@ export default function ChatWorkspace({
                     <small>{selectedModel ? selectedModelName : 'No local model selected'}</small>
                   </div>
                 </div>
+                <div className="chat-empty-superwordmark" aria-hidden="true">Camelid</div>
                 <p className="chat-empty-greeting">{emptyHeroEyebrow}</p>
-                <h2>{emptyHeroTitle}</h2>
-                <p className="hero-summary">{emptyHeroSummary}</p>
+                <h2>{productHeroTitle}</h2>
+                <p className="hero-summary">{productHeroSummary}</p>
               </div>
 
-              <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean">
-                <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : 'Select a ready model first'} disabled={sending || !selectedModelRunnable} />
+              <div className="chat-empty-proof-grid" aria-label="Visible support and readiness proof">
+                {productProofCards.map((card) => (
+                  <div key={card.label} className={`chat-empty-proof-card is-${card.tone}`}>
+                    <span>{card.label}</span>
+                    <strong>{card.value}</strong>
+                    <small>{card.detail}</small>
+                  </div>
+                ))}
+              </div>
+
+              <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean composer-gemini-product">
+                <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid locally…' : 'Load an exact supported, generation-ready model first'} disabled={sending || !selectedModelRunnable} />
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
@@ -295,11 +330,9 @@ export default function ChatWorkspace({
                 </div>
               </div>
 
-              <div className={`chat-empty-contract-bar is-${readinessState}`} aria-label="Local chat support boundary">
-                <span>Support boundary</span>
-                <strong>{supportBoundaryTitle}</strong>
-                <small>{supportBoundaryCopy}</small>
-              </div>
+              <p className={`chat-empty-honesty-note is-${readinessState}`} aria-label="Local chat support boundary">
+                <strong>{honestyTitle}.</strong> {honestyCopy}
+              </p>
 
               <div className="chat-starter-chips chat-starter-chips-centered chat-starter-chips-stage" aria-label="Starter prompts">
                 {starterPrompts.map((starter) => (

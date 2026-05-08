@@ -30,14 +30,18 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
   const rawConversationTitle = selectedConversation?.title?.trim()
   const hasCustomConversationTitle = Boolean(rawConversationTitle && rawConversationTitle.toLowerCase() !== 'new conversation')
   const latestConversationMessage = [...(selectedConversation?.messages || [])].reverse().find((message) => isMeaningfulConversationMessage(message))
+  const activeModel = models.find((model) => model.id === runtime?.active_model_id)
+  const selectedModel = models.find((model) => model.id === selectedModelId)
+  const activeChatGate = getChatGateState(capabilities, activeModel, runtime)
+  const runtimeChatReady = activeChatGate.chatUnlocked
   const untitledConversationLabel = selectedConversation
     ? `${formatPreview(latestConversationMessage?.content, 42)} · ${formatSidebarDate(selectedConversation.updated_at) || 'New chat'}`
-    : 'Ready when you are'
+    : runtimeChatReady
+      ? 'Preview chat ready'
+      : 'Waiting on model readiness'
   const heading = tab === 'chat'
     ? (hasCustomConversationTitle ? clampText(rawConversationTitle, 72) : '')
     : titles[tab] || 'Camelid'
-  const activeModel = models.find((model) => model.id === runtime?.active_model_id)
-  const selectedModel = models.find((model) => model.id === selectedModelId)
   const activeModelLabel = activeModel?.name || 'Nothing loaded now'
   const selectedModelLabel = selectedModel?.name || 'Nothing chosen for next chat'
   const selectedModelSummary = selectedModel ? describeModelState(selectedModel) : 'Choose the model you want Camelid to use next.'
@@ -46,8 +50,6 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
   const supportGateDetail = currentCompatibilityTarget
     ? `${currentCompatibilityTarget.id}: ${formatCapabilityStatus(currentCompatibilityTarget.status)}`
     : 'Open the API contract before treating any model family or quant as supported.'
-  const activeChatGate = getChatGateState(capabilities, activeModel, runtime)
-  const runtimeChatReady = activeChatGate.chatUnlocked
   const runtimeGateDetail = `loaded_now=${runtime?.loaded_now ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready ? 'true' : 'false'} · exact_compatibility_row=${activeChatGate.contractSupported ? 'true' : 'false'}`
 
   if (tab === 'chat') {

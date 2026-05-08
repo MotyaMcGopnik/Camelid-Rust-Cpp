@@ -1455,9 +1455,9 @@
 }
 
 .chat-empty-stage-product {
-  width: min(100%, 760px);
-  gap: 13px;
-  padding: 4px 0 2px;
+  width: min(100%, 880px);
+  gap: 18px;
+  padding: clamp(18px, 3.6vw, 42px) clamp(16px, 4vw, 42px) clamp(14px, 3vw, 30px);
 }
 
 .chat-empty-stage-clean::before {
@@ -1474,13 +1474,15 @@
 }
 
 .chat-empty-stage-product::before {
-  inset: -38px -66px -32px;
-  border-radius: 64px;
+  inset: -54px -58px -42px;
+  border-radius: 56px;
   background:
-    radial-gradient(circle at 50% -6%, color-mix(in srgb, var(--color-info) 13%, transparent), transparent 42%),
-    radial-gradient(circle at 16% 74%, color-mix(in srgb, var(--color-ready) 6%, transparent), transparent 32%),
-    radial-gradient(circle at 86% 70%, color-mix(in srgb, var(--color-warning) 5%, transparent), transparent 32%),
-    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 24%, transparent), transparent 66%);
+    radial-gradient(circle at 24% 4%, color-mix(in srgb, var(--color-info) 22%, transparent), transparent 30%),
+    radial-gradient(circle at 72% 10%, color-mix(in srgb, #c58af9 16%, transparent), transparent 28%),
+    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--color-ready) 11%, transparent), transparent 38%),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 38%, transparent), transparent 70%);
+  filter: blur(1px);
+  opacity: 0.92;
 }
 
 .chat-empty-stage-product.is-blocked::before {
@@ -1763,6 +1765,94 @@
   letter-spacing: -0.06em;
 }
 
+.chat-empty-superwordmark {
+  margin: 2px 0 -4px;
+  max-width: 100%;
+  background:
+    linear-gradient(92deg, #8ab4f8 4%, #c58af9 34%, #f6c177 58%, #81c995 88%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(4rem, 8.8vw, 7.4rem);
+  font-weight: 720;
+  line-height: 0.86;
+  letter-spacing: -0.105em;
+  text-shadow: 0 24px 72px color-mix(in srgb, var(--color-info) 18%, transparent);
+}
+
+.chat-empty-proof-grid {
+  width: min(100%, 800px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.chat-empty-proof-card {
+  position: relative;
+  min-height: 104px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 16px 16px 15px;
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 62%, transparent);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 72%, rgba(255, 255, 255, 0.035)), color-mix(in srgb, var(--color-surface) 52%, transparent)),
+    color-mix(in srgb, var(--color-chip) 44%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 44px rgba(0, 0, 0, 0.11);
+  overflow: hidden;
+  text-align: left;
+}
+
+.chat-empty-proof-card::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 13%, transparent);
+}
+
+.chat-empty-proof-card.is-ready::before {
+  background: var(--color-ready);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-ready) 14%, transparent);
+}
+
+.chat-empty-proof-card.is-blocked::before {
+  background: var(--color-error);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+.chat-empty-proof-card span {
+  padding-right: 18px;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.chat-empty-proof-card strong {
+  padding-right: 16px;
+  color: var(--color-text);
+  font-size: 0.98rem;
+  font-weight: 720;
+  letter-spacing: -0.025em;
+}
+
+.chat-empty-proof-card small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--color-text-muted) 88%, var(--color-text) 12%);
+  font-size: 0.77rem;
+  line-height: 1.42;
+}
+
 .chat-empty-hero .hero-summary {
   max-width: 52ch;
 }
@@ -1772,6 +1862,10 @@
   color: var(--color-text-muted);
   font-size: 0.98rem;
   line-height: 1.54;
+}
+
+.chat-empty-stage-product .chat-empty-hero-clean .hero-summary {
+  max-width: 58ch;
 }
 
 .chat-empty-assurance-row {
@@ -2099,6 +2193,17 @@
   transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
+.composer-gemini-product {
+  width: min(100%, 800px);
+  border-radius: 32px;
+  border-color: color-mix(in srgb, var(--color-border-strong) 30%, transparent);
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--color-info) 9%, transparent), transparent 36%),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 98%, rgba(255, 255, 255, 0.045)), color-mix(in srgb, var(--color-bg-elevated) 88%, transparent));
+  box-shadow: 0 28px 78px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.075);
+  padding: 16px 18px 13px;
+}
+
 .chat-empty-stage-product .composer-gemini-stage-clean {
   position: relative;
   bottom: auto;
@@ -2136,6 +2241,10 @@
   padding: 6px 2px 10px;
 }
 
+textarea.composer-input-gemini {
+  resize: none !important;
+}
+
 .composer-input-gemini-stage {
   min-height: 48px !important;
   padding-bottom: 6px;
@@ -2165,7 +2274,8 @@
 
 .composer-gemini-footer-stage-clean {
   gap: 12px;
-  padding-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-soft) 46%, transparent);
 }
 
 .composer-gemini-disclaimer {
@@ -2352,6 +2462,28 @@
   color: var(--color-text-muted);
   font-size: 0.78rem;
   line-height: 1.5;
+}
+
+.chat-empty-honesty-note {
+  margin: -4px 0 0;
+  max-width: 76ch;
+  color: color-mix(in srgb, var(--color-text-muted) 88%, transparent);
+  font-size: 0.8rem;
+  line-height: 1.48;
+  text-align: center;
+}
+
+.chat-empty-honesty-note strong {
+  color: color-mix(in srgb, var(--color-text) 92%, var(--color-text-muted) 8%);
+  font-weight: 720;
+}
+
+.chat-empty-honesty-note.is-ready strong {
+  color: color-mix(in srgb, var(--color-ready) 70%, var(--color-text) 30%);
+}
+
+.chat-empty-honesty-note.is-blocked strong {
+  color: color-mix(in srgb, var(--color-error) 72%, var(--color-text) 28%);
 }
 
 .throughput-row,
@@ -4629,6 +4761,18 @@
   .composer-actions-inline {
     gap: var(--space-3);
   }
+
+  .chat-empty-stage-product {
+    padding-inline: 10px;
+  }
+
+  .chat-empty-proof-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-empty-proof-card {
+    min-height: auto;
+  }
 }
 
 @media (max-width: 560px) {
@@ -4703,6 +4847,11 @@
 
   .chat-empty-greeting {
     font-size: 0.88rem;
+  }
+
+  .chat-empty-superwordmark {
+    font-size: clamp(3.15rem, 17vw, 4.5rem);
+    letter-spacing: -0.09em;
   }
 
   .chat-empty-product-lockup {
