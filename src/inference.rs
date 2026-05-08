@@ -5869,6 +5869,9 @@ fn matmul_rhs_transposed_q8_0_block_reader(
     let output_len = rows.checked_mul(output_width).ok_or_else(|| {
         BackendError::RuntimeShapeMismatch("q8_0 block-reader output size overflow".to_string())
     })?;
+    if output_len == 0 {
+        return CpuTensor::from_f32(name, vec![rows, output_width], Vec::new());
+    }
     let mut output = vec![0.0_f32; output_len];
     let parallelize_output = should_parallelize_q8_0_file_reader_output(output_width);
     let use_q8_0_block_dot = q8_0_file_reader_block_dot_enabled();
@@ -8194,6 +8197,126 @@ mod tests {
         assert_eq!(dest[0], 10.0);
         assert_eq!(dest[1], 20.0);
         assert!(dest[2..].iter().all(|value| *value == 0.0));
+    }
+
+    fn write_q8_0_test_block(
+        out: &mut impl Write,
+        scale: f32,
+        quants: [i8; Q8_0_BLOCK_VALUES],
+    ) -> Q8_0Block {
+        let scale_bits = f32_to_f16_bits(scale);
+        out.write_all(&scale_bits.to_le_bytes()).unwrap();
+        out.write_all(&quants.map(|value| value as u8)).unwrap();
+        Q8_0Block {
+            scale: f16_bits_to_f32(scale_bits),
+            quants,
+        }
+    }
+
+    #[test]
+    fn q8_file_backed_output_projection_reuses_weight_read_across_batch_rows() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let mut first_row = [0_i8; Q8_0_BLOCK_VALUES];
+        let mut second_row = [0_i8; Q8_0_BLOCK_VALUES];
+        for idx in 0..Q8_0_BLOCK_VALUES {
+            first_row[idx] = (idx as i8 % 7) - 3;
+            second_row[idx] = 4 - (idx as i8 % 9);
+        }
+        let weight_blocks = vec![
+            write_q8_0_test_block(&mut temp_file, 0.5, first_row),
+            write_q8_0_test_block(&mut temp_file, 0.25, second_row),
+        ];
+        temp_file.flush().unwrap();
+
+        let input = CpuTensor::from_f32(
+            "prefill-output-norm",
+            vec![3, Q8_0_BLOCK_VALUES],
+            (0..(3 * Q8_0_BLOCK_VALUES))
+                .map(|idx| ((idx % 17) as f32 - 8.0) * 0.05)
+                .collect(),
+        )
+        .unwrap();
+        let weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            TensorShape {
+                dims: vec![2, Q8_0_BLOCK_VALUES],
+            },
+            Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, weight_blocks.len()),
+        );
+        let start = q8_0_file_read_stats();
+
+        let actual = output_projection_with_layout(
+            &input,
+            &weight,
+            "logits",
+            OutputProjectionLayout::TokenMajor,
+        )
+        .unwrap();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        let mut expected = Vec::new();
+        for input_row in input.data.chunks_exact(Q8_0_BLOCK_VALUES) {
+            let quantized_input = quantize_q8_0_row(input_row);
+            expected.push(q8_0_dot_rows(&weight_blocks[0..1], &quantized_input.blocks));
+            expected.push(q8_0_dot_rows(&weight_blocks[1..2], &quantized_input.blocks));
+        }
+        assert_eq!(actual.shape.dims, vec![3, 2]);
+        assert_slice_close(&actual.data, &expected);
+        assert_eq!(reads.read_calls, 1);
+        assert_eq!(
+            reads.read_bytes,
+            (weight_blocks.len() * Q8BlockReader::BLOCK_SIZE_BYTES) as u64
+        );
+    }
+
+    #[test]
+    fn q8_file_backed_output_projection_empty_batch_skips_weight_reads() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let weight_blocks = [
+            write_q8_0_test_block(&mut temp_file, 1.0, [1_i8; Q8_0_BLOCK_VALUES]),
+            write_q8_0_test_block(&mut temp_file, 1.0, [-1_i8; Q8_0_BLOCK_VALUES]),
+        ];
+        temp_file.flush().unwrap();
+
+        let input = CpuTensor::from_f32(
+            "empty-prefill-output-norm",
+            vec![0, Q8_0_BLOCK_VALUES],
+            Vec::new(),
+        )
+        .unwrap();
+        let weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            TensorShape {
+                dims: vec![weight_blocks.len(), Q8_0_BLOCK_VALUES],
+            },
+            Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, weight_blocks.len()),
+        );
+        let start = q8_0_file_read_stats();
+
+        let actual = output_projection_with_layout(
+            &input,
+            &weight,
+            "logits",
+            OutputProjectionLayout::TokenMajor,
+        )
+        .unwrap();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_eq!(actual.shape.dims, vec![0, weight_blocks.len()]);
+        assert!(actual.data.is_empty());
+        assert_eq!(reads.read_calls, 0);
+        assert_eq!(reads.read_bytes, 0);
+        assert!(!weight
+            .q8_0_file_backing
+            .as_ref()
+            .unwrap()
+            .file_handle_cached());
     }
 
     fn memory_sample(
