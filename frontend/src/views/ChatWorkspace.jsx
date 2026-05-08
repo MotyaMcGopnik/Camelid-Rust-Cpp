@@ -423,7 +423,7 @@ export default function ChatWorkspace({
                 )
 
                 return (
-                  <article key={message.id} className={`message-row message-row-gemini ${message.role}`}>
+                  <article key={message.id} className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}>
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
                       {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} /> : <p>{messageContent}</p>}
                       {hasTokenMetrics && (

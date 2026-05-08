@@ -5717,3 +5717,31 @@ textarea.composer-input-gemini {
   padding-left: 10px;
   border-left: 1px solid color-mix(in srgb, var(--color-border-soft) 48%, transparent);
 }
+
+/* Tiny Pac-Man assistant marker; chomp only while a response is streaming. */
+.message-row-gemini.assistant::before {
+  content: '';
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: conic-gradient(from 38deg, transparent 0 74deg, #ffd84d 74deg 360deg);
+  filter: drop-shadow(0 0 10px rgba(255, 216, 77, 0.3));
+  transform: translateY(7px);
+  text-shadow: none;
+}
+
+.message-row-gemini.assistant.is-streaming::before {
+  animation: camelid-pacman-chomp 380ms steps(2, end) infinite, camelid-pacman-bob 780ms ease-in-out infinite;
+}
+
+@keyframes camelid-pacman-chomp {
+  0%, 100% {
+    background: conic-gradient(from 38deg, transparent 0 74deg, #ffd84d 74deg 360deg);
+  }
+  50% {
+    background: conic-gradient(from 18deg, transparent 0 36deg, #ffd84d 36deg 360deg);
+  }
+}
+
+@keyframes camelid-pacman-bob {
+  0%, 100% { transform: translateY(7px); }
