@@ -13,7 +13,6 @@ const API_BASE_STORAGE_KEY = 'camelid.apiBase'
 const VALID_TABS = new Set(['chat', 'library', 'api', 'analytics', 'history', 'memory', 'system'])
 const NEW_CHAT_SENTINEL = '__new__'
 const DEFAULT_API_BASE = import.meta.env.VITE_CAMELID_API_BASE || 'http://127.0.0.1:8181'
-const LOCAL_CHAT_DEMO_MAX_TOKENS = 16
 
 function getInitialTab() {
   if (typeof window === 'undefined') return 'chat'
@@ -556,7 +555,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
 
     const messageContent = composer.trim()
     setSending(true)
-    showNotice(`Running Camelid local chat completion (${LOCAL_CHAT_DEMO_MAX_TOKENS} token demo cap)…`, 'info')
+    showNotice('Running Camelid local chat completion…', 'info')
 
     try {
       const conversation = await ensureConversation()
@@ -578,7 +577,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       const requestStartedAt = performance.now()
       const response = await fetchJson(`${normalizedApiBase}/v1/chat/completions`, {
         method: 'POST',
-        body: JSON.stringify({ model: selectedModelId, messages: history, max_tokens: LOCAL_CHAT_DEMO_MAX_TOKENS, temperature: 0, stream: false }),
+        body: JSON.stringify({ model: selectedModelId, messages: history, temperature: 0, stream: false }),
       })
       const elapsedMs = performance.now() - requestStartedAt
       const assistantContent = response?.choices?.[0]?.message?.content || ''
@@ -593,7 +592,6 @@ export function useDashboardData({ showNotice, clearNotice }) {
         tokens_out_per_sec: completionTokensPerSecond(response, elapsedMs),
         top_logits: topFiveLogitProbabilities(response),
         generated_token_ids: Array.isArray(response?.camelid?.generated_token_ids) ? response.camelid.generated_token_ids : [],
-        demo_token_cap: LOCAL_CHAT_DEMO_MAX_TOKENS,
         timings_ms: response?.camelid?.timings_ms || null,
         usage: response?.usage || null,
       }
@@ -604,7 +602,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       )))
       setPendingChat(null)
       setSelectedConversationId(conversation.id)
-      showNotice(`Camelid returned a raw local reply with the ${LOCAL_CHAT_DEMO_MAX_TOKENS}-token demo cap. Inspect it before treating longer generation as polished.`, 'success')
+      showNotice('Camelid returned a raw local reply. Inspect the output and telemetry before treating the run as validated.', 'success')
     } catch (error) {
       setPendingChat(null)
       showNotice(getGuardrailErrorMessage(error, 'Local inference failed.'), 'error')

@@ -40,7 +40,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
               <p className="panel-kicker">Runtime</p>
               <h2>What Camelid can do right now</h2>
             </div>
-            <p className="model-summary">A quick operational summary of the local engine, loaded model, and what is actually ready for short local completions.</p>
+            <p className="model-summary">A quick operational summary of the local engine, loaded model, and what is actually ready for local completions.</p>
           </div>
           <div className="runtime-stat-grid">
             <div className="runtime-stat"><span>Runtime state</span><strong>{runtime?.generation_ready ? 'Generation-ready' : runtime?.loaded_now ? 'Loaded, not generation-ready' : 'No generation-ready model'}</strong></div>
@@ -66,7 +66,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
             <div className="activity-item">Saved memory remains on-device and can be recalled in later chats.</div>
             <div className="activity-item">Camelid is using the local CPU generation path today; GPU acceleration remains future work.</div>
             <div className="activity-item">Current next-chat model state: {describeModelState(selectedModel)}</div>
-            <div className="activity-item">Chat stays blocked until Camelid reports generation_ready for the selected model; demo chat uses a short 16-token cap while longer-generation polish continues.</div>
+            <div className="activity-item">Chat stays blocked until Camelid reports generation_ready for the selected model; once ready, chat runs until EOS, an explicit request limit, or the backend context window.</div>
             <div className="activity-item">The OpenAI-compatible local API is exposed at {apiBase}.</div>
           </div>
         </div>
@@ -109,7 +109,6 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
   -d '{
     "model": "${modelId}",
     "messages": [{"role": "user", "content": "Hello from Camelid"}],
-    "max_tokens": 16,
     "temperature": 0
   }'` : 'Start the local runtime to see a ready-to-copy curl example.'}</pre>
           </div>

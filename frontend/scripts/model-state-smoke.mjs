@@ -345,7 +345,7 @@ assert.equal(
   false,
   'even runtime-green Gemma planning rows remain blocked until /api/capabilities promotes the exact row to supported',
 )
-assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /smoke-supported for short local chat/)
+assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /smoke-supported for local chat/)
 assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /\/api\/models\/load, \/v1\/completions, \/v1\/chat\/completions, frontend smoke, compact parity/)
 assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /five-prompt API smoke pack, and bounded 512\/1024\/2048-context parity packs/)
 assert.match(LLAMA32_3B_ACCEPTANCE_SUMMARY, /does not promote neighboring Llama sizes/)

@@ -3,8 +3,6 @@ import { clampText, formatDate, formatRate } from '../lib/formatters'
 import { getChatGateState } from '../lib/chatGate'
 import { describeModelState, getModelStatusLabel, isRunnableInCurrentRuntime } from '../lib/modelState'
 
-const CHAT_DEMO_TOKEN_CAP = 16
-
 const isBootstrapMessage = (message) =>
   message?.role === 'assistant' &&
   typeof message?.content === 'string' &&
@@ -74,10 +72,10 @@ export default function ChatWorkspace({
   const latestFirstGeneratedToken = latestTelemetryMessage?.generated_token_ids?.[0]
   const latestFirstTokenCopy = latestFirstGeneratedToken !== null && latestFirstGeneratedToken !== undefined ? ` · first token #${latestFirstGeneratedToken}` : ''
   const latestCompletionCopy = latestGeneratedTokens === 1
-    ? `1 completion token${latestFirstTokenCopy} · first-token path validated; longer replies still need polish`
+    ? `1 completion token${latestFirstTokenCopy} · first-token path completed`
     : latestGeneratedTokens
-      ? `${latestGeneratedTokens} completion tokens${latestFirstTokenCopy} · raw ${latestTelemetryMessage?.demo_token_cap || CHAT_DEMO_TOKEN_CAP}-token-cap local run; inspect before trusting polish`
-      : `First reply will establish the live TPS baseline for this loaded model (${CHAT_DEMO_TOKEN_CAP}-token demo cap).`
+      ? `${latestGeneratedTokens} completion tokens${latestFirstTokenCopy} · raw local run; inspect before trusting polish`
+      : 'First reply will establish the live TPS baseline for this loaded model.'
   const staleTelemetryModelLabel = latestVisibleAssistantMessage?.model_id && !latestTelemetryMatchesSelection
     ? (latestVisibleAssistantMessage.model_name || latestVisibleAssistantMessage.model_id)
     : ''
@@ -163,7 +161,7 @@ export default function ChatWorkspace({
       ? 'This model needs a support match.'
       : 'Local chat, only when ready.'
   const productHeroSummary = selectedModelRunnable
-    ? `${selectedModelName} is ready for short local prompts. Longer replies, production throughput, arbitrary templates, and neighboring model rows remain guarded.`
+    ? `${selectedModelName} is ready for local prompts. Production throughput, arbitrary templates, and neighboring model rows remain guarded.`
     : supportBlocked
       ? 'Camelid can see this GGUF, but chat stays locked until the support contract matches this exact model and quantization.'
       : 'A clean Gemini-like prompt surface that stays locked until the model is loaded, generation-ready, and support-matched.'
@@ -171,7 +169,7 @@ export default function ChatWorkspace({
     {
       label: 'Runtime',
       value: selectedRuntimeReady ? 'Ready' : runtime?.loaded_now ? 'Loaded, gated' : 'Waiting',
-      detail: selectedRuntimeReady ? 'Loaded model can generate short local replies.' : selectedModel ? runtimeGateCopy : 'No active local model selected.',
+      detail: selectedRuntimeReady ? 'Loaded model can generate local replies.' : selectedModel ? runtimeGateCopy : 'No active local model selected.',
       tone: selectedRuntimeReady ? 'ready' : 'waiting',
     },
     {
@@ -182,8 +180,8 @@ export default function ChatWorkspace({
     },
     {
       label: 'Reply scope',
-      value: 'Short preview',
-      detail: `${CHAT_DEMO_TOKEN_CAP} output tokens while longer generation is validated.`,
+      value: 'Context-limited',
+      detail: 'Runs until EOS, explicit request max_tokens, or the backend context limit.',
       tone: selectedModelRunnable ? 'ready' : 'waiting',
     },
   ]
@@ -325,7 +323,7 @@ export default function ChatWorkspace({
                   </div>
                 </div>
                 <div className="composer-gemini-disclaimer composer-gemini-disclaimer-product">
-                  <span>Raw local replies are capped at {CHAT_DEMO_TOKEN_CAP} demo tokens until longer-generation polish is validated.</span>
+                  <span>Raw local replies run until EOS, explicit request limits, or the backend context window.</span>
                   <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>View support contract</button>
                 </div>
               </div>
@@ -404,14 +402,13 @@ export default function ChatWorkspace({
                 const hasMetrics = message.role === 'assistant' && (message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined || message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined)
                 const messageCompletionTokens = message.usage?.completion_tokens
                 const modelLabel = message.model_name || message.model_id
-                const demoTokenCap = message.demo_token_cap || CHAT_DEMO_TOKEN_CAP
                 const firstGeneratedToken = message.generated_token_ids?.[0]
                 const firstTokenCopy = firstGeneratedToken !== null && firstGeneratedToken !== undefined ? ` First token #${firstGeneratedToken}.` : ''
                 const diagnosticCopy = message.role === 'assistant'
                   ? messageCompletionTokens === 1
-                    ? `Raw first-token validation sample.${firstTokenCopy} Longer generation is not polished yet.`
+                    ? `Raw first-token validation sample.${firstTokenCopy}`
                     : messageCompletionTokens
-                      ? `Raw local output · ${messageCompletionTokens} completion tokens${messageCompletionTokens >= demoTokenCap ? ' (demo cap)' : ''}.${firstTokenCopy} Longer-generation polish still needs separate validation.`
+                      ? `Raw local output · ${messageCompletionTokens} completion tokens.${firstTokenCopy}`
                       : 'Raw local output.'
                   : ''
 
@@ -474,7 +471,7 @@ export default function ChatWorkspace({
                       <div className="message-heading message-heading-clean">
                         <span className="message-micro-meta">Thinking…</span>
                       </div>
-                      <p className="message-placeholder-copy">Generating a raw local reply with a {CHAT_DEMO_TOKEN_CAP}-token demo cap… first-token diagnostics appear after completion.</p>
+                      <p className="message-placeholder-copy">Generating a raw local reply… first-token diagnostics appear after completion.</p>
                     </div>
                   </article>
                 </>
@@ -486,7 +483,7 @@ export default function ChatWorkspace({
 
       {!isFreshThread && (
         <div className="composer composer-gemini composer-gemini-floating">
-          <textarea className="composer-input composer-input-gemini" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask a short local test prompt' : 'Pick a ready model first, then start your chat'} disabled={sending || !selectedModelRunnable} />
+          <textarea className="composer-input composer-input-gemini" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask a local test prompt' : 'Pick a ready model first, then start your chat'} disabled={sending || !selectedModelRunnable} />
           <div className="composer-gemini-footer">
             <div className="composer-gemini-tools">
               {renderModelPicker()}

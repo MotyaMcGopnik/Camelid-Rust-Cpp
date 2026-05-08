@@ -1179,6 +1179,58 @@ async fn generation_session_endpoint_preflights_tokenizer_then_reports_missing_d
 }
 
 #[tokio::test]
+async fn generation_session_without_max_tokens_uses_remaining_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tiny-generation-default-max.gguf");
+    write_generation_gguf_with_options(
+        &path,
+        GenerationFixtureOptions {
+            context_length: 64,
+            include_tokenizer: true,
+            truncate_payload: false,
+        },
+    );
+
+    let app = camelid::api::router();
+    let load_body = serde_json::json!({"path": path, "id": "tiny-generation-default-max"});
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/models/load")
+                .header("content-type", "application/json")
+                .body(Body::from(load_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/generation/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"tiny-generation-default-max","prompt":"hello"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let prompt_tokens = body["prompt_token_count"].as_u64().unwrap();
+    let max_tokens = body["max_tokens"].as_u64().unwrap();
+    assert_eq!(prompt_tokens + max_tokens, 64);
+    assert!(max_tokens > 16);
+}
+
+#[tokio::test]
 async fn tokenizer_endpoint_returns_current_model_tokenizer_summary() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tokenizer.gguf");

@@ -1597,7 +1597,6 @@ async fn validate_generation_request(
     state: &AppState,
     req: GenerationSessionRequest,
 ) -> std::result::Result<GenerationSessionSummary, Response> {
-    let max_tokens = req.max_tokens.unwrap_or(16);
     let prepared = prepare_generation(state, req).await?;
 
     Ok(GenerationSessionSummary {
@@ -1609,7 +1608,7 @@ async fn validate_generation_request(
         object: "generation.session",
         model: prepared.model_id,
         prompt_token_count: prepared.token_ids.len(),
-        max_tokens,
+        max_tokens: prepared.max_tokens,
         state: "validated",
         dense_session_ready: true,
         next_step: "public completion endpoints can generate tokens until EOS, max_tokens, or context limit and return either non-streaming JSON or OpenAI-compatible SSE chunks",
@@ -1787,7 +1786,7 @@ async fn prepare_generation(
     state: &AppState,
     req: GenerationSessionRequest,
 ) -> std::result::Result<PreparedGeneration, Response> {
-    let max_tokens = req.max_tokens.unwrap_or(16);
+    let requested_max_tokens = req.max_tokens;
     validate_choice_and_logprob_fields(&req).map_err(|response| *response)?;
     let sampling = sampling_config_from_request(&req).map_err(|response| *response)?;
     let stop_sequences =
@@ -1795,7 +1794,7 @@ async fn prepare_generation(
     let logit_diagnostic_token_ids =
         diagnostic_logit_token_ids(req.camelid_logit_token_ids.as_deref())
             .map_err(|response| *response)?;
-    if max_tokens == 0 {
+    if requested_max_tokens == Some(0) {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "invalid_max_tokens",
@@ -1917,19 +1916,36 @@ async fn prepare_generation(
         )
     })?;
 
-    if token_ids.len() + max_tokens as usize > config.context_length as usize {
+    let context_length = config.context_length as usize;
+    if let Some(max_tokens) = requested_max_tokens {
+        if token_ids.len() + max_tokens as usize > context_length {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "context_length_exceeded",
+                format!(
+                    "prompt token count {} plus max_tokens {} exceeds context length {}",
+                    token_ids.len(),
+                    max_tokens,
+                    config.context_length
+                ),
+                Some("max_tokens"),
+            ));
+        }
+    } else if token_ids.len() >= context_length {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "context_length_exceeded",
             format!(
-                "prompt token count {} plus max_tokens {} exceeds context length {}",
+                "prompt token count {} leaves no room for generation in context length {}",
                 token_ids.len(),
-                max_tokens,
                 config.context_length
             ),
-            Some("max_tokens"),
+            Some("prompt"),
         ));
     }
+
+    let available_max_tokens = (context_length - token_ids.len()) as u32;
+    let max_tokens = requested_max_tokens.unwrap_or(available_max_tokens);
 
     let weight_load_started = Instant::now();
     let cached_weights = state.cached_weights.read().await.clone();

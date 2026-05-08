@@ -65,7 +65,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
           </div>
           <div className="api-card wide api-card-code">
             <strong>Readiness-gated curl</strong>
-            <pre>{apiBase ? `# Use after /v1/health returns generation_ready=true\ncurl ${apiBase}/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "${modelId}",\n    "messages": [{"role": "user", "content": "Hello from Camelid"}],\n    "max_tokens": 16,\n    "temperature": 0\n  }'` : 'Start the local runtime to see a ready-to-copy curl example.'}</pre>
+            <pre>{apiBase ? `# Use after /v1/health returns generation_ready=true\ncurl ${apiBase}/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "${modelId}",\n    "messages": [{"role": "user", "content": "Hello from Camelid"}],\n    "temperature": 0\n  }'` : 'Start the local runtime to see a ready-to-copy curl example.'}</pre>
           </div>
         </div>
       </section>
