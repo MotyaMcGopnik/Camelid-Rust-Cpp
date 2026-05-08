@@ -657,9 +657,12 @@ export function useDashboardData({ showNotice, clearNotice }) {
     const messageContent = composer.trim()
     setSending(true)
     showNotice('Running Camelid local chat completion…', 'info')
+    let activeConversationId = null
+    let assistantId = null
 
     try {
       const conversation = await ensureConversation()
+      activeConversationId = conversation.id
       const userMessage = { id: makeId('message'), role: 'user', content: messageContent, model_id: selectedModelId, created_at: nowIso() }
       setPendingChat({ conversationId: conversation.id, content: messageContent, modelId: selectedModelId })
       setComposer('')
@@ -677,7 +680,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       )))
 
       const requestStartedAt = performance.now()
-      const assistantId = makeId('message')
+      assistantId = makeId('message')
       const assistantMessageBase = {
         id: assistantId,
         role: 'assistant',
@@ -755,8 +758,29 @@ export function useDashboardData({ showNotice, clearNotice }) {
       setSelectedConversationId(conversation.id)
       showNotice('Camelid streamed the local reply.', 'success')
     } catch (error) {
+      const errorMessage = getGuardrailErrorMessage(error, 'Local inference failed.')
+      if (activeConversationId && assistantId) {
+        persistConversations((current) => current.map((item) => (
+          item.id === activeConversationId
+            ? {
+                ...item,
+                messages: (item.messages || []).map((message) => (
+                  message.id === assistantId
+                    ? {
+                        ...message,
+                        content: message.content && message.content !== '…' ? message.content : '(generation stopped)',
+                        finish_reason: 'error',
+                        streaming: false,
+                      }
+                    : message
+                )),
+                updated_at: nowIso(),
+              }
+            : item
+        )))
+      }
       setPendingChat(null)
-      showNotice(getGuardrailErrorMessage(error, 'Local inference failed.'), 'error')
+      showNotice(errorMessage, 'error')
     } finally {
       setSending(false)
       await loadDashboard({ silent: true })

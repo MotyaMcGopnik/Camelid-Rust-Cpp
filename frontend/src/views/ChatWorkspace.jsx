@@ -212,15 +212,26 @@ const splitFenceInfo = (value) => {
 
 const pushCodeBlock = (blocks, language, code, keyPrefix, { incomplete = false, streaming = false } = {}) => {
   const trimmedCode = String(code || '').replace(/^\n+|\n+$/g, '')
+  const stillGenerating = Boolean(incomplete && streaming)
   blocks.push(
-    <figure className={`message-code-card ${incomplete && streaming ? 'is-generating' : ''}`} key={`code-${blocks.length}`}>
+    <figure className={`message-code-card ${stillGenerating ? 'is-generating' : ''}`} aria-busy={stillGenerating ? 'true' : undefined} key={`code-${blocks.length}`}>
       <figcaption>
         <span className="message-code-card-title">{language}</span>
-        {incomplete && streaming && <span className="message-code-card-status">Still generating</span>}
+        {stillGenerating && <span className="message-code-card-status">Still generating</span>}
         <button type="button" onClick={() => copyText(trimmedCode)} aria-label={`Copy ${language} code`}>Copy</button>
       </figcaption>
       <pre><code>{renderHighlightedCode(trimmedCode, language, keyPrefix)}</code></pre>
     </figure>,
+  )
+}
+
+function StreamingStatus({ elapsedSeconds, label = 'Still generating locally' }) {
+  return (
+    <div className="message-live-status" role="status" aria-live="polite">
+      <span className="message-live-dot" aria-hidden="true" />
+      <span>{label}</span>
+      <span>{elapsedSeconds}s elapsed</span>
+    </div>
   )
 }
 
@@ -273,15 +284,17 @@ export default function ChatWorkspace({
 }) {
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
   const visibleMessages = (selectedConversation?.messages || []).filter((message) => !isBootstrapMessage(message))
+  const hasStreamingAssistant = visibleMessages.some((message) => message.role === 'assistant' && message.streaming)
+  const generationActive = Boolean(sending || hasStreamingAssistant)
   const pendingPrompt = (pendingConversation?.content || (sending ? composer.trim() : '')).trim()
   const pendingPromptAlreadyVisible = Boolean(
     pendingPrompt && [...visibleMessages].reverse().some((message) => message.role === 'user' && message.content === pendingPrompt),
   )
   const pendingUserPrompt = pendingPromptAlreadyVisible ? '' : pendingPrompt
-  const awaitingAssistant = Boolean(sending && pendingPrompt)
+  const awaitingAssistant = Boolean(sending && pendingPrompt && !hasStreamingAssistant)
 
   useEffect(() => {
-    if (!sending) {
+    if (!generationActive) {
       setGenerationElapsedSeconds(0)
       return undefined
     }
@@ -291,7 +304,7 @@ export default function ChatWorkspace({
       setGenerationElapsedSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)))
     }, 1000)
     return () => window.clearInterval(interval)
-  }, [sending])
+  }, [generationActive])
 
   const isFreshThread = selectedConversation ? (visibleMessages.length === 0 && !pendingPrompt) : !pendingPrompt
   const handleComposerKeyDown = async (event) => {
@@ -321,7 +334,7 @@ export default function ChatWorkspace({
       : runtime?.loaded_now && runtime?.active_model_id === selectedModelId
       ? 'Ready'
       : 'Ready to chat'
-  const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !sending
+  const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !generationActive
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
   const selectedCompatibilityLabel = selectedModel
     ? compatibilityHintLabel(selectedCompatibilityHint, 'No matching COMPATIBILITY.md row')
@@ -393,7 +406,7 @@ export default function ChatWorkspace({
           aria-label="Choose model for chat"
           value={selectedModelId}
           onChange={(e) => setSelectedModelId(e.target.value)}
-          disabled={sending}
+          disabled={generationActive}
         >
           {runnableModels.map((model) => (
             <option key={model.id} value={model.id}>
@@ -444,14 +457,14 @@ export default function ChatWorkspace({
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean composer-gemini-product">
-                <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : 'Load a model first'} disabled={sending || !selectedModelRunnable} />
+                <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
                     {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Library</button>}
                   </div>
                   <div className="composer-gemini-actions composer-gemini-actions-stage">
-                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
+                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
                   </div>
                 </div>
                 <p className={`composer-gemini-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
@@ -492,13 +505,7 @@ export default function ChatWorkspace({
                   <article key={message.id} className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}>
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
                       {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} streaming={Boolean(message.streaming)} /> : <p>{messageContent}</p>}
-                      {message.role === 'assistant' && message.streaming && (
-                        <div className="message-live-status" role="status" aria-live="polite">
-                          <span className="message-live-dot" aria-hidden="true" />
-                          <span>Generating locally</span>
-                          <span>{generationElapsedSeconds}s elapsed</span>
-                        </div>
-                      )}
+                      {message.role === 'assistant' && message.streaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} />}
                       {hasTokenMetrics && (
                         <div className="message-token-metrics" aria-label="Generation speed">
                           <span>In {formatRate(message.tokens_in_per_sec)}</span>
@@ -520,9 +527,7 @@ export default function ChatWorkspace({
                   )}
                   <article className="message-row message-row-gemini assistant pending is-streaming">
                     <div className="message-bubble message-bubble-gemini assistant pending">
-                      <div className="message-heading message-heading-clean">
-                        <span className="message-micro-meta">Generating locally · {generationElapsedSeconds}s elapsed</span>
-                      </div>
+                      <StreamingStatus elapsedSeconds={generationElapsedSeconds} label="Still generating; waiting for the first token" />
                       <p className="message-placeholder-copy">Camelid is running locally. Tokens will appear as they are generated.</p>
                     </div>
                   </article>
@@ -535,16 +540,16 @@ export default function ChatWorkspace({
 
       {!isFreshThread && (
         <div className="composer composer-gemini composer-gemini-floating">
-          <textarea className="composer-input composer-input-gemini" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask Camelid' : 'Load a model first'} disabled={sending || !selectedModelRunnable} />
+          <textarea className="composer-input composer-input-gemini" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask Camelid' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
           <div className="composer-gemini-footer">
             <div className="composer-gemini-tools">
               {renderModelPicker()}
               <span className="composer-meta-pill">{selectedModelMeta}</span>
-              {selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={sending}>Save to memory</button>}
+              {selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={generationActive}>Save to memory</button>}
             </div>
             <div className="composer-gemini-actions">
               {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button" onClick={() => setTab('library')}>Open Library</button>}
-              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
+              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
             </div>
           </div>
         </div>
