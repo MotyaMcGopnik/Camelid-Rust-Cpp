@@ -21,6 +21,161 @@ const cleanLegacyDemoCapCopy = (value) => {
     .trim()
 }
 
+const normalizeCodeLanguage = (value) => {
+  const language = String(value || '').trim().replace(/[^a-zA-Z0-9_+#.-].*$/, '')
+  if (!language) return 'Code'
+  if (language.toLowerCase() === 'js') return 'JavaScript'
+  if (language.toLowerCase() === 'ts') return 'TypeScript'
+  if (language.toLowerCase() === 'html') return 'HTML'
+  if (language.toLowerCase() === 'css') return 'CSS'
+  return language.toUpperCase()
+}
+
+const copyText = async (text) => {
+  try {
+    await navigator.clipboard?.writeText(text)
+  } catch {
+    // Clipboard access can be denied outside secure browser contexts; rendering still works.
+  }
+}
+
+const renderInlineMarkdown = (text, keyPrefix) => {
+  const parts = String(text || '').split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean)
+  return parts.map((part, index) => {
+    const key = `${keyPrefix}-${index}`
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={key} className="inline-code">{part.slice(1, -1)}</code>
+    }
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>
+    }
+    return <span key={key}>{part}</span>
+  })
+}
+
+const renderMarkdownText = (text, keyPrefix) => {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n')
+  const blocks = []
+  let paragraph = []
+  let list = []
+
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      const value = paragraph.join(' ').trim()
+      if (value) {
+        blocks.push(<p key={`${keyPrefix}-p-${blocks.length}`}>{renderInlineMarkdown(value, `${keyPrefix}-p-${blocks.length}`)}</p>)
+      }
+      paragraph = []
+    }
+  }
+  const flushList = () => {
+    if (list.length) {
+      blocks.push(
+        <ul key={`${keyPrefix}-ul-${blocks.length}`}>
+          {list.map((item, index) => (
+            <li key={`${keyPrefix}-li-${blocks.length}-${index}`}>{renderInlineMarkdown(item, `${keyPrefix}-li-${index}`)}</li>
+          ))}
+        </ul>,
+      )
+      list = []
+    }
+  }
+
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim()
+    if (!line) {
+      flushParagraph()
+      flushList()
+      return
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) {
+      flushParagraph()
+      flushList()
+      const Tag = heading[1].length === 1 ? 'h2' : 'h3'
+      blocks.push(<Tag key={`${keyPrefix}-h-${blocks.length}`}>{renderInlineMarkdown(heading[2], `${keyPrefix}-h-${blocks.length}`)}</Tag>)
+      return
+    }
+    const listItem = line.match(/^[-*]\s+(.+)$/)
+    if (listItem) {
+      flushParagraph()
+      list.push(listItem[1])
+      return
+    }
+    flushList()
+    paragraph.push(line)
+  })
+  flushParagraph()
+  flushList()
+  return blocks
+}
+
+const syntaxClassForToken = (token, language) => {
+  const lowerLanguage = String(language || '').toLowerCase()
+  if (/^\s+$/.test(token)) return ''
+  if (/^\/\//.test(token) || /^\/\*/.test(token) || /^<!--/.test(token)) return 'comment'
+  if (/^['"`]/.test(token)) return 'string'
+  if (/^\d/.test(token)) return 'number'
+  if (lowerLanguage.includes('html') && /^<\/?[\w-]+/.test(token)) return 'tag'
+  if (lowerLanguage.includes('html') && /^[\w:-]+(?==)/.test(token)) return 'attr'
+  if (/^(const|let|var|function|return|if|else|for|while|class|new|true|false|null|undefined|import|export|from|async|await|document|window)$/.test(token)) return 'keyword'
+  if (lowerLanguage.includes('css') && /^[\w-]+(?=\s*:)/.test(token)) return 'attr'
+  return ''
+}
+
+const renderHighlightedCode = (code, language, keyPrefix) => {
+  const lowerLanguage = String(language || '').toLowerCase()
+  const pattern = lowerLanguage.includes('html')
+    ? /(<!--[\s\S]*?-->|<\/?[\w-]+|\/?>|[\w:-]+(?==)|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/g
+    : lowerLanguage.includes('css')
+      ? /(\/\*[\s\S]*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|#[\da-fA-F]{3,8}|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw)?\b|[\w-]+(?=\s*:))/g
+      : /(\/\/.*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b(?:const|let|var|function|return|if|else|for|while|class|new|true|false|null|undefined|import|export|from|async|await|document|window)\b|\b\d+(?:\.\d+)?\b)/g
+  const nodes = []
+  let cursor = 0
+  let match = pattern.exec(code)
+  while (match) {
+    if (match.index > cursor) nodes.push(code.slice(cursor, match.index))
+    const token = match[0]
+    const tokenClass = syntaxClassForToken(token, lowerLanguage)
+    nodes.push(tokenClass
+      ? <span key={`${keyPrefix}-${nodes.length}`} className={`syntax-token ${tokenClass}`}>{token}</span>
+      : token)
+    cursor = match.index + token.length
+    match = pattern.exec(code)
+  }
+  if (cursor < code.length) nodes.push(code.slice(cursor))
+  return nodes
+}
+
+function AssistantMarkdown({ content }) {
+  const normalized = String(content || '').replace(/\r\n/g, '\n')
+  const blocks = []
+  const fencePattern = /```\s*([^\n`]*)\n?([\s\S]*?)```/g
+  let cursor = 0
+  let match = fencePattern.exec(normalized)
+
+  while (match) {
+    const before = normalized.slice(cursor, match.index)
+    blocks.push(...renderMarkdownText(before, `md-${blocks.length}`))
+    const language = normalizeCodeLanguage(match[1])
+    const code = match[2].replace(/^\n+|\n+$/g, '')
+    blocks.push(
+      <figure className="message-code-card" key={`code-${blocks.length}`}>
+        <figcaption>
+          <span>{language}</span>
+          <button type="button" onClick={() => copyText(code)} aria-label={`Copy ${language} code`}>Copy</button>
+        </figcaption>
+        <pre><code>{renderHighlightedCode(code, language, `code-${blocks.length}`)}</code></pre>
+      </figure>,
+    )
+    cursor = match.index + match[0].length
+    match = fencePattern.exec(normalized)
+  }
+  blocks.push(...renderMarkdownText(normalized.slice(cursor), `md-${blocks.length}`))
+
+  return <div className="message-markdown">{blocks.length ? blocks : <p>{content}</p>}</div>
+}
+
 export default function ChatWorkspace({
   selectedConversation,
   selectedModel,
@@ -213,7 +368,7 @@ export default function ChatWorkspace({
                 return (
                   <article key={message.id} className={`message-row message-row-gemini ${message.role}`}>
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
-                      <p>{messageContent}</p>
+                      {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} /> : <p>{messageContent}</p>}
                     </div>
                   </article>
                 )
