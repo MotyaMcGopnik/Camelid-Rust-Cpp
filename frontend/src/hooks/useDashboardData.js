@@ -127,6 +127,12 @@ function optionalString(value) {
   return trimmed || null
 }
 
+function normalizeEngineName(value) {
+  const engine = optionalString(value)?.toLowerCase()
+  if (!engine || engine === 'backendinference' || engine === 'backend inference') return 'camelid'
+  return engine
+}
+
 function cleanLegacyDemoCapCopy(value) {
   if (typeof value !== 'string') return value
   return value
@@ -173,7 +179,7 @@ function normalizeLocalModelRecord(record) {
     model_path: modelPath,
     runtime_model_name: String(record.runtime_model_name || id).trim(),
     source: record.source || 'Local GGUF file',
-    engine: record.engine || 'camelid',
+    engine: normalizeEngineName(record.engine),
     quant: record.quant || null,
     size_gb: record.size_gb || null,
     api_base: record.api_base || null,
@@ -345,7 +351,7 @@ function makeDashboard({ health, models, currentModel, capabilities, conversatio
     memories,
     models,
     runtime: {
-      engine: health?.engine || 'camelid',
+      engine: normalizeEngineName(health?.engine),
       loaded_now: Boolean(health?.loaded_now ?? health?.active_model_id),
       active_model_id: health?.active_model_id || null,
       generation_ready: Boolean(health?.generation_ready),
