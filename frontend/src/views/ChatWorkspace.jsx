@@ -210,12 +210,13 @@ const splitFenceInfo = (value) => {
   }
 }
 
-const pushCodeBlock = (blocks, language, code, keyPrefix) => {
+const pushCodeBlock = (blocks, language, code, keyPrefix, { incomplete = false, streaming = false } = {}) => {
   const trimmedCode = String(code || '').replace(/^\n+|\n+$/g, '')
   blocks.push(
-    <figure className="message-code-card" key={`code-${blocks.length}`}>
+    <figure className={`message-code-card ${incomplete && streaming ? 'is-generating' : ''}`} key={`code-${blocks.length}`}>
       <figcaption>
-        <span>{language}</span>
+        <span className="message-code-card-title">{language}</span>
+        {incomplete && streaming && <span className="message-code-card-status">Still generating</span>}
         <button type="button" onClick={() => copyText(trimmedCode)} aria-label={`Copy ${language} code`}>Copy</button>
       </figcaption>
       <pre><code>{renderHighlightedCode(trimmedCode, language, keyPrefix)}</code></pre>
@@ -223,7 +224,7 @@ const pushCodeBlock = (blocks, language, code, keyPrefix) => {
   )
 }
 
-function AssistantMarkdown({ content }) {
+function AssistantMarkdown({ content, streaming = false }) {
   const normalized = String(content || '').replace(/\r\n/g, '\n')
   const blocks = []
   let cursor = 0
@@ -239,11 +240,12 @@ function AssistantMarkdown({ content }) {
     const { language, firstCodeLine } = splitFenceInfo(normalized.slice(infoStart, infoEnd))
     const codeStart = nextLine === -1 ? infoEnd : nextLine + 1
     const fenceEnd = normalized.indexOf('```', codeStart)
+    const incompleteFence = fenceEnd === -1
     const codeEnd = fenceEnd === -1 ? normalized.length : fenceEnd
     const codeBody = normalized.slice(codeStart, codeEnd)
     const code = firstCodeLine ? `${firstCodeLine}${codeBody ? `\n${codeBody}` : ''}` : codeBody
 
-    pushCodeBlock(blocks, language, code, `code-${blocks.length}`)
+    pushCodeBlock(blocks, language, code, `code-${blocks.length}`, { incomplete: incompleteFence, streaming })
     cursor = fenceEnd === -1 ? normalized.length : fenceEnd + 3
     fenceStart = normalized.indexOf('```', cursor)
   }
@@ -489,7 +491,14 @@ export default function ChatWorkspace({
                 return (
                   <article key={message.id} className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}>
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
-                      {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} /> : <p>{messageContent}</p>}
+                      {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} streaming={Boolean(message.streaming)} /> : <p>{messageContent}</p>}
+                      {message.role === 'assistant' && message.streaming && (
+                        <div className="message-live-status" role="status" aria-live="polite">
+                          <span className="message-live-dot" aria-hidden="true" />
+                          <span>Generating locally</span>
+                          <span>{generationElapsedSeconds}s elapsed</span>
+                        </div>
+                      )}
                       {hasTokenMetrics && (
                         <div className="message-token-metrics" aria-label="Generation speed">
                           <span>In {formatRate(message.tokens_in_per_sec)}</span>
