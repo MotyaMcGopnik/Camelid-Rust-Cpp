@@ -37,6 +37,8 @@ export default function ChatWorkspace({
   pendingConversation,
   composer,
   setComposer,
+  chatMaxTokens,
+  setChatMaxTokens,
   saveToMemory,
   sendMessage,
   sending,
@@ -213,6 +215,23 @@ export default function ChatWorkspace({
     )
   }
 
+  const renderTokenBudgetPicker = () => (
+    <label className="composer-token-picker" title="Maximum completion tokens for this local request">
+      <span className="composer-tool-label">Max tokens</span>
+      <select
+        className="composer-token-select"
+        aria-label="Maximum completion tokens"
+        value={chatMaxTokens}
+        onChange={(e) => setChatMaxTokens(e.target.value)}
+        disabled={sending}
+      >
+        {[32, 64, 128, 256, 512, 1024].map((value) => (
+          <option key={value} value={value}>{value}</option>
+        ))}
+      </select>
+    </label>
+  )
+
   return (
     <section className={`chat-layout chat-layout-gemini view-stack ${isFreshThread ? 'chat-layout-empty' : ''}`}>
       {selectedConversation && (
@@ -264,6 +283,7 @@ export default function ChatWorkspace({
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
+                    {renderTokenBudgetPicker()}
                     <span className={`composer-meta-pill composer-meta-pill-readiness is-${readinessState}`}>{readinessLabel}</span>
                     {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Library</button>}
                   </div>
@@ -272,7 +292,7 @@ export default function ChatWorkspace({
                   </div>
                 </div>
                 <div className="composer-gemini-disclaimer composer-gemini-disclaimer-product">
-                  <span>Raw local replies run until EOS, explicit request limits, or the backend context window.</span>
+                  <span>Reply budget is {chatMaxTokens} tokens. Increase it here when you need longer local output.</span>
                   <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>View support contract</button>
                 </div>
               </div>
@@ -414,6 +434,7 @@ export default function ChatWorkspace({
           <div className="composer-gemini-footer">
             <div className="composer-gemini-tools">
               {renderModelPicker()}
+              {renderTokenBudgetPicker()}
               <span className="composer-meta-pill">{selectedModelMeta}</span>
               {selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={sending}>Save to memory</button>}
             </div>
