@@ -1,7 +1,7 @@
 {
   "backend": "http://127.0.0.1:8871",
   "llama_server": "http://127.0.0.1:8873",
-  "model": "/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+  "model": "$CAMELID_MODEL_DIR/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
   "model_id": "meta-llama3-8b-q8",
   "message": "hello",
   "messages": [
@@ -26,7 +26,7 @@
     "--port",
     "8873",
     "-m",
-    "/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+    "$CAMELID_MODEL_DIR/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
     "-ngl",
     "0",
     "-c",

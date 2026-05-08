@@ -5,7 +5,7 @@
   "status": "completed",
   "detail": "packs completed",
   "passed": true,
-  "remote_dir": "/home/ubuntu/work/cron-4c8a77cc-86ad539-20260508T202749Z/repo",
+  "remote_dir": "${CANONICAL_WORK}/cron-4c8a77cc-86ad539-20260508T202749Z/repo",
   "artifact_root": "target/cron-4c8a77cc-20260508T202751Z",
   "bundle_dir": "target/cron-4c8a77cc-20260508T202751Z/llama3-8b-context-1024-2048-current-head-20260508T202751Z-head-86ad5390d265",
   "started_utc": "2026-05-08T20:27:49Z",
