@@ -225,9 +225,14 @@ const pushCodeBlock = (blocks, language, code, keyPrefix, { incomplete = false, 
   )
 }
 
-function StreamingStatus({ elapsedSeconds, label = 'Still generating locally' }) {
+const hasOpenCodeFence = (content) => {
+  const matches = String(content || '').match(/```/g)
+  return Boolean(matches && matches.length % 2 === 1)
+}
+
+function StreamingStatus({ elapsedSeconds, label = 'Still generating — response is active', compact = false }) {
   return (
-    <div className="message-live-status" role="status" aria-live="polite">
+    <div className={`message-live-status ${compact ? 'message-live-status-compact' : ''}`} role="status" aria-live="polite">
       <span className="message-live-dot" aria-hidden="true" />
       <span>{label}</span>
       <span>{elapsedSeconds}s elapsed</span>
@@ -496,6 +501,10 @@ export default function ChatWorkspace({
               {visibleMessages.length === 0 && !awaitingAssistant && <div className="empty-state empty-state-chat">Pick a ready model, then send the first message when you’re ready.</div>}
               {visibleMessages.map((message) => {
                 const messageContent = cleanLegacyDemoCapCopy(message.content)
+                const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
+                const liveStatusLabel = hasOpenCodeFence(messageContent)
+                  ? 'Still generating — code block is still open'
+                  : 'Still generating — response is active'
                 const hasTokenMetrics = message.role === 'assistant' && (
                   message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined ||
                   message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined
@@ -504,8 +513,8 @@ export default function ChatWorkspace({
                 return (
                   <article key={message.id} className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}>
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
+                      {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact />}
                       {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} streaming={Boolean(message.streaming)} /> : <p>{messageContent}</p>}
-                      {message.role === 'assistant' && message.streaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} />}
                       {hasTokenMetrics && (
                         <div className="message-token-metrics" aria-label="Generation speed">
                           <span>In {formatRate(message.tokens_in_per_sec)}</span>
