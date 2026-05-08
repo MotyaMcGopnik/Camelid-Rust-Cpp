@@ -5627,3 +5627,72 @@ textarea.composer-input-gemini {
     padding: 14px 16px 13px;
   }
 }
+
+/* Center active response content and align the composer to the same column. */
+.chat-layout-gemini:not(.chat-layout-empty) .chat-thread-gemini {
+  width: min(100%, 760px);
+}
+
+.message-row-gemini.assistant {
+  display: block;
+  width: min(100%, 700px);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 0;
+}
+
+.message-row-gemini.assistant::before {
+  position: absolute;
+  left: -46px;
+  top: 0;
+}
+
+.message-bubble-gemini.assistant {
+  width: 100%;
+  max-width: none;
+}
+
+.message-markdown p,
+.message-markdown ul,
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown .message-section-heading {
+  max-width: 100%;
+}
+
+.message-code-card {
+  width: 100%;
+  max-width: none;
+}
+
+.message-row-gemini.user {
+  width: min(100%, 700px);
+  margin-left: auto;
+  margin-right: auto;
+  justify-content: flex-end;
+}
+
+.composer-gemini-floating {
+  position: sticky;
+  left: auto;
+  bottom: 18px;
+  width: min(100%, 760px);
+  max-width: 760px;
+  transform: none;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 860px) {
+  .message-row-gemini.assistant::before {
+    position: static;
+    float: left;
+    margin-left: -34px;
+    margin-right: 8px;
+  }
+
+  .message-row-gemini.assistant,
+  .message-row-gemini.user {
+    width: min(100%, calc(100vw - 48px));
+  }
+}
