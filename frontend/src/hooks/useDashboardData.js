@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, quantLabelFromGgufFileType } from '../lib/capabilities'
 import { getChatGateState } from '../lib/chatGate'
+import { NEW_CHAT_SENTINEL, resolveSelectedConversation, shouldCreateConversationForSend } from '../lib/chatState'
 import { isExternalModel, isRunnableModel } from '../lib/modelState'
 
 const TAB_STORAGE_KEY = 'camelid.activeTab'
@@ -11,7 +12,6 @@ const CONVERSATIONS_STORAGE_KEY = 'camelid.conversations'
 const MEMORIES_STORAGE_KEY = 'camelid.memories'
 const API_BASE_STORAGE_KEY = 'camelid.apiBase'
 const VALID_TABS = new Set(['chat', 'library', 'api', 'analytics', 'history', 'memory', 'system'])
-const NEW_CHAT_SENTINEL = '__new__'
 const DEFAULT_API_BASE = import.meta.env.VITE_CAMELID_API_BASE || 'http://127.0.0.1:8181'
 
 function getInitialTab() {
@@ -572,10 +572,10 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const models = dashboard?.models || []
   const runtime = dashboard?.runtime
 
-  const selectedConversation = useMemo(() => {
-    if (selectedConversationId === NEW_CHAT_SENTINEL) return null
-    return conversations.find((conversation) => conversation.id === selectedConversationId) || conversations[0] || null
-  }, [conversations, selectedConversationId])
+  const selectedConversation = useMemo(
+    () => resolveSelectedConversation(conversations, selectedConversationId),
+    [conversations, selectedConversationId],
+  )
 
   const selectedModel = useMemo(() => models.find((model) => model.id === selectedModelId) || models[0], [models, selectedModelId])
   const selectedModelChatGate = getChatGateState(dashboard?.capabilities, selectedModel, runtime)
@@ -636,7 +636,11 @@ export function useDashboardData({ showNotice, clearNotice }) {
     }
   }
 
-  const ensureConversation = async () => selectedConversation || createConversationRecord({ silent: true })
+  const ensureConversation = async () => (
+    shouldCreateConversationForSend(selectedConversation, selectedConversationId)
+      ? createConversationRecord({ silent: true })
+      : selectedConversation
+  )
 
   const sendMessage = async () => {
     if (!composer.trim()) return

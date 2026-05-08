@@ -5819,41 +5819,49 @@ textarea.composer-input-gemini {
   border-left: 1px solid color-mix(in srgb, var(--color-border-soft) 48%, transparent);
 }
 
-/* Tiny Pac-Man assistant marker; while streaming, he chomps through pellets as text appears. */
+/* Tiny Pac-Man assistant marker; game-steady, with pellets only while text streams. */
 .message-row-gemini.assistant::before {
   content: '';
   width: 18px;
   height: 18px;
   border-radius: 50%;
   background: conic-gradient(from 42deg, transparent 0 78deg, #ffd84d 78deg 360deg);
-  filter: drop-shadow(0 0 10px rgba(255, 216, 77, 0.3));
+  filter: drop-shadow(0 0 8px rgba(255, 216, 77, 0.28));
   transform: translateY(7px);
   text-shadow: none;
   z-index: 2;
 }
 
 .message-row-gemini.assistant.is-streaming::before {
-  animation: camelid-pacman-chomp 320ms steps(2, end) infinite;
+  animation: camelid-pacman-chomp 280ms steps(2, end) infinite;
 }
 
 .message-row-gemini.assistant.is-streaming::after {
   content: '';
   position: absolute;
-  left: -21px;
+  left: -20px;
   top: 10px;
-  width: 38px;
+  width: 52px;
   height: 8px;
   pointer-events: none;
-  background: radial-gradient(circle, rgba(255, 232, 132, 0.95) 0 2px, transparent 2.4px) 100% 50% / 13px 8px repeat-x;
-  filter: drop-shadow(0 0 7px rgba(255, 216, 77, 0.32));
-  opacity: 0.86;
+  background: radial-gradient(circle, rgba(255, 232, 132, 0.98) 0 2px, transparent 2.4px) 100% 50% / 14px 8px repeat-x;
+  filter: drop-shadow(0 0 5px rgba(255, 216, 77, 0.22));
+  opacity: 0.9;
   transform-origin: left center;
-  animation: camelid-pellets-feed 620ms linear infinite;
+  animation: camelid-pellets-feed 560ms linear infinite;
   z-index: 1;
 }
 
 .message-row-gemini.assistant.pending.is-streaming::after {
-  width: 58px;
+  width: 64px;
+}
+
+@media (max-width: 860px) {
+  .message-row-gemini.assistant.is-streaming::after {
+    left: 24px;
+    top: 10px;
+    width: 44px;
+  }
 }
 
 @keyframes camelid-pacman-chomp {
@@ -5861,7 +5869,7 @@ textarea.composer-input-gemini {
     background: conic-gradient(from 42deg, transparent 0 78deg, #ffd84d 78deg 360deg);
   }
   50% {
-    background: conic-gradient(from 19deg, transparent 0 38deg, #ffd84d 38deg 360deg);
+    background: conic-gradient(from 18deg, transparent 0 36deg, #ffd84d 36deg 360deg);
   }
 }
 
