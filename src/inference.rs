@@ -4999,11 +4999,20 @@ fn output_projection_q8_0_reconstructed_logit(
     };
     let mut scales = vec![0.0_f32; blocks_per_row];
     decode_q8_0_encoded_row_scales(row_bytes, &mut scales);
-    Ok(Some(dot_q8_0_encoded_row_f32_input_with_scales(
-        &output_norm.data[..hidden_width],
-        row_bytes,
-        &scales,
-    )))
+    if q8_0_block_dot_enabled() {
+        let quantized_input = quantize_q8_0_row(&output_norm.data[..hidden_width]);
+        Ok(Some(dot_q8_0_encoded_row_quantized_input_with_scales(
+            &quantized_input.blocks,
+            row_bytes,
+            &scales,
+        )))
+    } else {
+        Ok(Some(dot_q8_0_encoded_row_f32_input_with_scales(
+            &output_norm.data[..hidden_width],
+            row_bytes,
+            &scales,
+        )))
+    }
 }
 
 fn output_projection_token_diagnostic(
@@ -10448,6 +10457,74 @@ mod tests {
             reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2) as u64
         );
+    }
+
+    #[test]
+    fn output_projection_diagnostics_match_q8_0_file_backed_block_dot_probe() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT", "on");
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+
+        let input_values = (0..32)
+            .map(|idx| ((idx % 13) as f32 - 6.0) * 0.17)
+            .collect::<Vec<_>>();
+        let input = CpuTensor::from_f32("output_norm", vec![1, 32], input_values).unwrap();
+        let rows = [
+            Q8_0Block {
+                scale: f16_bits_to_f32(f32_to_f16_bits(0.15625)),
+                quants: std::array::from_fn(|idx| idx as i8 - 10),
+            },
+            Q8_0Block {
+                scale: f16_bits_to_f32(f32_to_f16_bits(0.09375)),
+                quants: std::array::from_fn(|idx| if idx.is_multiple_of(3) { 7 } else { -4 }),
+            },
+        ];
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        for block in &rows {
+            temp_file
+                .write_all(&f32_to_f16_bits(block.scale).to_le_bytes())
+                .unwrap();
+            temp_file
+                .write_all(&block.quants.iter().map(|q| *q as u8).collect::<Vec<_>>())
+                .unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let output_weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            crate::tensor::TensorShape { dims: vec![32, 2] },
+            Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len()),
+        );
+
+        let logits = output_projection_runtime(&input, &output_weight, "logits", false).unwrap();
+        let diagnostics = output_projection_diagnostics(
+            &input,
+            &output_weight,
+            &logits,
+            &[0, 1],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_close(
+            diagnostics[0].q8_direct_reconstructed_logit.unwrap(),
+            logits.data[0],
+        );
+        assert_close(
+            diagnostics[1].q8_direct_reconstructed_logit.unwrap(),
+            logits.data[1],
+        );
+        assert_eq!(diagnostics[0].q8_direct_absolute_delta, Some(0.0));
+        assert_eq!(diagnostics[1].q8_direct_absolute_delta, Some(0.0));
+        assert!(diagnostics[0]
+            .q8_direct_decoded_component_delta
+            .is_some_and(|delta| delta.is_finite()));
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT");
     }
 
     #[test]
