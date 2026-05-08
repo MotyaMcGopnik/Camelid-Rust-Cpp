@@ -5,7 +5,7 @@ head=0b227af6d61122701cfdbdd1ffa09b9b8d019c1c
 backend_port=8491 llama_port=8493
 pack=<canonical-remote-workdir>/qa/prompt-packs/llama3-context-1024-smoke.json
 out_dir=<canonical-remote-workdir>/target/llama3-8b-context-1024-2048-current-head-20260507T1738Z-head-0b227af6d611/pack-1024
-model=/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf
+model=<canonical-model-path>
 model_id=meta-llama3-8b-q8-current-head-0b227af6d611
 prompt_count=1
 prompt_tokens_all_match=true
@@ -14,7 +14,7 @@ generated_text_all_match=true
 summary_json=target/llama3-8b-context-1024-2048-current-head-20260507T1738Z-head-0b227af6d611/pack-1024/summary.json
 pack=<canonical-remote-workdir>/qa/prompt-packs/llama3-context-2048-smoke.json
 out_dir=<canonical-remote-workdir>/target/llama3-8b-context-1024-2048-current-head-20260507T1738Z-head-0b227af6d611/pack-2048
-model=/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf
+model=<canonical-model-path>
 model_id=meta-llama3-8b-q8-current-head-0b227af6d611
 prompt_count=1
 prompt_tokens_all_match=true

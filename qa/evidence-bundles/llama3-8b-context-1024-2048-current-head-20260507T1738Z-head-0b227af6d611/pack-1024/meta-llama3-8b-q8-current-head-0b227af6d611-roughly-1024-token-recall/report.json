@@ -1,7 +1,7 @@
 {
   "backend": "http://127.0.0.1:8491",
   "llama_server": "http://127.0.0.1:8493",
-  "model": "/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+  "model": "<canonical-model-path>",
   "model_id": "meta-llama3-8b-q8-current-head-0b227af6d611",
   "message": "hello",
   "messages": [

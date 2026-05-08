@@ -12,7 +12,7 @@
   },
   "backend": "http://127.0.0.1:8471",
   "llama_server": "http://127.0.0.1:8473",
-  "model": "/home/ubuntu/models/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+  "model": "<canonical-model-path>",
   "model_id": "meta-llama3-8b-q8-current-head-25968c48b74c",
   "prefix": "meta-llama3-8b-q8-current-head-25968c48b74c",
   "chat_parity_script": "<canonical-remote-workdir>/scripts/chat-parity-llama3.mjs",
