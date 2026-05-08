@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, isSupportedCapabilityStatus } from '../lib/capabilities'
 import { clampText, formatDate, formatRate } from '../lib/formatters'
 import { getChatGateState } from '../lib/chatGate'
@@ -37,14 +39,13 @@ export default function ChatWorkspace({
   pendingConversation,
   composer,
   setComposer,
-  chatMaxTokens,
-  setChatMaxTokens,
   saveToMemory,
   sendMessage,
   sending,
   selectedModelRunnable,
   setTab,
 }) {
+  const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
   const visibleMessages = (selectedConversation?.messages || []).filter((message) => !isBootstrapMessage(message))
   const pendingPrompt = (pendingConversation?.content || (sending ? composer.trim() : '')).trim()
   const pendingPromptAlreadyVisible = Boolean(
@@ -52,6 +53,20 @@ export default function ChatWorkspace({
   )
   const pendingUserPrompt = pendingPromptAlreadyVisible ? '' : pendingPrompt
   const awaitingAssistant = Boolean(sending && pendingPrompt)
+
+  useEffect(() => {
+    if (!sending) {
+      setGenerationElapsedSeconds(0)
+      return undefined
+    }
+    setGenerationElapsedSeconds(0)
+    const startedAt = Date.now()
+    const interval = window.setInterval(() => {
+      setGenerationElapsedSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)))
+    }, 1000)
+    return () => window.clearInterval(interval)
+  }, [sending])
+
   const isFreshThread = selectedConversation ? (visibleMessages.length === 0 && !pendingPrompt) : !pendingPrompt
   const latestVisibleAssistantMessage = [...visibleMessages].reverse().find((message) => message.role === 'assistant') || latestAssistantMessage
 
@@ -215,22 +230,6 @@ export default function ChatWorkspace({
     )
   }
 
-  const renderTokenBudgetPicker = () => (
-    <label className="composer-token-picker" title="Maximum completion tokens for this local request">
-      <span className="composer-tool-label">Max tokens</span>
-      <select
-        className="composer-token-select"
-        aria-label="Maximum completion tokens"
-        value={chatMaxTokens}
-        onChange={(e) => setChatMaxTokens(e.target.value)}
-        disabled={sending}
-      >
-        {[32, 64, 128, 256, 512, 1024].map((value) => (
-          <option key={value} value={value}>{value}</option>
-        ))}
-      </select>
-    </label>
-  )
 
   return (
     <section className={`chat-layout chat-layout-gemini view-stack ${isFreshThread ? 'chat-layout-empty' : ''}`}>
@@ -283,16 +282,15 @@ export default function ChatWorkspace({
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
-                    {renderTokenBudgetPicker()}
                     <span className={`composer-meta-pill composer-meta-pill-readiness is-${readinessState}`}>{readinessLabel}</span>
                     {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Library</button>}
                   </div>
                   <div className="composer-gemini-actions composer-gemini-actions-stage">
-                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? 'Sending…' : 'Send'}</button>
+                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Generate'}</button>
                   </div>
                 </div>
                 <div className="composer-gemini-disclaimer composer-gemini-disclaimer-product">
-                  <span>Reply budget is {chatMaxTokens} tokens. Increase it here when you need longer local output.</span>
+                  <span>Replies use the backend default and run until EOS or the context window.</span>
                   <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>View support contract</button>
                 </div>
               </div>
@@ -416,9 +414,9 @@ export default function ChatWorkspace({
                     </div>
                     <div className="message-bubble message-bubble-gemini assistant pending">
                       <div className="message-heading message-heading-clean">
-                        <span className="message-micro-meta">Thinking…</span>
+                        <span className="message-micro-meta">Generating locally · {generationElapsedSeconds}s elapsed</span>
                       </div>
-                      <p className="message-placeholder-copy">Generating a raw local reply… first-token diagnostics appear after completion.</p>
+                      <p className="message-placeholder-copy">Camelid is running the local Q8 model now. The reply will appear here when the backend finishes; timing diagnostics will explain where the CPU time went.</p>
                     </div>
                   </article>
                 </>
@@ -434,13 +432,12 @@ export default function ChatWorkspace({
           <div className="composer-gemini-footer">
             <div className="composer-gemini-tools">
               {renderModelPicker()}
-              {renderTokenBudgetPicker()}
               <span className="composer-meta-pill">{selectedModelMeta}</span>
               {selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={sending}>Save to memory</button>}
             </div>
             <div className="composer-gemini-actions">
               {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button" onClick={() => setTab('library')}>Open Library</button>}
-              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? 'Sending…' : 'Send'}</button>
+              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Generate'}</button>
             </div>
           </div>
         </div>

@@ -52,8 +52,6 @@ function App() {
     setMemorySearch,
     composer,
     setComposer,
-    chatMaxTokens,
-    setChatMaxTokens,
     newChatTitle,
     setNewChatTitle,
     sending,
@@ -260,8 +258,6 @@ function App() {
             pendingConversation={pendingConversation}
             composer={composer}
             setComposer={setComposer}
-            chatMaxTokens={chatMaxTokens}
-            setChatMaxTokens={setChatMaxTokens}
             saveToMemory={saveToMemory}
             sendMessage={sendMessage}
             sending={sending}

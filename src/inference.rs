@@ -4,6 +4,7 @@ use std::{
     env,
     fs::File,
     io::{Error as IoError, ErrorKind, Result as IoResult},
+    mem,
     os::unix::fs::FileExt,
     process::Command,
     sync::Arc,
@@ -673,8 +674,11 @@ impl LlamaLoadedWeights {
     }
 
     pub fn load(store: &TensorStore, binding: &LlamaTensorBinding) -> Result<Self> {
+        let auto_retain_q8_0_blocks = auto_retain_q8_0_blocks_for_fast_local_chat(binding);
         let load_linear = |name: &str| {
-            if lazy_q8_0_linear_enabled() {
+            if auto_retain_q8_0_blocks {
+                store.load_cpu_f32_with_q8_0_block_retention(name, true)
+            } else if lazy_q8_0_linear_enabled() {
                 store.load_q8_0_file_backed_linear(name)
             } else {
                 store.load_cpu_f32(name)
@@ -5619,9 +5623,10 @@ fn should_use_borrowed_q8_0_block_dot(
 }
 
 fn q8_0_block_dot_enabled() -> bool {
-    // Keep known-good parity on the dequantized f32 path by default. The q8_0 x q8_0
-    // block-dot path remains available as an explicit performance/diagnostic probe.
-    q8_0_env_flag_enabled("CAMELID_Q8_0_BLOCK_DOT")
+    // Retained Q8_0 blocks should use the same quantized-input block-dot path as the
+    // lazy/file-backed reader. This is both the llama.cpp-style execution shape and the only
+    // interactive path for local Q8 chat; keep a dequantized-f32 escape hatch for diagnostics.
+    !q8_0_env_flag_disabled("CAMELID_Q8_0_BLOCK_DOT")
 }
 
 fn q8_0_file_reader_block_dot_enabled() -> bool {
@@ -5629,6 +5634,61 @@ fn q8_0_file_reader_block_dot_enabled() -> bool {
     // quantized-input block-dot path by default to match llama.cpp-style Q8_0 matmul
     // tie-break behavior, while keeping an explicit dequantized-f32 escape hatch.
     !q8_0_env_flag_disabled("CAMELID_Q8_0_FILE_READER_BLOCK_DOT")
+}
+
+fn auto_retain_q8_0_blocks_for_fast_local_chat(binding: &LlamaTensorBinding) -> bool {
+    const DEFAULT_FAST_RETAINED_Q8_0_MAX_BYTES: usize = 6 * 1024 * 1024 * 1024;
+
+    if env::var("CAMELID_LAZY_Q8_0_LINEAR").is_ok() {
+        return false;
+    }
+    if q8_0_env_flag_disabled("CAMELID_RETAIN_Q8_0_BLOCKS") {
+        return false;
+    }
+    let max_bytes = parse_byte_count_env("CAMELID_FAST_RETAINED_Q8_0_MAX_BYTES")
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_FAST_RETAINED_Q8_0_MAX_BYTES);
+
+    let mut estimated_bytes = 0usize;
+    let mut saw_q8_linear = false;
+    let mut add_linear = |desc: &crate::gguf::GgufTensorDescriptor| -> Option<()> {
+        let element_count = desc
+            .dimensions
+            .iter()
+            .try_fold(1usize, |acc, dim| acc.checked_mul(*dim as usize))?;
+        estimated_bytes = estimated_bytes.checked_add(element_count.checked_mul(4)?)?;
+        if desc.tensor_type == GgufTensorType::Q8_0 {
+            saw_q8_linear = true;
+            let block_count = element_count.checked_add(Q8_0_BLOCK_VALUES - 1)? / Q8_0_BLOCK_VALUES;
+            estimated_bytes = estimated_bytes
+                .checked_add(block_count.checked_mul(mem::size_of::<Q8_0Block>())?)?;
+        }
+        Some(())
+    };
+
+    if add_linear(&binding.token_embedding).is_none() {
+        return false;
+    }
+    if !binding.output_is_tied_embedding && add_linear(&binding.output).is_none() {
+        return false;
+    }
+    for layer in &binding.layers {
+        for desc in [
+            &layer.attention_q,
+            &layer.attention_k,
+            &layer.attention_v,
+            &layer.attention_output,
+            &layer.ffn_gate,
+            &layer.ffn_up,
+            &layer.ffn_down,
+        ] {
+            if add_linear(desc).is_none() {
+                return false;
+            }
+        }
+    }
+
+    saw_q8_linear && estimated_bytes <= max_bytes
 }
 
 fn q8_0_env_flag_disabled(key: &str) -> bool {
@@ -5641,19 +5701,6 @@ fn q8_0_env_flag_disabled(key: &str) -> bool {
                 || value.eq_ignore_ascii_case("disabled")
                 || value.eq_ignore_ascii_case("dequantized")
                 || value.eq_ignore_ascii_case("f32")
-        })
-        .unwrap_or(false)
-}
-
-fn q8_0_env_flag_enabled(key: &str) -> bool {
-    env::var(key)
-        .map(|value| {
-            let value = value.trim();
-            value.eq_ignore_ascii_case("1")
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("on")
-                || value.eq_ignore_ascii_case("enabled")
-                || value.eq_ignore_ascii_case("block_dot")
         })
         .unwrap_or(false)
 }
@@ -5736,12 +5783,26 @@ fn matmul_rhs_transposed_q8_0_block_dot(
         let quantized_input =
             quantize_q8_0_row(&input.data[input_start..input_start + input_width]);
         let out_start = row * output_width;
-        for output_idx in 0..output_width {
-            let weight_start = output_idx * blocks_per_row;
-            output[out_start + output_idx] = q8_0_dot_rows(
-                &weight_blocks[weight_start..weight_start + blocks_per_row],
-                &quantized_input.blocks,
-            );
+        let output_row = &mut output[out_start..out_start + output_width];
+        if should_parallelize_q8_0_file_reader_output(output_width) {
+            output_row
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(output_idx, out_value)| {
+                    let weight_start = output_idx * blocks_per_row;
+                    *out_value = q8_0_dot_rows(
+                        &weight_blocks[weight_start..weight_start + blocks_per_row],
+                        &quantized_input.blocks,
+                    );
+                });
+        } else {
+            for (output_idx, out_value) in output_row.iter_mut().enumerate() {
+                let weight_start = output_idx * blocks_per_row;
+                *out_value = q8_0_dot_rows(
+                    &weight_blocks[weight_start..weight_start + blocks_per_row],
+                    &quantized_input.blocks,
+                );
+            }
         }
     }
     CpuTensor::from_f32(name, vec![rows, output_width], output)
@@ -6178,6 +6239,23 @@ fn q8_0_block_int_dot_horizontal_sum_encoded(
     input: &[i8; Q8_0_BLOCK_VALUES],
 ) -> i32 {
     debug_assert_eq!(weight.len(), Q8_0_BLOCK_VALUES);
+    q8_0_block_int_dot_horizontal_sum_encoded_impl(weight, input)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn q8_0_block_int_dot_horizontal_sum_encoded_impl(
+    weight: &[u8],
+    input: &[i8; Q8_0_BLOCK_VALUES],
+) -> i32 {
+    // SAFETY: both pointers address one complete Q8_0 block (32 signed bytes).
+    unsafe { q8_0_i8_block_neon(weight.as_ptr().cast::<i8>(), input.as_ptr()) }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn q8_0_block_int_dot_horizontal_sum_encoded_impl(
+    weight: &[u8],
+    input: &[i8; Q8_0_BLOCK_VALUES],
+) -> i32 {
     let lanes = [
         q8_0_dot_group4_encoded(weight, input, 0) + q8_0_dot_group4_encoded(weight, input, 16),
         q8_0_dot_group4_encoded(weight, input, 4) + q8_0_dot_group4_encoded(weight, input, 20),
@@ -6188,6 +6266,23 @@ fn q8_0_block_int_dot_horizontal_sum_encoded(
 }
 
 fn q8_0_block_int_dot_horizontal_sum(
+    weight: &[i8; Q8_0_BLOCK_VALUES],
+    input: &[i8; Q8_0_BLOCK_VALUES],
+) -> i32 {
+    q8_0_block_int_dot_horizontal_sum_impl(weight, input)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn q8_0_block_int_dot_horizontal_sum_impl(
+    weight: &[i8; Q8_0_BLOCK_VALUES],
+    input: &[i8; Q8_0_BLOCK_VALUES],
+) -> i32 {
+    // SAFETY: both pointers address one complete Q8_0 block (32 signed bytes).
+    unsafe { q8_0_i8_block_neon(weight.as_ptr(), input.as_ptr()) }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn q8_0_block_int_dot_horizontal_sum_impl(
     weight: &[i8; Q8_0_BLOCK_VALUES],
     input: &[i8; Q8_0_BLOCK_VALUES],
 ) -> i32 {
@@ -6204,6 +6299,7 @@ fn q8_0_block_int_dot_horizontal_sum(
     (lanes[0] + lanes[1]) + (lanes[2] + lanes[3])
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 fn q8_0_dot_group4(
     weight: &[i8; Q8_0_BLOCK_VALUES],
     input: &[i8; Q8_0_BLOCK_VALUES],
@@ -6215,11 +6311,47 @@ fn q8_0_dot_group4(
         + i32::from(weight[start + 3]) * i32::from(input[start + 3])
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 fn q8_0_dot_group4_encoded(weight: &[u8], input: &[i8; Q8_0_BLOCK_VALUES], start: usize) -> i32 {
     i32::from(weight[start] as i8) * i32::from(input[start])
         + i32::from(weight[start + 1] as i8) * i32::from(input[start + 1])
         + i32::from(weight[start + 2] as i8) * i32::from(input[start + 2])
         + i32::from(weight[start + 3] as i8) * i32::from(input[start + 3])
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn q8_0_i8_block_neon(weight: *const i8, input: *const i8) -> i32 {
+    use std::arch::aarch64::{
+        int32x4_t, vaddq_s32, vdupq_n_s32, vget_high_s8, vget_low_s8, vld1q_s8, vmull_s8,
+        vpaddlq_s16,
+    };
+
+    // SAFETY: callers pass pointers to at least 32 contiguous i8 values.
+    let weight_lo = unsafe { vld1q_s8(weight) };
+    let input_lo = unsafe { vld1q_s8(input) };
+    let weight_hi = unsafe { vld1q_s8(weight.add(16)) };
+    let input_hi = unsafe { vld1q_s8(input.add(16)) };
+
+    let mut acc = vdupq_n_s32(0);
+    acc = vaddq_s32(
+        acc,
+        vpaddlq_s16(vmull_s8(vget_low_s8(weight_lo), vget_low_s8(input_lo))),
+    );
+    acc = vaddq_s32(
+        acc,
+        vpaddlq_s16(vmull_s8(vget_high_s8(weight_lo), vget_high_s8(input_lo))),
+    );
+    acc = vaddq_s32(
+        acc,
+        vpaddlq_s16(vmull_s8(vget_low_s8(weight_hi), vget_low_s8(input_hi))),
+    );
+    acc = vaddq_s32(
+        acc,
+        vpaddlq_s16(vmull_s8(vget_high_s8(weight_hi), vget_high_s8(input_hi))),
+    );
+    // SAFETY: int32x4_t is a four-lane i32 vector; extracting via transmute preserves lanes.
+    let lanes: [i32; 4] = unsafe { std::mem::transmute::<int32x4_t, [i32; 4]>(acc) };
+    lanes.iter().sum()
 }
 
 fn f32_to_f16_bits(value: f32) -> u16 {
@@ -9223,7 +9355,7 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_block_dot_defaults_to_dequantized_diagnostics() {
+    fn q8_0_block_dot_defaults_to_quantized_fast_path() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
 
@@ -9237,26 +9369,30 @@ mod tests {
             CpuTensor::from_f32_with_q8_0_blocks("weight", vec![1, 32], vec![1.0; 32], vec![block])
                 .unwrap();
 
-        assert!(!should_use_q8_0_block_dot(&weight, 32));
+        assert!(should_use_q8_0_block_dot(&weight, 32));
         let actual = matmul_rhs_transposed_with_precision(&input, &weight, "out").unwrap();
 
         assert_eq!(actual.shape.dims, vec![1, 1]);
-        assert_close(actual.data[0], 8.0);
+        assert!(
+            (actual.data[0] - 8.0).abs() < 1.0e-3,
+            "expected quantized fast path to stay close to dequantized output, got {}",
+            actual.data[0]
+        );
     }
 
     #[test]
-    fn q8_0_file_reader_block_dot_defaults_on_with_separate_escape_hatch() {
+    fn q8_0_block_dot_defaults_on_with_separate_escape_hatches() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
 
-        assert!(!q8_0_block_dot_enabled());
+        assert!(q8_0_block_dot_enabled());
         assert!(q8_0_file_reader_block_dot_enabled());
 
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "off");
         assert!(!q8_0_file_reader_block_dot_enabled());
 
-        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
-        assert!(q8_0_block_dot_enabled());
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
+        assert!(!q8_0_block_dot_enabled());
         assert!(!q8_0_file_reader_block_dot_enabled());
 
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
@@ -9351,6 +9487,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "off");
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         let row0 = Q8_0Block {
@@ -9403,6 +9540,7 @@ mod tests {
 
         assert_eq!(actual.shape.dims, expected.shape.dims);
         assert_slice_close(&actual.data, &expected.data);
+        std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
         std::env::remove_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT");
     }
 
@@ -9413,6 +9551,7 @@ mod tests {
         clear_dense_diagnostic_env();
         std::env::set_var("CAMELID_PARALLEL_LINEAR", "on");
         std::env::set_var("CAMELID_PARALLEL_LINEAR_MIN_OUTPUTS", "1");
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "off");
         std::env::set_var(
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
@@ -9475,6 +9614,7 @@ mod tests {
 
         assert_eq!(actual.shape.dims, expected.shape.dims);
         assert_slice_close(&actual.data, &expected.data);
+        std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
         std::env::remove_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT");
     }
 

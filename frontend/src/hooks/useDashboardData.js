@@ -10,11 +10,9 @@ const LOCAL_MODELS_STORAGE_KEY = 'camelid.localModels'
 const CONVERSATIONS_STORAGE_KEY = 'camelid.conversations'
 const MEMORIES_STORAGE_KEY = 'camelid.memories'
 const API_BASE_STORAGE_KEY = 'camelid.apiBase'
-const CHAT_MAX_TOKENS_STORAGE_KEY = 'camelid.chatMaxTokens'
 const VALID_TABS = new Set(['chat', 'library', 'api', 'analytics', 'history', 'memory', 'system'])
 const NEW_CHAT_SENTINEL = '__new__'
 const DEFAULT_API_BASE = import.meta.env.VITE_CAMELID_API_BASE || 'http://127.0.0.1:8181'
-const DEFAULT_CHAT_MAX_TOKENS = 128
 
 function getInitialTab() {
   if (typeof window === 'undefined') return 'chat'
@@ -35,18 +33,6 @@ function getInitialModelId() {
 function getApiBase() {
   if (typeof window === 'undefined') return DEFAULT_API_BASE
   return window.localStorage.getItem(API_BASE_STORAGE_KEY) || DEFAULT_API_BASE
-}
-
-function getInitialChatMaxTokens() {
-  if (typeof window === 'undefined') return DEFAULT_CHAT_MAX_TOKENS
-  const saved = Number.parseInt(window.localStorage.getItem(CHAT_MAX_TOKENS_STORAGE_KEY) || '', 10)
-  return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_CHAT_MAX_TOKENS
-}
-
-function normalizeChatMaxTokens(value) {
-  const number = Number.parseInt(value, 10)
-  if (!Number.isFinite(number)) return DEFAULT_CHAT_MAX_TOKENS
-  return Math.min(1024, Math.max(1, number))
 }
 
 function normalizeApiBase(value) {
@@ -390,7 +376,6 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [search, setSearch] = useState('')
   const [memorySearch, setMemorySearch] = useState('')
   const [composer, setComposer] = useState('')
-  const [chatMaxTokens, setChatMaxTokensState] = useState(getInitialChatMaxTokens)
   const [newChatTitle, setNewChatTitle] = useState('')
   const [sending, setSending] = useState(false)
   const [loadingModelId, setLoadingModelId] = useState('')
@@ -402,15 +387,6 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [localMemories, setLocalMemories] = useState(() => readJsonStorage(MEMORIES_STORAGE_KEY, []))
 
   const normalizedApiBase = normalizeApiBase(apiBase)
-
-  const setChatMaxTokens = (value) => {
-    const next = normalizeChatMaxTokens(value)
-    setChatMaxTokensState(next)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(CHAT_MAX_TOKENS_STORAGE_KEY, String(next))
-    }
-  }
-
   const persistConversations = (updater) => {
     setLocalConversations((current) => {
       const next = normalizeStoredConversations(typeof updater === 'function' ? updater(current) : updater)
@@ -635,7 +611,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       const requestStartedAt = performance.now()
       const response = await fetchJson(`${normalizedApiBase}/v1/chat/completions`, {
         method: 'POST',
-        body: JSON.stringify({ model: selectedModelId, messages: history, max_tokens: chatMaxTokens, temperature: 0, stream: false }),
+        body: JSON.stringify({ model: selectedModelId, messages: history, temperature: 0, stream: false }),
       })
       const elapsedMs = performance.now() - requestStartedAt
       const assistantContent = response?.choices?.[0]?.message?.content || ''
@@ -920,8 +896,6 @@ export function useDashboardData({ showNotice, clearNotice }) {
     setMemorySearch,
     composer,
     setComposer,
-    chatMaxTokens,
-    setChatMaxTokens,
     newChatTitle,
     setNewChatTitle,
     sending,

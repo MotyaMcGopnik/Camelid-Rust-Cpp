@@ -2404,8 +2404,7 @@ textarea.composer-input-gemini {
   font-size: 0.78rem;
 }
 
-.composer-model-picker,
-.composer-token-picker {
+.composer-model-picker {
   position: relative;
   min-width: 0;
   display: inline-flex;
@@ -2417,8 +2416,7 @@ textarea.composer-input-gemini {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.composer-model-picker::after,
-.composer-token-picker::after {
+.composer-model-picker::after {
   content: '▾';
   position: absolute;
   right: 11px;
@@ -2435,8 +2433,7 @@ textarea.composer-input-gemini {
   white-space: nowrap;
 }
 
-.composer-model-select,
-.composer-token-select {
+.composer-model-select {
   min-width: 160px;
   max-width: min(34vw, 260px);
   border: 0;
@@ -2449,14 +2446,8 @@ textarea.composer-input-gemini {
   -webkit-appearance: none;
 }
 
-.composer-token-select {
-  min-width: 74px;
-  max-width: 92px;
-  font-variant-numeric: tabular-nums;
-}
 
-.composer-model-select:focus,
-.composer-token-select:focus {
+.composer-model-select:focus {
   outline: none;
 }
 

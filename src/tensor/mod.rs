@@ -1834,14 +1834,22 @@ impl TensorStore {
     }
 
     pub fn load_cpu_f32(&self, name: &str) -> Result<CpuTensor> {
-        let desc = self.descriptor(name)?.clone();
-        let bytes = self.tensor_bytes(name)?;
-        let shape = TensorShape::from_gguf_dims(&desc.dimensions)?;
-        let expected_elements = shape.element_count()?;
         let retain_q8_0_blocks = matches!(
             env::var(RETAIN_Q8_BLOCKS_ENV).as_deref(),
             Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
         );
+        self.load_cpu_f32_with_q8_0_block_retention(name, retain_q8_0_blocks)
+    }
+
+    pub fn load_cpu_f32_with_q8_0_block_retention(
+        &self,
+        name: &str,
+        retain_q8_0_blocks: bool,
+    ) -> Result<CpuTensor> {
+        let desc = self.descriptor(name)?.clone();
+        let bytes = self.tensor_bytes(name)?;
+        let shape = TensorShape::from_gguf_dims(&desc.dimensions)?;
+        let expected_elements = shape.element_count()?;
         let mut q8_0_blocks = None;
         let mut q8_0_file_backing = None;
         let data = match desc.tensor_type {
