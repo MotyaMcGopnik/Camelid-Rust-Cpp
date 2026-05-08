@@ -84,6 +84,15 @@ function getLoadedModelQuantLabel(model) {
   return quantLabelFromGgufFileType(fileType) || `file_type ${fileType}`
 }
 
+function extractSseEvents(buffer) {
+  const normalized = String(buffer || '').replace(/\r\n/g, '\n')
+  const parts = normalized.split('\n\n')
+  return {
+    events: parts.slice(0, -1),
+    remainder: parts.at(-1) || '',
+  }
+}
+
 async function readStreamingChatCompletion(response, onDelta) {
   if (!response.ok) {
     let detail = null
@@ -141,16 +150,12 @@ async function readStreamingChatCompletion(response, onDelta) {
     const { value, done } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary >= 0) {
-      const eventText = buffer.slice(0, boundary)
-      buffer = buffer.slice(boundary + 2)
-      consumeEvent(eventText)
-      boundary = buffer.indexOf('\n\n')
-    }
+    const { events, remainder } = extractSseEvents(buffer)
+    events.forEach(consumeEvent)
+    buffer = remainder
   }
   buffer += decoder.decode()
-  if (buffer.trim()) consumeEvent(buffer)
+  if (buffer.trim()) consumeEvent(buffer.replace(/\r\n/g, '\n'))
   return { content, finishReason, completionTokens, firstContentMs }
 }
 
