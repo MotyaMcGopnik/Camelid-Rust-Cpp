@@ -82,11 +82,11 @@ export default function ChatWorkspace({
   const selectedModelCapabilitySupported = selectedChatGate.contractSupported || isCompatibilitySupportedForModel(capabilities, selectedModel)
   const supportBlocked = selectedRuntimeReady && !selectedModelCapabilitySupported
   const selectedModelMeta = supportBlocked
-    ? 'Loaded, but not supported by the current compatibility contract'
+    ? 'Load a supported model to chat'
     : !selectedModelRunnable
       ? describeModelState(selectedModel)
       : runtime?.loaded_now && runtime?.active_model_id === selectedModelId
-      ? 'Loaded + generation-ready'
+      ? 'Ready'
       : 'Ready to chat'
   const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !sending
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
@@ -100,22 +100,22 @@ export default function ChatWorkspace({
   const emptyHeroEyebrow = 'Camelid'
   const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
-    ? 'Loaded + generation-ready'
+    ? 'Ready'
     : supportBlocked
-      ? 'Support match needed'
+      ? 'Choose a supported model'
       : selectedModel
-        ? 'Waiting on model readiness'
+        ? 'Loading model'
         : 'Choose a model to begin'
   const productHeroTitle = selectedModelRunnable
     ? 'How can I help?'
     : supportBlocked
-      ? 'This model needs a support match.'
-      : 'Local chat, only when ready.'
+      ? 'Choose a supported model.'
+      : 'Load a model to begin.'
   const productHeroSummary = selectedModelRunnable
-    ? 'Start a local conversation.'
+    ? ''
     : supportBlocked
-      ? 'Camelid can see this GGUF, but chat stays locked until the support contract matches this exact model and quantization.'
-      : 'A clean Gemini-like prompt surface that stays locked until the model is loaded, generation-ready, and support-matched.'
+      ? ''
+      : ''
   const renderModelPicker = () => {
     if (!hasRunnableChoices) {
       return (
@@ -167,11 +167,11 @@ export default function ChatWorkspace({
               <div className="chat-empty-hero chat-empty-hero-gemini chat-empty-hero-clean">
                 <p className="chat-empty-greeting">{emptyHeroEyebrow}</p>
                 <h2>{productHeroTitle}</h2>
-                <p className="hero-summary">{productHeroSummary}</p>
+                {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean composer-gemini-product">
-                <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid locally…' : 'Load an exact supported, generation-ready model first'} disabled={sending || !selectedModelRunnable} />
+                <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : 'Load a model first'} disabled={sending || !selectedModelRunnable} />
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
@@ -180,9 +180,6 @@ export default function ChatWorkspace({
                   <div className="composer-gemini-actions composer-gemini-actions-stage">
                     <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
                   </div>
-                </div>
-                <div className="composer-gemini-disclaimer composer-gemini-disclaimer-product">
-                  <span>{selectedModelRunnable ? 'Loaded + generation-ready' : readinessLabel}</span>
                 </div>
               </div>
             </div>
