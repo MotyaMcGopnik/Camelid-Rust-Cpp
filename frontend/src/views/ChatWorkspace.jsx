@@ -127,40 +127,45 @@ export default function ChatWorkspace({
     : 'Chat capability was not advertised; health and typed backend errors remain the source of truth.'
   const guardedFeatureSummary = summarizeGuardedFeatures(apiFeatures)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
+  const emptyHeroEyebrow = selectedModelRunnable
+    ? 'Exact-row local chat'
+    : supportBlocked
+      ? 'Contract gate closed'
+      : 'Camelid local chat'
   const emptyHeroTitle = selectedModelRunnable
     ? 'How can Camelid help?'
     : supportBlocked
-      ? 'Exact support row required.'
-      : 'Load a verified local model.'
+      ? 'Support row required.'
+      : 'Bring a local model online.'
   const emptyHeroSummary = selectedModelRunnable
-    ? 'A calm local chat surface for bounded replies, with the runtime and support contract still visible before every send.'
+    ? `Ask a bounded local prompt. Camelid is green only for ${selectedCompatibilityLabel}, with the ${CHAT_DEMO_TOKEN_CAP}-token demo envelope still visible.`
     : supportBlocked
-      ? 'The runtime can see this GGUF, but Camelid keeps chat locked until /api/capabilities names the exact supported model/quant row.'
-      : 'Load a local model to start chatting. Camelid will enable chat when that model is ready.'
+      ? 'The runtime can see this GGUF, but chat stays locked until /api/capabilities names the exact supported model and quant row.'
+      : 'Choose a GGUF and load it. Camelid enables chat only after runtime health and the support contract both agree.'
   const readinessFacts = [
     {
-      label: 'Runtime',
+      label: 'Runtime health',
       value: selectedModel ? (selectedRuntimeReady ? 'Ready' : 'Waiting') : 'No model loaded',
-      copy: 'Model must be loaded and ready before chat starts.',
+      copy: 'Requires loaded_now=true and generation_ready=true for the selected local model.',
       tone: selectedRuntimeReady ? 'ready' : 'waiting',
     },
     {
-      label: 'Contract',
+      label: 'Support contract',
       value: selectedModelRunnable ? 'Matched' : supportBlocked ? 'Needs support row' : capabilityGate,
-      copy: selectedModel ? selectedCompatibilityLabel : 'Select a model to see compatibility.',
+      copy: selectedModel ? selectedCompatibilityLabel : 'Select a model to see exact compatibility.',
       tone: selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : 'waiting',
     },
     {
-      label: 'Boundary',
-      value: 'Exact model only',
-      copy: 'Support is shown only for the specific model currently loaded.',
+      label: 'Reply envelope',
+      value: `${CHAT_DEMO_TOKEN_CAP}-token preview`,
+      copy: 'Short local replies are supported here; longer-generation polish stays separately gated.',
       tone: 'neutral',
     },
   ]
   const proofPills = [
-    selectedModelRunnable ? 'Ready to chat' : 'Load a model to begin',
-    selectedModel ? selectedModelName : 'Choose a local model',
-    `Local ${CHAT_DEMO_TOKEN_CAP}-token preview`,
+    selectedModelRunnable ? 'Ready for bounded chat' : 'Chat locked until green',
+    selectedModel ? selectedModelName : 'No local model selected',
+    selectedModelRunnable ? selectedCompatibilityLabel : 'Exact row required',
   ]
   const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
@@ -170,6 +175,14 @@ export default function ChatWorkspace({
       : selectedModel
         ? 'Waiting for runtime readiness'
         : 'Choose a model to begin'
+  const supportPanelTitle = selectedModelRunnable
+    ? 'Ready because runtime and contract agree'
+    : supportBlocked
+      ? 'Runtime is loaded, but the exact support row is missing'
+      : 'Camelid will not guess from filenames or saved paths'
+  const supportPanelCopy = selectedModel
+    ? selectedCompatibilityCopy
+    : 'Load a local GGUF first. The frontend keeps the chat affordance visible, but disabled, until the backend reports a supported exact model/quant row and generation readiness.'
   const starterPrompts = [
     {
       label: 'Smoke reply',
@@ -272,7 +285,7 @@ export default function ChatWorkspace({
                   <span>C</span>
                   <i />
                 </div>
-                <p className="chat-empty-greeting">Camelid local chat</p>
+                <p className="chat-empty-greeting">{emptyHeroEyebrow}</p>
                 <h2>{emptyHeroTitle}</h2>
                 <p className="hero-summary">{emptyHeroSummary}</p>
                 <div className={`chat-empty-readiness-ribbon is-${readinessState}`} aria-label="Current chat readiness">
@@ -283,6 +296,15 @@ export default function ChatWorkspace({
                 <div className="chat-empty-proofbar chat-empty-proofbar-product" aria-label="Current chat guard summary">
                   {proofPills.map((pill) => <span key={pill}>{pill}</span>)}
                 </div>
+              </div>
+
+              <div className={`chat-empty-support-panel is-${readinessState}`} aria-label="Current support boundary">
+                <div>
+                  <span>Current truth</span>
+                  <strong>{supportPanelTitle}</strong>
+                  <small>{supportPanelCopy}</small>
+                </div>
+                <button type="button" className="ghost-button ghost-button-quiet" onClick={() => setTab('api')}>View contract</button>
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean">
