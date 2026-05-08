@@ -45,7 +45,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied."
+        "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist; Mistral 7B Instruct v0.3 Q8_0 has first-token exact-row smoke support from checked tokenizer/template plus 1-token parity evidence. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied."
     );
     let q8 = body["supported_quantization"]
         .as_array()
@@ -58,7 +58,8 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert!(q8_notes.contains(
         "exact Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 rows have checked bounded 512/1024/2048-context packs"
     ));
-    assert!(q8_notes.contains("exact bounded-pack lanes only"));
+    assert!(q8_notes.contains("exact Mistral 7B Instruct v0.3 Q8_0 has first-token smoke support"));
+    assert!(q8_notes.contains("exact bounded/first-token lanes only"));
     assert!(!q8_notes.contains("conditional"));
     assert!(!q8_notes.contains("gated"));
     assert!(body["planned_quantization"]
@@ -83,16 +84,25 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert!(llama_bpe_notes.contains("broader 50-token"));
     assert!(!llama_bpe_notes.contains("conditional"));
     assert!(!llama_bpe_notes.contains("gated"));
-    assert!(body["planned_model_families"]
+    let mistral_family = body["supported_model_families"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|item| item["id"] == "mistral"
-            && item["status"] == "active_validation_unsupported"
-            && item["notes"]
-                .as_str()
-                .unwrap()
-                .contains("not supported yet")));
+        .find(|item| item["id"] == "mistral_instruct_exact_7b_v0_3_q8_0")
+        .unwrap();
+    assert_eq!(
+        mistral_family["status"],
+        "supported_exact_row_first_token_smoke"
+    );
+    assert!(mistral_family["notes"]
+        .as_str()
+        .unwrap()
+        .contains("1-token reference-runtime parity"));
+    assert!(!body["planned_model_families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == "mistral"));
     for id in ["mixtral_moe", "qwen25", "gemma2"] {
         assert!(body["planned_model_families"]
             .as_array()
@@ -332,40 +342,55 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "mistral_7b_instruct_v0_3_q8_0")
         .unwrap();
-    assert_eq!(mistral["status"], "active_validation_unsupported");
-    assert_eq!(mistral["metadata_parses"], "target_selected");
-    assert_eq!(mistral["tokenizer_works"], "parity_blocked");
-    assert_eq!(mistral["tensors_load"], "ubuntu_load_serve_observed");
-    assert_eq!(mistral["generation_runs"], "not_promoted");
+    assert_eq!(mistral["status"], "supported_exact_row_first_token_smoke");
+    assert_eq!(mistral["metadata_parses"], "validated_exact_row");
+    assert_eq!(mistral["tokenizer_works"], "validated_reference_pack");
+    assert_eq!(
+        mistral["tensors_load"],
+        "local_load_ready_plus_ubuntu_load_serve_observed"
+    );
+    assert_eq!(
+        mistral["generation_runs"],
+        "one_token_chat_parity_validated"
+    );
     assert_eq!(
         mistral["frontend_load_path_verified"],
-        "fail_closed_planned"
+        "contract_supported_runtime_gate_required"
     );
-    assert_eq!(mistral["tested_context"], "pre_generation_readiness_only");
     assert_eq!(
-        mistral["chat_template_renderer"],
-        "mistral_instruct_v0_3_planned"
+        mistral["tested_context"],
+        "first_token_512_reference_context_only"
     );
-    assert_eq!(mistral["chat_template_shape_pack"], "not_started");
+    assert_eq!(mistral["chat_template_renderer"], "mistral_instruct");
+    assert_eq!(
+        mistral["chat_template_shape_pack"],
+        "validated_reference_pack"
+    );
     assert_eq!(
         mistral["chat_template_shape_pack_id"],
         "mistral-instruct-v0.3-chat-template-pack-v1"
     );
-    assert_eq!(mistral["bounded_context_512_pack"], "not_started");
+    assert_eq!(
+        mistral["bounded_context_512_pack"],
+        "first_token_parity_pass"
+    );
     assert_eq!(
         mistral["bounded_context_512_pack_id"],
-        "mistral-context-512-smoke-v1"
+        "mistral-context-512-first-token-smoke-v1"
     );
-    assert_eq!(mistral["latest_checked_bucket"], "ubuntu_load_serve_only");
     assert_eq!(
-        mistral["latest_checked_result"],
-        "blocked_on_tokenizer_template_parity"
+        mistral["latest_checked_bucket"],
+        "mistral-context-512-first-token-smoke-v1"
     );
+    assert_eq!(mistral["latest_checked_result"], "pass");
+    assert_eq!(mistral["latest_checked_output"], " Hello");
     let mistral_evidence = mistral["evidence"].as_str().unwrap();
-    assert!(mistral_evidence.contains("Mistral-7B-Instruct-v0.3.Q8_0.gguf"));
+    assert!(mistral_evidence.contains("1-token generated-token/text parity"));
+    assert!(mistral_evidence
+        .contains("mistral-7b-v0.3-q8-1tok-parity-20260508T1847Z-head-fa7efc086c0e"));
     let mistral_next_step = mistral["next_step"].as_str().unwrap();
-    assert!(mistral_next_step.contains("tokenizer/chat-template fixtures"));
-    assert!(mistral_next_step.contains("before any generation, API, or WebUI support claim"));
+    assert!(mistral_next_step.contains("50-token generation parity"));
+    assert!(mistral_next_step.contains("before any broader or full Mistral support claim"));
     for (id, filename) in [
         (
             "mixtral_8x7b_instruct_v0_1_q8_0",
