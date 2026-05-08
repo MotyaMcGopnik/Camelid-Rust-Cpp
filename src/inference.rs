@@ -6494,7 +6494,20 @@ fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Res
     let chunk_bytes = parse_byte_count_env("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES")
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_Q8_0_FILE_READER_CHUNK_BYTES);
-    Ok((chunk_bytes / row_bytes_len).max(1).min(output_width))
+    let budget_rows = (chunk_bytes / row_bytes_len).max(1).min(output_width);
+    let tensor_bytes = row_bytes_len.checked_mul(output_width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "q8_0 file-reader tensor byte count overflow".to_string(),
+        )
+    })?;
+    let two_chunk_bytes = chunk_bytes.saturating_mul(2);
+    // Llama 3 8B Q8_0 FFN matrices sit just under two 32 MiB chunks. Reading those
+    // near-two-chunk tensors as one bounded burst cuts one syscall/read phase per
+    // tensor without changing file-backed output values or enabling the global Q8 cache.
+    if budget_rows < output_width && tensor_bytes < two_chunk_bytes {
+        return Ok(output_width);
+    }
+    Ok(budget_rows)
 }
 
 fn q8_0_file_reader_chunk_rows_for_batch(
@@ -8206,6 +8219,8 @@ mod tests {
             q8_0_file_reader_chunk_rows_for_batch(32, 100, 8, false).unwrap(),
             32
         );
+        assert_eq!(q8_0_file_reader_chunk_rows(32, 63).unwrap(), 63);
+        assert_eq!(q8_0_file_reader_chunk_rows(32, 64).unwrap(), 32);
 
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES", "1 KiB");
         std::env::set_var(
@@ -8224,6 +8239,26 @@ mod tests {
 
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES");
+    }
+
+    #[test]
+    fn q8_file_reader_default_coalesces_llama3_8b_ffn_q8_shapes() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES");
+
+        let llama3_8b_hidden_row_bytes = 4096 / Q8_0_BLOCK_VALUES * Q8BlockReader::BLOCK_SIZE_BYTES;
+        let llama3_8b_ffn_row_bytes = 14336 / Q8_0_BLOCK_VALUES * Q8BlockReader::BLOCK_SIZE_BYTES;
+
+        assert_eq!(
+            q8_0_file_reader_chunk_rows(llama3_8b_hidden_row_bytes, 14336).unwrap(),
+            14336
+        );
+        assert_eq!(
+            q8_0_file_reader_chunk_rows(llama3_8b_ffn_row_bytes, 4096).unwrap(),
+            4096
+        );
     }
 
     #[test]
@@ -9161,6 +9196,63 @@ mod tests {
 
         assert_slice_close(&actual, &expected.data);
         assert_eq!(reads.read_calls, 2);
+        assert_eq!(
+            reads.read_bytes,
+            (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
+        );
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES");
+    }
+
+    #[test]
+    fn q8_0_file_backed_accumulate_coalesces_near_two_chunk_tensor_read() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+        std::env::set_var(
+            "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
+            (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
+        );
+
+        let rows: Vec<Q8_0Block> = (0..3)
+            .map(|row| Q8_0Block {
+                scale: f16_bits_to_f32(f32_to_f16_bits(0.25 + row as f32 * 0.125)),
+                quants: std::array::from_fn(|idx| idx as i8 - 8 + row as i8),
+            })
+            .collect();
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        for block in &rows {
+            temp_file
+                .write_all(&f32_to_f16_bits(block.scale).to_le_bytes())
+                .unwrap();
+            temp_file
+                .write_all(&block.quants.iter().map(|q| *q as u8).collect::<Vec<_>>())
+                .unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let input_values = (0..32)
+            .map(|idx| idx as f32 * 0.5 - 3.0)
+            .collect::<Vec<_>>();
+        let input = CpuTensor::from_f32("input", vec![1, 32], input_values.clone()).unwrap();
+        let weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "weight",
+            vec![rows.len(), 32],
+            dequantized_q8_0_rows(&rows),
+            rows.clone(),
+        )
+        .unwrap();
+        let expected = matmul_rhs_transposed_with_precision(&input, &weight, "expected").unwrap();
+        let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
+        let mut actual = vec![0.0; rows.len()];
+        let start = q8_0_file_read_stats();
+
+        accumulate_transposed_linear_row_q8_0_file_reader(&input_values, &backing, &mut actual)
+            .unwrap();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_slice_close(&actual, &expected.data);
+        assert_eq!(reads.read_calls, 1);
         assert_eq!(
             reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
