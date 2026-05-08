@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
-import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, isSupportedCapabilityStatus } from '../lib/capabilities'
-import { clampText, formatDate, formatRate } from '../lib/formatters'
+import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel } from '../lib/capabilities'
+import { clampText, formatDate } from '../lib/formatters'
 import { getChatGateState } from '../lib/chatGate'
 import { describeModelState, getModelStatusLabel, isRunnableInCurrentRuntime } from '../lib/modelState'
 
@@ -9,12 +9,6 @@ const isBootstrapMessage = (message) =>
   message?.role === 'assistant' &&
   typeof message?.content === 'string' &&
   message.content.startsWith('Conversation created.')
-
-const formatProbability = (value) => {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return '—'
-  return `${(number * 100).toFixed(number >= 0.1 ? 1 : 2)}%`
-}
 
 const cleanLegacyDemoCapCopy = (value) => {
   if (typeof value !== 'string') return value
@@ -35,7 +29,6 @@ export default function ChatWorkspace({
   models,
   runtime,
   capabilities,
-  latestAssistantMessage,
   pendingConversation,
   composer,
   setComposer,
@@ -68,8 +61,6 @@ export default function ChatWorkspace({
   }, [sending])
 
   const isFreshThread = selectedConversation ? (visibleMessages.length === 0 && !pendingPrompt) : !pendingPrompt
-  const latestVisibleAssistantMessage = [...visibleMessages].reverse().find((message) => message.role === 'assistant') || latestAssistantMessage
-
   const handleComposerKeyDown = async (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -83,22 +74,6 @@ export default function ChatWorkspace({
   const hasCustomConversationTitle = Boolean(rawConversationTitle && rawConversationTitle.toLowerCase() !== 'new conversation')
   const conversationLabel = clampText(hasCustomConversationTitle ? rawConversationTitle : 'Untitled chat', 30)
   const lastUpdated = selectedConversation?.updated_at ? formatDate(selectedConversation.updated_at) : null
-  const latestTelemetryMatchesSelection = !latestVisibleAssistantMessage?.model_id || latestVisibleAssistantMessage.model_id === selectedModelId
-  const latestTelemetryMessage = latestTelemetryMatchesSelection ? latestVisibleAssistantMessage : null
-  const speedLabel = latestTelemetryMessage?.tokens_out_per_sec !== null && latestTelemetryMessage?.tokens_out_per_sec !== undefined
-    ? formatRate(latestTelemetryMessage.tokens_out_per_sec)
-    : 'Waiting for first reply'
-  const latestGeneratedTokens = latestTelemetryMessage?.usage?.completion_tokens
-  const latestFirstGeneratedToken = latestTelemetryMessage?.generated_token_ids?.[0]
-  const latestFirstTokenCopy = latestFirstGeneratedToken !== null && latestFirstGeneratedToken !== undefined ? ` · first token #${latestFirstGeneratedToken}` : ''
-  const latestCompletionCopy = latestGeneratedTokens === 1
-    ? `1 completion token${latestFirstTokenCopy} · first-token path completed`
-    : latestGeneratedTokens
-      ? `${latestGeneratedTokens} completion tokens${latestFirstTokenCopy} · raw local run`
-      : 'First reply will establish the live TPS baseline for this loaded model.'
-  const staleTelemetryModelLabel = latestVisibleAssistantMessage?.model_id && !latestTelemetryMatchesSelection
-    ? (latestVisibleAssistantMessage.model_name || latestVisibleAssistantMessage.model_id)
-    : ''
   const runnableModels = models.filter((model) => getChatGateState(capabilities, model, runtime).chatUnlocked)
   const hasRunnableChoices = runnableModels.length > 0
   const modelPickerTitle = selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what Camelid should use for this chat.'
@@ -111,14 +86,10 @@ export default function ChatWorkspace({
     : !selectedModelRunnable
       ? describeModelState(selectedModel)
       : runtime?.loaded_now && runtime?.active_model_id === selectedModelId
-      ? (isFreshThread ? 'Loaded + generation-ready' : speedLabel)
-      : isFreshThread
-        ? 'Ready to chat'
-        : speedLabel
+      ? 'Loaded + generation-ready'
+      : 'Ready to chat'
   const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !sending
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
-  const selectedCompatibilityTarget = selectedCompatibilityHint?.kind === 'compatibility' ? selectedCompatibilityHint.target : null
-  const selectedCompatibilitySupported = selectedCompatibilityTarget ? isSupportedCapabilityStatus(selectedCompatibilityTarget.status) : false
   const selectedCompatibilityLabel = selectedModel
     ? compatibilityHintLabel(selectedCompatibilityHint, 'No matching COMPATIBILITY.md row')
     : 'No model selected'
@@ -126,81 +97,25 @@ export default function ChatWorkspace({
     ? compatibilityHintCopy(selectedCompatibilityHint)
     : 'Choose a model before inferring any support boundary. Camelid will not promote filenames or saved paths into compatibility claims.'
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
-  const emptyHeroEyebrow = selectedModelRunnable
-    ? 'Local chat preview'
-    : supportBlocked
-      ? 'Support match needed'
-      : 'Camelid local chat'
+  const emptyHeroEyebrow = 'Camelid'
   const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
-    ? 'Preview chat ready'
+    ? 'Loaded + generation-ready'
     : supportBlocked
       ? 'Support match needed'
       : selectedModel
         ? 'Waiting on model readiness'
         : 'Choose a model to begin'
-  const runtimeGateCopy = selectedModel
-    ? `loaded_now=${selectedRuntimeReady ? 'true' : 'false'} · generation_ready=${runtime?.generation_ready && runtime?.active_model_id === selectedModelId ? 'true' : 'false'}`
-    : 'No model selected'
-  const starterPrompts = [
-    {
-      label: 'Smoke reply',
-      prompt: 'Reply with one concise sentence proving the local chat path is awake.',
-    },
-    {
-      label: 'Model summary',
-      prompt: 'In one short paragraph, summarize the loaded local model and the support contract Camelid is using.',
-    },
-    {
-      label: 'Guardrail check',
-      prompt: 'Explain in plain English why Camelid requires loaded_now, generation_ready, and an exact compatibility row before chat unlocks.',
-    },
-  ]
   const productHeroTitle = selectedModelRunnable
-    ? 'How can Camelid help locally?'
+    ? 'How can I help?'
     : supportBlocked
       ? 'This model needs a support match.'
       : 'Local chat, only when ready.'
   const productHeroSummary = selectedModelRunnable
-    ? `${selectedModelName} is ready for local prompts. Production throughput, arbitrary templates, and neighboring model rows remain guarded.`
+    ? 'Start a local conversation.'
     : supportBlocked
       ? 'Camelid can see this GGUF, but chat stays locked until the support contract matches this exact model and quantization.'
       : 'A clean Gemini-like prompt surface that stays locked until the model is loaded, generation-ready, and support-matched.'
-  const productProofCards = [
-    {
-      label: 'Runtime',
-      value: selectedRuntimeReady ? 'Ready' : runtime?.loaded_now ? 'Loaded, gated' : 'Waiting',
-      detail: selectedRuntimeReady ? 'Loaded model can generate local replies.' : selectedModel ? runtimeGateCopy : 'No active local model selected.',
-      tone: selectedRuntimeReady ? 'ready' : 'waiting',
-    },
-    {
-      label: 'Supported model',
-      value: selectedCompatibilitySupported ? 'Matched' : 'Needs match',
-      detail: selectedCompatibilitySupported ? 'Model and Q8_0 quantization match the support contract.' : 'No support is inferred from filenames or broad families.',
-      tone: selectedCompatibilitySupported ? 'ready' : supportBlocked ? 'blocked' : 'waiting',
-    },
-    {
-      label: 'Reply scope',
-      value: 'Context-limited',
-      detail: 'Runs until EOS, explicit request max_tokens, or the backend context limit.',
-      tone: selectedModelRunnable ? 'ready' : 'waiting',
-    },
-  ]
-  const honestyTitle = selectedModelRunnable
-    ? 'Local chat is available'
-    : supportBlocked
-      ? 'Loaded is not enough'
-      : selectedModel
-        ? 'Still waiting on readiness'
-        : 'Choose a model first'
-  const honestyCopy = selectedModelRunnable
-    ? `Only ${selectedModelName} in this supported Q8_0 row is unlocked here; broader model support is not implied.`
-    : supportBlocked
-      ? 'The UI will not turn a visible GGUF path into a support claim without a matching capabilities row.'
-      : selectedModel
-        ? 'The composer unlocks after the selected model is loaded, generation-ready, and support-matched.'
-        : 'Saved paths, filenames, and catalog names do not create support claims by themselves.'
-
   const renderModelPicker = () => {
     if (!hasRunnableChoices) {
       return (
@@ -250,31 +165,9 @@ export default function ChatWorkspace({
           <div className="chat-empty-shell chat-empty-shell-gemini">
             <div className={`chat-empty-stage chat-empty-stage-clean chat-empty-stage-product is-${readinessState}`}>
               <div className="chat-empty-hero chat-empty-hero-gemini chat-empty-hero-clean">
-                <div className="chat-empty-product-lockup">
-                  <div className="chat-empty-orb chat-empty-orb-product" aria-hidden="true">
-                    <span>C</span>
-                    <i />
-                  </div>
-                  <div className={`chat-empty-readiness-ribbon chat-empty-readiness-ribbon-compact is-${readinessState}`} aria-label="Current chat readiness">
-                    <span className="readiness-ribbon-dot" aria-hidden="true" />
-                    <strong>{readinessLabel}</strong>
-                    <small>{selectedModel ? selectedModelName : 'No local model selected'}</small>
-                  </div>
-                </div>
-                <div className="chat-empty-superwordmark" aria-hidden="true">Camelid</div>
                 <p className="chat-empty-greeting">{emptyHeroEyebrow}</p>
                 <h2>{productHeroTitle}</h2>
                 <p className="hero-summary">{productHeroSummary}</p>
-              </div>
-
-              <div className="chat-empty-proof-grid" aria-label="Visible support and readiness proof">
-                {productProofCards.map((card) => (
-                  <div key={card.label} className={`chat-empty-proof-card is-${card.tone}`}>
-                    <span>{card.label}</span>
-                    <strong>{card.value}</strong>
-                    <small>{card.detail}</small>
-                  </div>
-                ))}
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean composer-gemini-product">
@@ -282,39 +175,16 @@ export default function ChatWorkspace({
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
-                    <span className={`composer-meta-pill composer-meta-pill-readiness is-${readinessState}`}>{readinessLabel}</span>
                     {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Library</button>}
                   </div>
                   <div className="composer-gemini-actions composer-gemini-actions-stage">
-                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Generate'}</button>
+                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
                   </div>
                 </div>
                 <div className="composer-gemini-disclaimer composer-gemini-disclaimer-product">
-                  <span>Replies use the backend default and run until EOS or the context window.</span>
-                  <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>View support contract</button>
+                  <span>{selectedModelRunnable ? 'Loaded + generation-ready' : readinessLabel}</span>
                 </div>
               </div>
-
-              <p className={`chat-empty-honesty-note is-${readinessState}`} aria-label="Local chat support boundary">
-                <strong>{honestyTitle}.</strong> {honestyCopy}
-              </p>
-
-              <div className="chat-starter-chips chat-starter-chips-centered chat-starter-chips-stage" aria-label="Starter prompts">
-                {starterPrompts.map((starter) => (
-                  <button
-                    key={starter.label}
-                    type="button"
-                    className="chat-starter-chip chat-starter-chip-stage chat-starter-chip-product"
-                    onClick={() => setComposer(starter.prompt)}
-                    disabled={!selectedModelRunnable || sending}
-                    title={selectedModelRunnable ? starter.prompt : 'Starter prompts unlock after a model is ready and supported.'}
-                  >
-                    {starter.label}
-                  </button>
-                ))}
-              </div>
-
-              <p className="chat-empty-status-note">{selectedModelMeta} · Support is exact-row only.</p>
             </div>
           </div>
         ) : (
@@ -322,8 +192,7 @@ export default function ChatWorkspace({
             <div className={`chat-session-strip is-${readinessState}`} aria-label="Current Camelid chat status">
               <span className="chat-session-dot" aria-hidden="true" />
               <strong>{selectedModelName}</strong>
-              <small>{selectedModelRunnable ? (staleTelemetryModelLabel ? `Last reply used ${staleTelemetryModelLabel}` : latestCompletionCopy) : readinessLabel}</small>
-              <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>Contract</button>
+              <small>{selectedModelRunnable ? 'Ready when you are' : readinessLabel}</small>
             </div>
 
             {!selectedModelRunnable && (
@@ -342,49 +211,12 @@ export default function ChatWorkspace({
             <div className="chat-thread chat-thread-gemini">
               {visibleMessages.length === 0 && !awaitingAssistant && <div className="empty-state empty-state-chat">Pick a ready model, then send the first message when you’re ready.</div>}
               {visibleMessages.map((message) => {
-                const hasMetrics = message.role === 'assistant' && (message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined || message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined)
-                const messageCompletionTokens = message.usage?.completion_tokens
-                const modelLabel = message.model_name || message.model_id
-                const firstGeneratedToken = message.generated_token_ids?.[0]
-                const firstTokenCopy = firstGeneratedToken !== null && firstGeneratedToken !== undefined ? ` First token #${firstGeneratedToken}.` : ''
-                const diagnosticCopy = message.role === 'assistant'
-                  ? messageCompletionTokens === 1
-                    ? `Raw first-token validation sample.${firstTokenCopy}`
-                    : messageCompletionTokens
-                      ? `Raw local output · ${messageCompletionTokens} completion tokens.${firstTokenCopy}`
-                      : 'Raw local output.'
-                  : ''
                 const messageContent = cleanLegacyDemoCapCopy(message.content)
-                const cleanDiagnosticCopy = cleanLegacyDemoCapCopy(diagnosticCopy)
 
                 return (
                   <article key={message.id} className={`message-row message-row-gemini ${message.role}`}>
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
-                      {message.role === 'assistant' && (
-                        <div className="message-heading message-heading-clean">
-                          <span className="message-micro-meta">{[modelLabel, hasMetrics ? `${formatRate(message.tokens_out_per_sec)} out` : 'raw local reply'].filter(Boolean).join(' · ')}</span>
-                        </div>
-                      )}
                       <p>{messageContent}</p>
-                      {message.role === 'assistant' && (cleanDiagnosticCopy || hasMetrics) && (
-                        <div className="message-footnote">
-                          {cleanDiagnosticCopy && <span>{cleanDiagnosticCopy}</span>}
-                          {message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined && <span>In {formatRate(message.tokens_in_per_sec)}</span>}
-                          {message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined && <span>Out {formatRate(message.tokens_out_per_sec)}</span>}
-                        </div>
-                      )}
-                      {message.role === 'assistant' && message.top_logits?.length > 0 && (
-                        <div className="message-logit-viewer" aria-label="Top five first-token probabilities for this reply">
-                          <div className="message-logit-title">Top-5 first-token probabilities</div>
-                          {message.top_logits.slice(0, 5).map((entry) => (
-                            <div key={`${message.id}-${entry.rank}-${entry.token_id}`} className="message-logit-row">
-                              <span>#{entry.rank}</span>
-                              <code title={`token ${entry.token_id}`}>{entry.text || `#${entry.token_id}`}</code>
-                              <strong>{formatProbability(entry.probability)}</strong>
-                            </div>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   </article>
                 )
@@ -416,7 +248,7 @@ export default function ChatWorkspace({
                       <div className="message-heading message-heading-clean">
                         <span className="message-micro-meta">Generating locally · {generationElapsedSeconds}s elapsed</span>
                       </div>
-                      <p className="message-placeholder-copy">Camelid is running the local Q8 model now. The reply will appear here when the backend finishes; timing diagnostics will explain where the CPU time went.</p>
+                      <p className="message-placeholder-copy">Camelid is running locally. Tokens will appear as they are generated.</p>
                     </div>
                   </article>
                 </>
@@ -437,7 +269,7 @@ export default function ChatWorkspace({
             </div>
             <div className="composer-gemini-actions">
               {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button" onClick={() => setTab('library')}>Open Library</button>}
-              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Generate'}</button>
+              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
             </div>
           </div>
         </div>

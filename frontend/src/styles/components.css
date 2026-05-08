@@ -5144,14 +5144,12 @@ textarea.composer-input-gemini {
   font-size: 0.95rem;
 }
 
-.logit-list,
-.message-logit-viewer {
+.logit-list {
   display: grid;
   gap: 8px;
 }
 
-.logit-row,
-.message-logit-row {
+.logit-row {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 10px;
@@ -5166,44 +5164,21 @@ textarea.composer-input-gemini {
   background: rgba(83, 222, 170, 0.12);
 }
 
-.logit-rank,
-.message-logit-row span {
+.logit-rank {
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
   font-size: 0.8rem;
 }
 
-.logit-row code,
-.message-logit-row code {
+.logit-row code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text);
 }
 
-.logit-probability,
-.message-logit-row strong {
+.logit-probability {
   font-variant-numeric: tabular-nums;
-}
-
-.message-logit-viewer {
-  margin-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
-  padding-top: 10px;
-}
-
-.message-logit-title {
-  color: var(--color-text-muted);
-  font-size: 0.74rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.message-logit-row {
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  border-radius: 12px;
-  padding: 6px 8px;
 }
 
 @media (max-width: 760px) {
@@ -5243,4 +5218,88 @@ textarea.composer-input-gemini {
 .api-feature-list small {
   color: var(--color-text-muted);
   line-height: 1.45;
+}
+
+/* Chat landing: keep the product surface calm and app-like, not a diagnostics dashboard. */
+.chat-layout-empty .chat-empty-shell-gemini {
+  min-height: calc(100dvh - 104px);
+  align-items: end;
+  padding: clamp(28px, 5vh, 72px) 0 clamp(44px, 8vh, 120px);
+}
+
+.chat-layout-empty .chat-empty-stage-product {
+  width: min(100%, 960px);
+  gap: 28px;
+  padding: 0 clamp(18px, 4vw, 48px);
+}
+
+.chat-layout-empty .chat-empty-stage-clean::before,
+.chat-layout-empty .chat-empty-stage-product::before {
+  display: none;
+}
+
+.chat-layout-empty .chat-empty-hero-clean {
+  gap: 12px;
+}
+
+.chat-layout-empty .chat-empty-hero-clean .chat-empty-greeting {
+  color: color-mix(in srgb, var(--color-text-muted) 88%, var(--color-text) 12%);
+  font-size: clamp(0.92rem, 1vw, 1.08rem);
+  font-weight: 820;
+  letter-spacing: 0.28em;
+}
+
+.chat-layout-empty .chat-empty-hero-clean h2 {
+  max-width: 11ch;
+  font-size: clamp(5rem, 9.4vw, 9.2rem);
+  line-height: 0.9;
+  letter-spacing: -0.075em;
+}
+
+.chat-layout-empty .chat-empty-hero-clean .hero-summary {
+  max-width: 38ch;
+  color: color-mix(in srgb, var(--color-text-muted) 90%, var(--color-text) 10%);
+  font-size: clamp(1rem, 1.3vw, 1.28rem);
+}
+
+.chat-layout-empty .composer-gemini-product {
+  width: min(100%, 980px);
+  border-radius: 28px;
+  background: color-mix(in srgb, var(--color-bg-elevated) 78%, transparent);
+  box-shadow: none;
+  padding: 22px 26px 18px;
+}
+
+.chat-layout-empty .composer-gemini-stage-clean .composer-input-gemini-stage {
+  min-height: clamp(96px, 9vw, 150px) !important;
+  padding: 10px 0 18px;
+  font-size: clamp(1.25rem, 1.6vw, 1.55rem);
+}
+
+.chat-layout-empty .composer-gemini-footer-stage-clean {
+  padding-top: 18px;
+}
+
+.chat-layout-empty .composer-gemini-disclaimer-product {
+  justify-content: center;
+  margin-top: 20px;
+  font-size: 0.95rem;
+}
+
+.chat-layout-empty .composer-send-button {
+  min-width: 142px;
+  min-height: 64px;
+  border-radius: 999px;
+  font-size: 1.08rem;
+}
+
+.chat-layout-empty .composer-model-picker {
+  min-height: 64px;
+  border-radius: 999px;
+  padding-inline: 18px 42px;
+}
+
+.chat-layout-empty .composer-model-select {
+  max-width: min(34vw, 360px);
+  font-size: 1rem;
 }

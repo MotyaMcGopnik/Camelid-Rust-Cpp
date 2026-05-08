@@ -37,7 +37,7 @@ export default function TopBar({ tab, setTab, selectedConversation, runtime, cap
   const untitledConversationLabel = selectedConversation
     ? `${formatPreview(latestConversationMessage?.content, 42)} · ${formatSidebarDate(selectedConversation.updated_at) || 'New chat'}`
     : runtimeChatReady
-      ? 'Preview chat ready'
+      ? 'Ready when you are'
       : 'Waiting on model readiness'
   const heading = tab === 'chat'
     ? (hasCustomConversationTitle ? clampText(rawConversationTitle, 72) : '')

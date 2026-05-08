@@ -84,31 +84,65 @@ function getLoadedModelQuantLabel(model) {
   return quantLabelFromGgufFileType(fileType) || `file_type ${fileType}`
 }
 
-function finiteNumber(value) {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
-}
+async function readStreamingChatCompletion(response, onDelta) {
+  if (!response.ok) {
+    let detail = null
+    try {
+      detail = await response.json()
+    } catch {
+      // Fall through to generic response status below.
+    }
+    const message = detail?.error?.message || detail?.message || `Request failed with HTTP ${response.status}`
+    const error = new Error(message)
+    error.payload = detail
+    throw error
+  }
 
-function topFiveLogitProbabilities(response) {
-  return (response?.camelid?.top_logits || [])
-    .slice(0, 5)
-    .map((entry) => ({
-      token_id: entry.token_id,
-      rank: entry.rank,
-      text: entry.text || `#${entry.token_id}`,
-      logit: finiteNumber(entry.logit),
-      probability: finiteNumber(entry.probability),
-      selected: Boolean(entry.selected),
-    }))
-}
+  const reader = response.body?.getReader()
+  if (!reader) return { content: '', finishReason: null }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let content = ''
+  let finishReason = null
 
-function completionTokensPerSecond(response, elapsedMs) {
-  const completionTokens = finiteNumber(response?.usage?.completion_tokens)
-  if (!completionTokens || completionTokens <= 0) return null
-  const generationMs = finiteNumber(response?.camelid?.timings_ms?.generate)
-  const denominatorMs = generationMs && generationMs > 0 ? generationMs : finiteNumber(elapsedMs)
-  if (!denominatorMs || denominatorMs <= 0) return null
-  return completionTokens / (denominatorMs / 1000)
+  const consumeEvent = (eventText) => {
+    const dataLines = eventText
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+    for (const data of dataLines) {
+      if (!data || data === '[DONE]') continue
+      let chunk = null
+      try {
+        chunk = JSON.parse(data)
+      } catch {
+        continue
+      }
+      const choice = chunk?.choices?.[0]
+      const delta = choice?.delta?.content ?? choice?.text ?? ''
+      if (delta) {
+        content += delta
+        onDelta(delta, content)
+      }
+      if (choice?.finish_reason) finishReason = choice.finish_reason
+    }
+  }
+
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      const eventText = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      consumeEvent(eventText)
+      boundary = buffer.indexOf('\n\n')
+    }
+  }
+  buffer += decoder.decode()
+  if (buffer.trim()) consumeEvent(buffer)
+  return { content, finishReason }
 }
 
 function isLoadedModelGenerationReady(model) {
@@ -609,34 +643,68 @@ export function useDashboardData({ showNotice, clearNotice }) {
       )))
 
       const requestStartedAt = performance.now()
-      const response = await fetchJson(`${normalizedApiBase}/v1/chat/completions`, {
-        method: 'POST',
-        body: JSON.stringify({ model: selectedModelId, messages: history, temperature: 0, stream: false }),
-      })
-      const elapsedMs = performance.now() - requestStartedAt
-      const assistantContent = response?.choices?.[0]?.message?.content || ''
-      const assistantMessage = {
-        id: response?.id || makeId('message'),
+      const assistantId = makeId('message')
+      const assistantMessageBase = {
+        id: assistantId,
         role: 'assistant',
-        content: assistantContent || '(empty response)',
+        content: '',
         model_id: selectedModelId,
         model_name: selectedModel?.name || selectedModelId,
         created_at: nowIso(),
         tokens_in_per_sec: null,
-        tokens_out_per_sec: completionTokensPerSecond(response, elapsedMs),
-        top_logits: topFiveLogitProbabilities(response),
-        generated_token_ids: Array.isArray(response?.camelid?.generated_token_ids) ? response.camelid.generated_token_ids : [],
-        timings_ms: response?.camelid?.timings_ms || null,
-        usage: response?.usage || null,
+        tokens_out_per_sec: null,
+        generated_token_ids: [],
+        timings_ms: null,
+        usage: null,
+        streaming: true,
       }
       persistConversations((current) => current.map((item) => (
         item.id === conversation.id
-          ? { ...item, title: item.title === 'New conversation' ? messageContent.slice(0, 64) : item.title, messages: [...(item.messages || []), assistantMessage], updated_at: nowIso() }
+          ? { ...item, title: item.title === 'New conversation' ? messageContent.slice(0, 64) : item.title, messages: [...(item.messages || []), assistantMessageBase], updated_at: nowIso() }
           : item
       )))
       setPendingChat(null)
+
+      const response = await fetch(`${normalizedApiBase}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModelId, messages: history, temperature: 0, stream: true }),
+      })
+      const streamed = await readStreamingChatCompletion(response, (_delta, fullContent) => {
+        persistConversations((current) => current.map((item) => (
+          item.id === conversation.id
+            ? {
+                ...item,
+                messages: (item.messages || []).map((message) => (
+                  message.id === assistantId ? { ...message, content: fullContent || '…' } : message
+                )),
+                updated_at: nowIso(),
+              }
+            : item
+        )))
+      })
+      const elapsedMs = performance.now() - requestStartedAt
+      const assistantMessage = {
+        ...assistantMessageBase,
+        content: streamed.content || '(empty response)',
+        tokens_out_per_sec: null,
+        finish_reason: streamed.finishReason,
+        elapsed_ms: elapsedMs,
+        streaming: false,
+      }
+      persistConversations((current) => current.map((item) => (
+        item.id === conversation.id
+          ? {
+              ...item,
+              messages: (item.messages || []).map((message) => (
+                message.id === assistantId ? assistantMessage : message
+              )),
+              updated_at: nowIso(),
+            }
+          : item
+      )))
       setSelectedConversationId(conversation.id)
-      showNotice('Camelid returned a raw local reply. Inspect the output and telemetry before treating the run as validated.', 'success')
+      showNotice('Camelid streamed the local reply.', 'success')
     } catch (error) {
       setPendingChat(null)
       showNotice(getGuardrailErrorMessage(error, 'Local inference failed.'), 'error')
