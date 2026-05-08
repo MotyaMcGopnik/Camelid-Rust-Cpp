@@ -361,7 +361,7 @@ impl Tokenizer {
             TokenizerModel::LlamaSpm => {
                 let normalized = self.normalize_spm_text(text, parse_special);
                 if !normalized.is_empty() {
-                    out.extend(self.encode_piece(&normalized)?);
+                    out.extend(self.encode_piece(&normalized, parse_special)?);
                 }
             }
             TokenizerModel::Gpt2Bpe => {
@@ -507,7 +507,7 @@ impl Tokenizer {
         }
         if self.config.add_space_prefix
             && !text.starts_with(char::is_whitespace)
-            && !(parse_special && text.starts_with('<'))
+            && !(parse_special && self.longest_control_token_at(text, 0).is_some())
         {
             normalized.push(SPM_SPACE);
         }
@@ -518,7 +518,11 @@ impl Tokenizer {
                 normalized.push(ch);
             }
         }
-        self.add_dummy_prefix_after_control_tokens(&normalized)
+        if parse_special {
+            normalized
+        } else {
+            self.add_dummy_prefix_after_control_tokens(&normalized)
+        }
     }
 
     fn add_dummy_prefix_after_control_tokens(&self, text: &str) -> String {
@@ -533,7 +537,11 @@ impl Tokenizer {
                 normalized.push_str(token_text);
                 byte_start += token_len;
 
-                if byte_start < text.len() && !text[byte_start..].starts_with(SPM_SPACE) {
+                let rest = &text[byte_start..];
+                let next_is_control = self.longest_control_token_at(text, byte_start).is_some();
+                let should_insert_dummy_prefix =
+                    self.should_insert_dummy_after_control(token_text, rest, next_is_control);
+                if should_insert_dummy_prefix {
                     normalized.push(SPM_SPACE);
                 }
                 continue;
@@ -547,6 +555,26 @@ impl Tokenizer {
             byte_start += ch.len_utf8();
         }
         normalized
+    }
+
+    fn should_insert_dummy_after_control(
+        &self,
+        token_text: &str,
+        rest: &str,
+        next_is_control: bool,
+    ) -> bool {
+        if rest.is_empty() || next_is_control {
+            return false;
+        }
+
+        if token_text == "[INST]"
+            && self.token_to_id.contains_key("[INST]")
+            && self.token_to_id.contains_key("[/INST]")
+        {
+            return true;
+        }
+
+        !rest.starts_with(SPM_SPACE)
     }
 
     fn longest_control_token_at<'a>(
@@ -566,26 +594,45 @@ impl Tokenizer {
             .map(|token| (token.text.as_str(), token.text.len()))
     }
 
-    fn encode_piece(&self, piece: &str) -> Result<Vec<TokenId>> {
-        if self.bpe_ranks.is_empty() {
+    fn encode_piece(&self, piece: &str, parse_special: bool) -> Result<Vec<TokenId>> {
+        if self.bpe_ranks.is_empty() && !parse_special {
             return self.encode_piece_greedy(piece);
         }
 
         let mut out = Vec::new();
         let mut byte_start = 0;
         while byte_start < piece.len() {
-            if let Some((token_text, token_len)) = self.longest_control_token_at(piece, byte_start)
-            {
-                if let Some(id) = self.token_to_id.get(token_text) {
-                    out.push(*id);
-                    byte_start += token_len;
-                    continue;
+            if parse_special {
+                if let Some((token_text, token_len)) =
+                    self.longest_control_token_at(piece, byte_start)
+                {
+                    if let Some(id) = self.token_to_id.get(token_text) {
+                        out.push(*id);
+                        byte_start += token_len;
+                        if self.config.add_space_prefix
+                            && byte_start < piece.len()
+                            && self.longest_control_token_at(piece, byte_start).is_none()
+                        {
+                            if let Some(dummy_prefix) = self.token_to_id.get(&SPM_SPACE.to_string()) {
+                                out.push(*dummy_prefix);
+                            }
+                        }
+                        continue;
+                    }
                 }
             }
 
-            let next_control = self.next_control_token_start(piece, byte_start);
-            let byte_end = next_control.unwrap_or(piece.len());
-            self.encode_spm_segment(&piece[byte_start..byte_end], &mut out)?;
+            let byte_end = if parse_special {
+                self.next_control_token_start(piece, byte_start)
+                    .unwrap_or(piece.len())
+            } else {
+                piece.len()
+            };
+            if self.bpe_ranks.is_empty() {
+                out.extend(self.encode_piece_greedy(&piece[byte_start..byte_end])?);
+            } else {
+                self.encode_spm_segment(&piece[byte_start..byte_end], &mut out)?;
+            }
             byte_start = byte_end;
         }
         Ok(out)
@@ -673,12 +720,15 @@ impl Tokenizer {
                 .chain(std::iter::once(piece.len()))
             {
                 let candidate = &piece[byte_start..byte_end];
+                if candidate.contains("▁▁") {
+                    continue;
+                }
                 if let Some(id) = self.token_to_id.get(candidate) {
                     let score = self.tokens[*id as usize].score;
                     let len = byte_end - byte_start;
                     match best {
                         Some((best_len, _, best_score))
-                            if score < best_score || (score == best_score && len <= best_len) => {}
+                            if len < best_len || (len == best_len && score <= best_score) => {}
                         _ => best = Some((len, *id, score)),
                     }
                 }

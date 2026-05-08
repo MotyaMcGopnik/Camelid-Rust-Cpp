@@ -1,12 +1,14 @@
-export const SUPPORTED_RENDER_MODES = ['compact', 'tinyllama-marker']
+export const SUPPORTED_RENDER_MODES = ['compact', 'tinyllama-marker', 'mistral_instruct']
 export const SUPPORTED_PROMPT_PACK_SCHEMAS = [
   'camelid.llama3.prompt-pack.v1',
   'camelid.tinyllama.prompt-pack.v1',
+  'camelid.mistral.prompt-pack.v1',
 ]
 
 const SCHEMA_RENDER_MODE_ALLOWLIST = {
   'camelid.llama3.prompt-pack.v1': ['compact'],
   'camelid.tinyllama.prompt-pack.v1': ['tinyllama-marker'],
+  'camelid.mistral.prompt-pack.v1': ['mistral_instruct'],
 }
 
 export function renderExpectedPrompt(messages, renderMode) {
@@ -18,6 +20,8 @@ export function renderExpectedPrompt(messages, renderMode) {
       return renderCompactLlama3Prompt(messages)
     case 'tinyllama-marker':
       return renderTinyLlamaMarkerPrompt(messages)
+    case 'mistral_instruct':
+      return renderMistralInstructPrompt(messages)
     default:
       throw new Error(`unsupported --render-mode ${JSON.stringify(renderMode)}; supported modes: ${SUPPORTED_RENDER_MODES.join(', ')}`)
   }
@@ -175,5 +179,43 @@ function renderTinyLlamaMarkerPrompt(messages) {
   if (messages.at(-1)?.role.trim() !== 'assistant') {
     prompt += '<|assistant|>\n'
   }
+  return prompt
+}
+
+function renderMistralInstructPrompt(messages) {
+  const bos = '<s>'
+  const eos = '</s>'
+  let prompt = ''
+  let system = null
+  let idx = 0
+
+  if (messages[0]?.role.trim() === 'system') {
+    system = messages[0].content.trim()
+    idx = 1
+  }
+
+  while (idx < messages.length) {
+    const message = messages[idx]
+    if (message.role.trim() !== 'user') {
+      idx += 1
+      continue
+    }
+
+    prompt += `${bos}[INST] `
+    if (system !== null) {
+      prompt += `${system}\n\n`
+      system = null
+    }
+    prompt += `${message.content.trim()} [/INST]`
+
+    const assistant = messages[idx + 1]
+    if (assistant?.role.trim() === 'assistant') {
+      prompt += ` ${assistant.content.trim()}${eos}`
+      idx += 2
+      continue
+    }
+    break
+  }
+
   return prompt
 }

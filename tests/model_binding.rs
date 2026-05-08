@@ -51,6 +51,31 @@ fn defaults_missing_kv_heads_to_attention_heads_for_tinyllama_style_metadata() {
 }
 
 #[test]
+fn accepts_mistral_metadata_on_llama_dense_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mistral.gguf");
+    write_mistral_gguf(&path);
+
+    let gguf = read_metadata(&path).unwrap();
+    let config = LlamaModelConfig::from_gguf(&gguf).unwrap();
+    let binding = LlamaTensorBinding::bind(&gguf, &config).unwrap();
+    let cache_plan = LlamaKvCachePlan::from_config(&config).unwrap();
+
+    assert_eq!(gguf.architecture(), Some("mistral"));
+    assert_eq!(config.context_length, 128);
+    assert_eq!(config.embedding_length, 8);
+    assert_eq!(config.attention_head_count, 2);
+    assert_eq!(config.attention_head_count_kv, 1);
+    assert_eq!(config.rope_dimension_count, Some(4));
+    assert_eq!(config.rope_freq_base, Some(10_000.0));
+    assert_eq!(config.rms_norm_epsilon, 1e-6);
+    assert_eq!(binding.layers[0].attention_q.name, "blk.0.attn_q.weight");
+    assert_eq!(binding.layers[0].attention_k.dimensions, vec![8, 4]);
+    assert_eq!(cache_plan.kv_head_count, 1);
+    assert_eq!(cache_plan.head_dim, 4);
+}
+
+#[test]
 fn accepts_llama3_style_gqa_metadata_and_rope_theta() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("llama3-gqa.gguf");
@@ -220,6 +245,133 @@ fn write_llama_gguf_with_bad_attention_k_shape(path: &Path) {
         None,
         Some(("blk.0.attn_k.weight", vec![8, 3])),
     );
+}
+
+fn write_mistral_gguf(path: &Path) {
+    write_architecture_prefixed_gguf(path, "mistral", 128, 8, 16, 2, Some(1), 4, 10_000.0, 1e-6);
+}
+
+fn write_architecture_prefixed_gguf(
+    path: &Path,
+    architecture: &str,
+    context_length: u32,
+    embedding_length: u32,
+    feed_forward_length: u32,
+    attention_head_count: u32,
+    attention_head_count_kv: Option<u32>,
+    rope_dimension_count: u32,
+    rope_freq_base: f32,
+    rms_norm_epsilon: f32,
+) {
+    let kv_width = (embedding_length as usize
+        * attention_head_count_kv.unwrap_or(attention_head_count) as usize)
+        / attention_head_count as usize;
+    let tensors: Vec<(&str, Vec<i64>)> = vec![
+        ("token_embd.weight", vec![4, embedding_length as i64]),
+        ("output_norm.weight", vec![embedding_length as i64]),
+        ("blk.0.attn_norm.weight", vec![embedding_length as i64]),
+        (
+            "blk.0.attn_q.weight",
+            vec![embedding_length as i64, embedding_length as i64],
+        ),
+        (
+            "blk.0.attn_k.weight",
+            vec![embedding_length as i64, kv_width as i64],
+        ),
+        (
+            "blk.0.attn_v.weight",
+            vec![embedding_length as i64, kv_width as i64],
+        ),
+        (
+            "blk.0.attn_output.weight",
+            vec![embedding_length as i64, embedding_length as i64],
+        ),
+        ("blk.0.ffn_norm.weight", vec![embedding_length as i64]),
+        (
+            "blk.0.ffn_gate.weight",
+            vec![embedding_length as i64, feed_forward_length as i64],
+        ),
+        (
+            "blk.0.ffn_up.weight",
+            vec![embedding_length as i64, feed_forward_length as i64],
+        ),
+        (
+            "blk.0.ffn_down.weight",
+            vec![feed_forward_length as i64, embedding_length as i64],
+        ),
+        ("output.weight", vec![embedding_length as i64, 4]),
+    ];
+
+    let mut b = Vec::new();
+    b.extend_from_slice(b"GGUF");
+    push_u32(&mut b, 3);
+    push_i64(&mut b, tensors.len() as i64);
+    push_i64(&mut b, 11 + i64::from(attention_head_count_kv.is_some()));
+
+    push_kv_string(&mut b, "general.architecture", architecture);
+    push_kv_u32(&mut b, "general.file_type", 0);
+    push_kv_u32(
+        &mut b,
+        &format!("{architecture}.context_length"),
+        context_length,
+    );
+    push_kv_u32(
+        &mut b,
+        &format!("{architecture}.embedding_length"),
+        embedding_length,
+    );
+    push_kv_u32(&mut b, &format!("{architecture}.block_count"), 1);
+    push_kv_u32(
+        &mut b,
+        &format!("{architecture}.feed_forward_length"),
+        feed_forward_length,
+    );
+    push_kv_u32(
+        &mut b,
+        &format!("{architecture}.attention.head_count"),
+        attention_head_count,
+    );
+    if let Some(kv_heads) = attention_head_count_kv {
+        push_kv_u32(
+            &mut b,
+            &format!("{architecture}.attention.head_count_kv"),
+            kv_heads,
+        );
+    }
+    push_kv_u32(
+        &mut b,
+        &format!("{architecture}.rope.dimension_count"),
+        rope_dimension_count,
+    );
+    push_kv_f32(
+        &mut b,
+        &format!("{architecture}.rope.freq_base"),
+        rope_freq_base,
+    );
+    push_kv_f32(
+        &mut b,
+        &format!("{architecture}.attention.layer_norm_rms_epsilon"),
+        rms_norm_epsilon,
+    );
+    push_kv_u32(&mut b, &format!("{architecture}.vocab_size"), 4);
+
+    let mut relative_offset = 0u64;
+    for (name, dims) in &tensors {
+        push_string(&mut b, name);
+        push_u32(&mut b, dims.len() as u32);
+        for dim in dims {
+            push_i64(&mut b, *dim);
+        }
+        push_i32(&mut b, 0);
+        push_u64(&mut b, relative_offset);
+        relative_offset += dims.iter().product::<i64>() as u64 * 4;
+    }
+
+    while !b.len().is_multiple_of(32) {
+        b.push(0);
+    }
+    b.extend(vec![0u8; relative_offset as usize]);
+    fs::write(path, b).unwrap();
 }
 
 fn write_scaled_llama3_style_gqa_gguf(path: &Path) {

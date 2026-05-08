@@ -37,6 +37,16 @@ assert.equal(
   '<|user|>\nComplete cam</s>\n<|assistant|>\nelid</s>\n',
 )
 
+assert.equal(
+  renderExpectedPrompt([
+    { role: 'system', content: ' Be brief. ' },
+    { role: 'user', content: ' Hello there. ' },
+    { role: 'assistant', content: ' Hi ' },
+    { role: 'user', content: 'Now say bye' },
+  ], 'mistral_instruct'),
+  '<s>[INST] Be brief.\n\nHello there. [/INST] Hi</s><s>[INST] Now say bye [/INST]',
+)
+
 const normalizedPack = normalizePromptPack({
   schema: 'camelid.llama3.prompt-pack.v1',
   pack_id: 'llama3-context-512-smoke-v1',
@@ -70,6 +80,18 @@ assert.equal(normalizedPack.prompts[0].render_mode, 'compact')
 assert.equal(normalizedPack.prompts[0].target_context_window, 512)
 assert.equal(normalizedPack.prompts[1].max_tokens, 7)
 assert.equal(normalizedPack.prompts[1].target_context_window, 640)
+const mistralPack = normalizePromptPack({
+  schema: 'camelid.mistral.prompt-pack.v1',
+  pack_id: 'mistral-one-token-smoke-v1',
+  defaults: { render_mode: 'mistral_instruct', max_tokens: 1 },
+  prompts: [{
+    id: 'hello',
+    messages: [{ role: 'user', content: 'hello' }],
+  }],
+})
+assert.equal(mistralPack.defaults.render_mode, 'mistral_instruct')
+assert.equal(mistralPack.prompts[0].render_mode, 'mistral_instruct')
+
 assert.throws(
   () => normalizePromptPack({ schema: 'camelid.unknown.prompt-pack.v1', pack_id: 'bad', prompts: [{ message: 'hi' }] }),
   /unsupported/,
@@ -91,6 +113,15 @@ assert.throws(
     prompts: [{ messages: [{ role: 'user', content: '' }] }],
   }),
   /non-empty string/,
+)
+assert.throws(
+  () => normalizePromptPack({
+    schema: 'camelid.mistral.prompt-pack.v1',
+    pack_id: 'bad-mistral-render',
+    defaults: { render_mode: 'compact' },
+    prompts: [{ message: 'hi' }],
+  }),
+  /not allowed/,
 )
 
 assert.equal(resolveReferenceContext({ promptTokenCount: 120, maxTokens: 5 }), 512)

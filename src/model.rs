@@ -27,52 +27,86 @@ pub struct LlamaModelConfig {
 
 impl LlamaModelConfig {
     pub fn from_gguf(gguf: &GgufFile) -> Result<Self> {
-        match gguf.architecture() {
-            Some("llama") => {}
+        let architecture = match gguf.architecture() {
+            Some(architecture @ ("llama" | "mistral")) => architecture,
             Some(other) => return Err(BackendError::UnsupportedModelArchitecture(other.into())),
             None => {
                 return Err(BackendError::InvalidModelMetadata(
                     "required metadata general.architecture is missing".into(),
                 ))
             }
-        }
+        };
 
-        let attention_head_count = required_u32(gguf, "llama.attention.head_count")?;
-        let attention_head_count_kv = llama_attention_head_count_kv(gguf, attention_head_count);
+        let attention_head_count = required_u32(
+            gguf,
+            &architecture_key(architecture, "attention.head_count"),
+        )?;
+        let attention_head_count_kv =
+            llama_attention_head_count_kv(gguf, architecture, attention_head_count);
         Ok(Self {
-            context_length: required_u32(gguf, "llama.context_length")?,
-            embedding_length: required_u32(gguf, "llama.embedding_length")?,
-            block_count: required_u32(gguf, "llama.block_count")?,
-            feed_forward_length: required_u32(gguf, "llama.feed_forward_length")?,
+            context_length: required_u32(gguf, &architecture_key(architecture, "context_length"))?,
+            embedding_length: required_u32(
+                gguf,
+                &architecture_key(architecture, "embedding_length"),
+            )?,
+            block_count: required_u32(gguf, &architecture_key(architecture, "block_count"))?,
+            feed_forward_length: required_u32(
+                gguf,
+                &architecture_key(architecture, "feed_forward_length"),
+            )?,
             attention_head_count,
             attention_head_count_kv,
-            rope_dimension_count: gguf.metadata_u32("llama.rope.dimension_count"),
-            rope_freq_base: gguf.metadata_f32("llama.rope.freq_base"),
+            rope_dimension_count: gguf
+                .metadata_u32(&architecture_key(architecture, "rope.dimension_count")),
+            rope_freq_base: gguf.metadata_f32(&architecture_key(architecture, "rope.freq_base")),
             rope_scaling_type: gguf
-                .metadata_string("llama.rope.scaling.type")
+                .metadata_string(&architecture_key(architecture, "rope.scaling.type"))
                 .map(str::to_string),
-            rope_scaling_factor: gguf.metadata_f32("llama.rope.scaling.factor"),
-            rope_scaling_original_context_length: gguf
-                .metadata_u32("llama.rope.scaling.original_context_length"),
-            rope_scaling_low_freq_factor: gguf.metadata_f32("llama.rope.scaling.low_freq_factor"),
-            rope_scaling_high_freq_factor: gguf.metadata_f32("llama.rope.scaling.high_freq_factor"),
+            rope_scaling_factor: gguf
+                .metadata_f32(&architecture_key(architecture, "rope.scaling.factor")),
+            rope_scaling_original_context_length: gguf.metadata_u32(&architecture_key(
+                architecture,
+                "rope.scaling.original_context_length",
+            )),
+            rope_scaling_low_freq_factor: gguf.metadata_f32(&architecture_key(
+                architecture,
+                "rope.scaling.low_freq_factor",
+            )),
+            rope_scaling_high_freq_factor: gguf.metadata_f32(&architecture_key(
+                architecture,
+                "rope.scaling.high_freq_factor",
+            )),
             rms_norm_epsilon: gguf
-                .metadata_f32("llama.attention.layer_norm_rms_epsilon")
+                .metadata_f32(&architecture_key(
+                    architecture,
+                    "attention.layer_norm_rms_epsilon",
+                ))
                 .unwrap_or(1e-5),
-            vocab_size: gguf.metadata_u32("llama.vocab_size").or_else(|| {
-                infer_vocab_size_from_token_embedding(
-                    gguf,
-                    "token_embd.weight",
-                    required_u32(gguf, "llama.embedding_length").ok()?,
-                )
-            }),
+            vocab_size: gguf
+                .metadata_u32(&architecture_key(architecture, "vocab_size"))
+                .or_else(|| {
+                    infer_vocab_size_from_token_embedding(
+                        gguf,
+                        "token_embd.weight",
+                        required_u32(gguf, &architecture_key(architecture, "embedding_length"))
+                            .ok()?,
+                    )
+                }),
             file_type: gguf.metadata_u32("general.file_type"),
         })
     }
 }
 
-fn llama_attention_head_count_kv(gguf: &GgufFile, attention_head_count: u32) -> u32 {
-    gguf.metadata_u32("llama.attention.head_count_kv")
+fn architecture_key(architecture: &str, suffix: &str) -> String {
+    format!("{architecture}.{suffix}")
+}
+
+fn llama_attention_head_count_kv(
+    gguf: &GgufFile,
+    architecture: &str,
+    attention_head_count: u32,
+) -> u32 {
+    gguf.metadata_u32(&architecture_key(architecture, "attention.head_count_kv"))
         .unwrap_or(attention_head_count)
 }
 

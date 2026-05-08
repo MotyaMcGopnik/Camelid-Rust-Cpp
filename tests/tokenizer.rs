@@ -177,6 +177,62 @@ fn encodes_llama3_real_prompts_like_llama_cpp_when_available() {
 }
 
 #[test]
+fn mistral_reference_template_lists_required_prompt_shapes() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/tokenizer/mistral-7b-instruct-v0.3-reference-pack.template.json"
+    ))
+    .unwrap();
+
+    assert_eq!(fixture["status"], "template_only");
+    assert_eq!(
+        fixture["expected_artifacts"]["tokenizer_fixture_id"],
+        "mistral-instruct-v0.3-tokenizer-v1"
+    );
+    assert_eq!(
+        fixture["expected_artifacts"]["chat_template_fixture_id"],
+        "mistral-instruct-v0.3-chat-template-pack-v1"
+    );
+    assert_eq!(
+        fixture["expected_artifacts"]["prompt_cases"][1]["rendered_prompt"],
+        "<s>[INST] Hello [/INST]"
+    );
+    assert_eq!(
+        fixture["expected_artifacts"]["prompt_cases"][2]["rendered_prompt"],
+        "<s>[INST] Be brief.\n\nHello there. [/INST]"
+    );
+    assert_eq!(
+        fixture["expected_artifacts"]["prompt_cases"][3]["rendered_prompt"],
+        "<s>[INST] Complete cam [/INST] elid</s><s>[INST] Now say hi [/INST]"
+    );
+}
+
+#[test]
+fn encodes_mistral_real_prompts_like_llama_cpp_when_available() {
+    let Some(tokenizer) = load_real_mistral_tokenizer() else {
+        return;
+    };
+
+    let cases = [
+        ("hello", "hello", true, false, vec![1, 7080, 29477]),
+        (
+            "single_user_turn",
+            "<s>[INST] Hello [/INST]",
+            false,
+            true,
+            vec![1, 3, 29473, 23325, 29473, 4],
+        ),
+    ];
+
+    for (name, text, add_special, parse_special, expected) in cases {
+        assert_eq!(
+            tokenizer.encode(text, add_special, parse_special).unwrap(),
+            expected,
+            "Mistral tokenizer parity failed for {name}; expected IDs are from llama.cpp llama-tokenize against the exact Mistral-7B-Instruct-v0.3-Q8_0.gguf row"
+        );
+    }
+}
+
+#[test]
 fn rejects_gpt2_bpe_without_llama_pre_tokenizer() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tokenizer-gpt2-wrong-pre.gguf");
@@ -344,6 +400,22 @@ fn load_real_llama3_tokenizer() -> Option<(Tokenizer, Vec<String>)> {
         .unwrap();
     let tokenizer = Tokenizer::from_gguf(&gguf).unwrap();
     Some((tokenizer, token_texts))
+}
+
+fn load_real_mistral_tokenizer() -> Option<Tokenizer> {
+    let path = std::env::var("MISTRAL_GGUF")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("models/Mistral-7B-Instruct-v0.3-Q8_0.gguf"));
+    if !path.exists() {
+        eprintln!(
+            "skipping real Mistral tokenizer parity; set MISTRAL_GGUF or place the artifact at {}",
+            path.display()
+        );
+        return None;
+    }
+
+    let gguf = read_metadata(&path).unwrap();
+    Some(Tokenizer::from_gguf(&gguf).unwrap())
 }
 
 const LLAMA3_CHAT_TEMPLATE: &str = "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}";
