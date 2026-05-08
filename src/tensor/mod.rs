@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::HashMap,
     env,
     fs::File,
@@ -826,6 +827,10 @@ static Q8_0_FILE_CACHE_MERGES: AtomicU64 = AtomicU64::new(0);
 static Q8_0_FILE_CACHE_MERGED_BYTES: AtomicU64 = AtomicU64::new(0);
 static Q8_FILE_CACHE: OnceLock<Mutex<Q8FileCache>> = OnceLock::new();
 
+thread_local! {
+    static Q8_FILE_CACHE_CAPACITY_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
 #[derive(Debug, Default, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct Q8_0FileReadStats {
     pub read_calls: u64,
@@ -898,6 +903,35 @@ pub fn q8_0_file_read_stats() -> Q8_0FileReadStats {
         cache_bytes,
         cache_capacity_bytes: cache_capacity_bytes as u64,
     }
+}
+
+pub(crate) fn with_q8_file_cache_capacity_override<T>(
+    capacity: Option<usize>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let Some(capacity) = capacity else {
+        return f();
+    };
+
+    struct Q8FileCacheCapacityOverrideGuard {
+        previous: Option<usize>,
+    }
+
+    impl Drop for Q8FileCacheCapacityOverrideGuard {
+        fn drop(&mut self) {
+            Q8_FILE_CACHE_CAPACITY_OVERRIDE.with(|cell| cell.set(self.previous));
+            q8_file_cache_apply_capacity(q8_file_cache_capacity_bytes());
+        }
+    }
+
+    let previous = Q8_FILE_CACHE_CAPACITY_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(capacity));
+        previous
+    });
+    q8_file_cache_apply_capacity(q8_file_cache_capacity_bytes());
+    let _guard = Q8FileCacheCapacityOverrideGuard { previous };
+    f()
 }
 
 #[derive(Debug, Default)]
@@ -1108,6 +1142,9 @@ fn q8_file_cache_insert(path: PathBuf, offset: u64, bytes: &[u8]) {
 }
 
 fn q8_file_cache_capacity_bytes() -> usize {
+    if let Some(capacity) = Q8_FILE_CACHE_CAPACITY_OVERRIDE.with(|cell| cell.get()) {
+        return capacity;
+    }
     env::var(Q8_FILE_CACHE_BYTES_ENV)
         .ok()
         .and_then(|value| parse_byte_count(&value))
@@ -1606,7 +1643,7 @@ fn f16_bits_to_f32(bits: u16) -> f32 {
 mod tests {
     use super::{
         f16_bits_to_f32, parse_byte_count, q8_0_file_read_stats, q8_file_cache_get,
-        q8_file_cache_insert, CpuTensor, Q8_0FileBacking,
+        q8_file_cache_insert, with_q8_file_cache_capacity_override, CpuTensor, Q8_0FileBacking,
     };
     use crate::test_support::env_lock;
 
@@ -1656,6 +1693,37 @@ mod tests {
         assert_eq!(stats.cache_entries, 0);
         assert_eq!(stats.cache_bytes, 0);
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_file_cache_scoped_capacity_override_is_bounded_and_restored() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-scoped-{}",
+            std::process::id()
+        ));
+
+        let (hit, scoped_stats) = with_q8_file_cache_capacity_override(Some(8), || {
+            q8_file_cache_insert(path.clone(), 10, b"abcdefgh");
+            let mut out = [0_u8; 8];
+            let start = q8_0_file_read_stats();
+            let hit = q8_file_cache_get(&path, 10, &mut out);
+            (hit, q8_0_file_read_stats().saturating_delta_since(start))
+        });
+
+        assert!(hit);
+        assert_eq!(scoped_stats.cache_hits, 1);
+        assert_eq!(scoped_stats.cache_hit_bytes, 8);
+        assert_eq!(scoped_stats.cache_entries, 1);
+        assert_eq!(scoped_stats.cache_bytes, 8);
+        assert_eq!(scoped_stats.cache_capacity_bytes, 8);
+
+        let restored_stats = q8_0_file_read_stats();
+        assert_eq!(restored_stats.cache_capacity_bytes, 0);
+        assert_eq!(restored_stats.cache_entries, 0);
+        assert_eq!(restored_stats.cache_bytes, 0);
     }
 
     #[test]

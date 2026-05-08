@@ -18,8 +18,8 @@ use crate::{
     model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
     tensor::{
         dot_product, parse_byte_count_env, q8_0_file_read_stats, record_q8_0_file_read,
-        should_parallelize_linear_output, CpuTensor, Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats,
-        TensorShape, TensorStore,
+        should_parallelize_linear_output, with_q8_file_cache_capacity_override, CpuTensor,
+        Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, TensorShape, TensorStore,
     },
     BackendError, Result,
 };
@@ -1537,6 +1537,18 @@ impl LlamaInferenceSession {
         token_ids: &[u32],
         chunk_tokens: usize,
     ) -> Result<LlamaForwardTimings> {
+        let q8_file_cache_capacity =
+            prefill_layer_major_q8_file_cache_capacity_override(&self.weights);
+        with_q8_file_cache_capacity_override(q8_file_cache_capacity, || {
+            self.forward_prefill_layer_major_timed_fast_inner(token_ids, chunk_tokens)
+        })
+    }
+
+    fn forward_prefill_layer_major_timed_fast_inner(
+        &mut self,
+        token_ids: &[u32],
+        chunk_tokens: usize,
+    ) -> Result<LlamaForwardTimings> {
         if token_ids.is_empty() {
             return Ok(LlamaForwardTimings::default());
         }
@@ -2023,6 +2035,29 @@ fn structured_forward_memory_enabled() -> bool {
 
 fn prefill_layer_major_attribution_enabled() -> bool {
     env_flag_enabled("BACKENDINFERENCE_PREFILL_LAYER_MAJOR_ATTRIBUTION")
+}
+
+const Q8_FILE_CACHE_BYTES_ENV: &str = "BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES";
+const PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES_ENV: &str =
+    "BACKENDINFERENCE_PREFILL_LAYER_MAJOR_Q8_0_FILE_CACHE_BYTES";
+const DEFAULT_PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+fn prefill_layer_major_q8_file_cache_capacity_override(
+    weights: &LlamaLoadedWeights,
+) -> Option<usize> {
+    if !weights.has_lazy_q8_0_file_backing() {
+        return None;
+    }
+    if env::var(PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES_ENV).is_ok() {
+        return Some(
+            parse_byte_count_env(PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES_ENV)
+                .unwrap_or(DEFAULT_PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES),
+        );
+    }
+    if env::var(Q8_FILE_CACHE_BYTES_ENV).is_ok() {
+        return None;
+    }
+    Some(DEFAULT_PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES)
 }
 
 fn env_flag_enabled(key: &str) -> bool {
@@ -8354,6 +8389,144 @@ mod tests {
     }
 
     #[test]
+    fn prefill_layer_major_q8_cache_uses_scoped_default_only_for_lazy_q8() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let dense_weights = tiny_prefill_schedule_weights(
+            CpuTensor::from_f32("blk.0.attn_q.weight", vec![2, 2], vec![1.0; 4]).unwrap(),
+        );
+        assert_eq!(
+            prefill_layer_major_q8_file_cache_capacity_override(&dense_weights),
+            None
+        );
+
+        let lazy_q8_attention_q = CpuTensor::from_f32_with_source_type(
+            "blk.0.attn_q.weight",
+            vec![2, 2],
+            vec![1.0; 4],
+            Some(GgufTensorType::Q8_0),
+        )
+        .unwrap()
+        .with_q8_0_file_backing(Q8_0FileBacking::new("unused.gguf".into(), 0, 1));
+        let lazy_q8_weights = tiny_prefill_schedule_weights(lazy_q8_attention_q);
+        assert_eq!(
+            prefill_layer_major_q8_file_cache_capacity_override(&lazy_q8_weights),
+            Some(DEFAULT_PREFILL_LAYER_MAJOR_Q8_FILE_CACHE_BYTES)
+        );
+
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "64 MiB");
+        assert_eq!(
+            prefill_layer_major_q8_file_cache_capacity_override(&lazy_q8_weights),
+            None
+        );
+
+        std::env::set_var(
+            "BACKENDINFERENCE_PREFILL_LAYER_MAJOR_Q8_0_FILE_CACHE_BYTES",
+            "0",
+        );
+        assert_eq!(
+            prefill_layer_major_q8_file_cache_capacity_override(&lazy_q8_weights),
+            Some(0)
+        );
+
+        std::env::set_var(
+            "BACKENDINFERENCE_PREFILL_LAYER_MAJOR_Q8_0_FILE_CACHE_BYTES",
+            "1 MiB",
+        );
+        assert_eq!(
+            prefill_layer_major_q8_file_cache_capacity_override(&lazy_q8_weights),
+            Some(1024 * 1024)
+        );
+    }
+
+    #[test]
+    fn prefill_layer_major_scoped_q8_cache_reuses_file_reads_across_chunks() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        let _ = q8_0_file_read_stats();
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        for _ in 0..32 {
+            temp_file
+                .write_all(&f32_to_f16_bits(1.0).to_le_bytes())
+                .unwrap();
+            temp_file.write_all(&[0_u8; Q8_0_BLOCK_VALUES]).unwrap();
+        }
+        temp_file.flush().unwrap();
+
+        let config = LlamaModelConfig {
+            context_length: 2,
+            embedding_length: 32,
+            block_count: 1,
+            feed_forward_length: 32,
+            attention_head_count: 1,
+            attention_head_count_kv: 1,
+            rope_dimension_count: Some(32),
+            rope_freq_base: Some(10_000.0),
+            rope_scaling_type: None,
+            rope_scaling_factor: None,
+            rope_scaling_original_context_length: None,
+            rope_scaling_low_freq_factor: None,
+            rope_scaling_high_freq_factor: None,
+            rms_norm_epsilon: 1.0e-5,
+            vocab_size: Some(2),
+            file_type: None,
+        };
+        let dense_vector = |name: &str| CpuTensor::from_f32(name, vec![32], vec![1.0; 32]).unwrap();
+        let dense_matrix =
+            |name: &str| CpuTensor::from_f32(name, vec![32, 32], vec![0.0; 32 * 32]).unwrap();
+        let attention_q = CpuTensor::q8_0_file_backed_linear(
+            "blk.0.attn_q.weight",
+            TensorShape { dims: vec![32, 32] },
+            Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, 32),
+        );
+        let weights = LlamaLoadedWeights {
+            token_embedding: CpuTensor::from_f32(
+                "token_embd.weight",
+                vec![2, 32],
+                (0..64).map(|idx| idx as f32 * 0.001).collect(),
+            )
+            .unwrap(),
+            output_norm: dense_vector("output_norm.weight"),
+            output: None,
+            rope_freqs: None,
+            layers: vec![LlamaLayerWeights {
+                attention_norm: dense_vector("blk.0.attn_norm.weight"),
+                attention_q,
+                attention_k: dense_matrix("blk.0.attn_k.weight"),
+                attention_v: dense_matrix("blk.0.attn_v.weight"),
+                attention_output: dense_matrix("blk.0.attn_output.weight"),
+                ffn_norm: dense_vector("blk.0.ffn_norm.weight"),
+                ffn_gate: dense_matrix("blk.0.ffn_gate.weight"),
+                ffn_up: dense_matrix("blk.0.ffn_up.weight"),
+                ffn_down: dense_matrix("blk.0.ffn_down.weight"),
+            }],
+        };
+        let mut session = LlamaInferenceSession::new(config, weights).unwrap();
+        let start = q8_0_file_read_stats();
+
+        let timings = session
+            .forward_prefill_layer_major_timed_fast(&[0, 1], 1)
+            .unwrap();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert_eq!(timings.layers.len(), 1);
+        assert_eq!(session.kv_cache.position, 2);
+        assert_eq!(reads.read_calls, 1);
+        assert_eq!(
+            reads.read_bytes,
+            (Q8BlockReader::BLOCK_SIZE_BYTES * 32) as u64
+        );
+        assert_eq!(reads.cache_hits, 1);
+        assert_eq!(
+            reads.cache_hit_bytes,
+            (Q8BlockReader::BLOCK_SIZE_BYTES * 32) as u64
+        );
+    }
+
+    #[test]
     fn materialization_stats_quantify_lazy_q8_file_backing_tradeoff() {
         let lazy_q8_attention_q = CpuTensor::q8_0_file_backed_linear(
             "blk.0.attn_q.weight",
@@ -8614,6 +8787,7 @@ mod tests {
             "BACKENDINFERENCE_LINEAR_ACCUMULATION",
             "BACKENDINFERENCE_OUTPUT_PROJECTION_LAYOUT",
             "BACKENDINFERENCE_PREFILL_LAYER_MAJOR",
+            "BACKENDINFERENCE_PREFILL_LAYER_MAJOR_Q8_0_FILE_CACHE_BYTES",
             "BACKENDINFERENCE_PARALLEL_LINEAR",
             "BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS",
             "BACKENDINFERENCE_Q8_0_BLOCK_DOT",
