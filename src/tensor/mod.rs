@@ -173,6 +173,9 @@ impl Q8_0FileBacking {
             decode_q8_0_scales_from_bytes(out, scales);
             q8_file_cache_store_decoded_scales(&self.path, offset, scales);
         }
+        if let Some(blocks) = scale_status.decoded_scale_hit_blocks() {
+            record_q8_file_cache_decoded_scale_reuse(blocks);
+        }
         Ok(scale_status.decoded_scales_reused())
     }
 
@@ -184,7 +187,9 @@ impl Q8_0FileBacking {
     ) -> Result<Q8FileReadScaleStatus> {
         if out.is_empty() {
             return Ok(if cached_scales.is_some_and(|scales| scales.is_empty()) {
-                Q8FileReadScaleStatus::DecodedScalesReused
+                Q8FileReadScaleStatus::DecodedScalesReused {
+                    cache_hit_blocks: 0,
+                }
             } else {
                 Q8FileReadScaleStatus::NoScales
             });
@@ -216,14 +221,17 @@ impl Q8_0FileBacking {
             .as_ref()
             .and_then(|scales| scales.len().checked_mul(Q8_0_BLOCK_BYTES))
             .is_some_and(|scale_bytes| out.len() == scale_bytes);
-        let (ranges, decoded_scales_reused) =
+        let (ranges, decoded_scales_reused, decoded_scale_hit_blocks) =
             match q8_file_cache_prepare_read(&self.path, offset, out, cached_scales.as_deref_mut())
             {
                 Q8FileCacheRead::Hit {
                     decoded_scales_reused,
+                    decoded_scale_hit_blocks,
                 } => {
                     return Ok(if decoded_scales_reused {
-                        Q8FileReadScaleStatus::DecodedScalesReused
+                        Q8FileReadScaleStatus::DecodedScalesReused {
+                            cache_hit_blocks: decoded_scale_hit_blocks,
+                        }
                     } else {
                         Q8FileReadScaleStatus::NoScales
                     });
@@ -231,7 +239,8 @@ impl Q8_0FileBacking {
                 Q8FileCacheRead::Missing {
                     ranges,
                     decoded_scales_reused,
-                } => (ranges, decoded_scales_reused),
+                    decoded_scale_hit_blocks,
+                } => (ranges, decoded_scales_reused, decoded_scale_hit_blocks),
             };
         let file = self.file()?;
         for range in &ranges {
@@ -255,7 +264,9 @@ impl Q8_0FileBacking {
                 if decoded_scales_reused
                     && decode_q8_0_scales_from_byte_ranges(out, &ranges, scales)
                 {
-                    scale_status = Q8FileReadScaleStatus::DecodedScalesReused;
+                    scale_status = Q8FileReadScaleStatus::DecodedScalesReused {
+                        cache_hit_blocks: decoded_scale_hit_blocks,
+                    };
                 } else {
                     decode_q8_0_scales_from_bytes(out, scales);
                     scale_status = Q8FileReadScaleStatus::DecodedScalesReady;
@@ -276,19 +287,29 @@ impl Q8_0FileBacking {
 enum Q8FileReadScaleStatus {
     NoScales,
     DecodedScalesReady,
-    DecodedScalesReused,
+    DecodedScalesReused { cache_hit_blocks: usize },
 }
 
 impl Q8FileReadScaleStatus {
     fn scales_ready(self) -> bool {
         matches!(
             self,
-            Q8FileReadScaleStatus::DecodedScalesReady | Q8FileReadScaleStatus::DecodedScalesReused
+            Q8FileReadScaleStatus::DecodedScalesReady
+                | Q8FileReadScaleStatus::DecodedScalesReused { .. }
         )
     }
 
     fn decoded_scales_reused(self) -> bool {
-        matches!(self, Q8FileReadScaleStatus::DecodedScalesReused)
+        matches!(self, Q8FileReadScaleStatus::DecodedScalesReused { .. })
+    }
+
+    fn decoded_scale_hit_blocks(self) -> Option<usize> {
+        match self {
+            Q8FileReadScaleStatus::DecodedScalesReused { cache_hit_blocks } => {
+                (cache_hit_blocks > 0).then_some(cache_hit_blocks)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -946,6 +967,8 @@ static Q8_0_FILE_CACHE_EVICTIONS: AtomicU64 = AtomicU64::new(0);
 static Q8_0_FILE_CACHE_EVICTED_BYTES: AtomicU64 = AtomicU64::new(0);
 static Q8_0_FILE_CACHE_MERGES: AtomicU64 = AtomicU64::new(0);
 static Q8_0_FILE_CACHE_MERGED_BYTES: AtomicU64 = AtomicU64::new(0);
+static Q8_0_FILE_CACHE_DECODED_SCALE_HITS: AtomicU64 = AtomicU64::new(0);
+static Q8_0_FILE_CACHE_DECODED_SCALE_HIT_BLOCKS: AtomicU64 = AtomicU64::new(0);
 static Q8_FILE_CACHE: OnceLock<Mutex<Q8FileCache>> = OnceLock::new();
 
 thread_local! {
@@ -966,6 +989,8 @@ pub struct Q8_0FileReadStats {
     pub cache_evicted_bytes: u64,
     pub cache_merges: u64,
     pub cache_merged_bytes: u64,
+    pub cache_decoded_scale_hits: u64,
+    pub cache_decoded_scale_hit_blocks: u64,
     pub cache_entries: u64,
     pub cache_bytes: u64,
     pub cache_capacity_bytes: u64,
@@ -992,6 +1017,12 @@ impl Q8_0FileReadStats {
             cache_merged_bytes: self
                 .cache_merged_bytes
                 .saturating_sub(start.cache_merged_bytes),
+            cache_decoded_scale_hits: self
+                .cache_decoded_scale_hits
+                .saturating_sub(start.cache_decoded_scale_hits),
+            cache_decoded_scale_hit_blocks: self
+                .cache_decoded_scale_hit_blocks
+                .saturating_sub(start.cache_decoded_scale_hit_blocks),
             cache_entries: self.cache_entries,
             cache_bytes: self.cache_bytes,
             cache_capacity_bytes: self.cache_capacity_bytes,
@@ -1002,6 +1033,14 @@ impl Q8_0FileReadStats {
 pub(crate) fn record_q8_0_file_read(bytes: usize) {
     Q8_0_FILE_READ_CALLS.fetch_add(1, Ordering::Relaxed);
     Q8_0_FILE_READ_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+}
+
+fn record_q8_file_cache_decoded_scale_reuse(blocks: usize) {
+    if blocks == 0 {
+        return;
+    }
+    Q8_0_FILE_CACHE_DECODED_SCALE_HITS.fetch_add(1, Ordering::Relaxed);
+    Q8_0_FILE_CACHE_DECODED_SCALE_HIT_BLOCKS.fetch_add(blocks as u64, Ordering::Relaxed);
 }
 
 pub fn q8_0_file_read_stats() -> Q8_0FileReadStats {
@@ -1020,6 +1059,9 @@ pub fn q8_0_file_read_stats() -> Q8_0FileReadStats {
         cache_evicted_bytes: Q8_0_FILE_CACHE_EVICTED_BYTES.load(Ordering::Relaxed),
         cache_merges: Q8_0_FILE_CACHE_MERGES.load(Ordering::Relaxed),
         cache_merged_bytes: Q8_0_FILE_CACHE_MERGED_BYTES.load(Ordering::Relaxed),
+        cache_decoded_scale_hits: Q8_0_FILE_CACHE_DECODED_SCALE_HITS.load(Ordering::Relaxed),
+        cache_decoded_scale_hit_blocks: Q8_0_FILE_CACHE_DECODED_SCALE_HIT_BLOCKS
+            .load(Ordering::Relaxed),
         cache_entries,
         cache_bytes,
         cache_capacity_bytes: cache_capacity_bytes as u64,
@@ -1073,10 +1115,12 @@ struct Q8FileCacheEntry {
 enum Q8FileCacheRead {
     Hit {
         decoded_scales_reused: bool,
+        decoded_scale_hit_blocks: usize,
     },
     Missing {
         ranges: Vec<Q8FileCacheMissingRange>,
         decoded_scales_reused: bool,
+        decoded_scale_hit_blocks: usize,
     },
 }
 
@@ -1097,6 +1141,7 @@ fn q8_file_cache_prepare_read(
         .as_ref()
         .and_then(|scales| scales.len().checked_mul(Q8_0_BLOCK_BYTES))
         .is_some_and(|scale_bytes| out_len == scale_bytes);
+    let mut decoded_scale_hit_blocks = 0usize;
     let capacity = q8_file_cache_capacity_bytes();
     if capacity == 0 {
         q8_file_cache_apply_capacity(0);
@@ -1146,7 +1191,7 @@ fn q8_file_cache_prepare_read(
                 out[copy_start..copy_end]
                     .copy_from_slice(&entry.bytes[entry_start..entry_start + copy_len]);
                 if decoded_scales_reused {
-                    decoded_scales_reused = cached_scales.as_deref_mut().is_some_and(|scales| {
+                    let copied_scales = cached_scales.as_deref_mut().is_some_and(|scales| {
                         q8_file_cache_copy_decoded_scales(
                             entry,
                             entry_start,
@@ -1155,6 +1200,12 @@ fn q8_file_cache_prepare_read(
                             scales,
                         )
                     });
+                    if copied_scales {
+                        decoded_scale_hit_blocks += copy_len / Q8_0_BLOCK_BYTES;
+                    } else {
+                        decoded_scales_reused = false;
+                        decoded_scale_hit_blocks = 0;
+                    }
                 }
                 hit_bytes += copy_len;
                 touched = true;
@@ -1193,6 +1244,7 @@ fn q8_file_cache_prepare_read(
     if missing_ranges.is_empty() {
         return Q8FileCacheRead::Hit {
             decoded_scales_reused,
+            decoded_scale_hit_blocks,
         };
     }
     let miss_bytes = missing_ranges.iter().map(|range| range.len as u64).sum();
@@ -1201,6 +1253,7 @@ fn q8_file_cache_prepare_read(
     Q8FileCacheRead::Missing {
         ranges: missing_ranges,
         decoded_scales_reused,
+        decoded_scale_hit_blocks,
     }
 }
 
@@ -1208,6 +1261,7 @@ fn q8_file_cache_missing_all(len: usize) -> Q8FileCacheRead {
     Q8FileCacheRead::Missing {
         ranges: vec![Q8FileCacheMissingRange { out_start: 0, len }],
         decoded_scales_reused: false,
+        decoded_scale_hit_blocks: 0,
     }
 }
 
@@ -2425,6 +2479,8 @@ mod tests {
         assert_eq!(first_scales, vec![1.0, 2.0]);
         assert_eq!(first_stats.read_calls, 1);
         assert_eq!(first_stats.cache_misses, 1);
+        assert_eq!(first_stats.cache_decoded_scale_hits, 0);
+        assert_eq!(first_stats.cache_decoded_scale_hit_blocks, 0);
 
         let after_first = q8_0_file_read_stats();
         let mut second = vec![0_u8; Q8_0_BLOCK_BYTES * 2];
@@ -2441,6 +2497,8 @@ mod tests {
         assert_eq!(second_stats.read_bytes, 0);
         assert_eq!(second_stats.cache_hits, 1);
         assert_eq!(second_stats.cache_hit_bytes, (Q8_0_BLOCK_BYTES * 2) as u64);
+        assert_eq!(second_stats.cache_decoded_scale_hits, 1);
+        assert_eq!(second_stats.cache_decoded_scale_hit_blocks, 2);
 
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         let _ = std::fs::remove_file(path);
@@ -2497,6 +2555,8 @@ mod tests {
             partial_stats.cache_miss_bytes,
             (Q8_0_BLOCK_BYTES * 2) as u64
         );
+        assert_eq!(partial_stats.cache_decoded_scale_hits, 1);
+        assert_eq!(partial_stats.cache_decoded_scale_hit_blocks, 1);
 
         let after_partial = q8_0_file_read_stats();
         let mut cached_again = vec![0_u8; Q8_0_BLOCK_BYTES * 3];
@@ -2520,6 +2580,8 @@ mod tests {
             cached_again_stats.cache_hit_bytes,
             (Q8_0_BLOCK_BYTES * 3) as u64
         );
+        assert_eq!(cached_again_stats.cache_decoded_scale_hits, 1);
+        assert_eq!(cached_again_stats.cache_decoded_scale_hit_blocks, 3);
 
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         let _ = std::fs::remove_file(path);
@@ -2590,6 +2652,8 @@ mod tests {
         );
         assert_eq!(retained_stats.cache_entries, 1);
         assert_eq!(retained_stats.cache_bytes, (Q8_0_BLOCK_BYTES * 3) as u64);
+        assert_eq!(retained_stats.cache_decoded_scale_hits, 1);
+        assert_eq!(retained_stats.cache_decoded_scale_hit_blocks, 3);
 
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         let _ = std::fs::remove_file(path);
@@ -2637,6 +2701,8 @@ mod tests {
         assert_eq!(first_stats.read_bytes, 0);
         assert_eq!(first_stats.cache_hits, 1);
         assert_eq!(first_stats.cache_hit_bytes, (Q8_0_BLOCK_BYTES * 2) as u64);
+        assert_eq!(first_stats.cache_decoded_scale_hits, 0);
+        assert_eq!(first_stats.cache_decoded_scale_hit_blocks, 0);
 
         let after_upgrade = q8_0_file_read_stats();
         let mut second_scale_hit = vec![0_u8; Q8_0_BLOCK_BYTES * 2];
@@ -2652,6 +2718,8 @@ mod tests {
         assert_eq!(second_stats.read_bytes, 0);
         assert_eq!(second_stats.cache_hits, 1);
         assert_eq!(second_stats.cache_hit_bytes, (Q8_0_BLOCK_BYTES * 2) as u64);
+        assert_eq!(second_stats.cache_decoded_scale_hits, 1);
+        assert_eq!(second_stats.cache_decoded_scale_hit_blocks, 2);
 
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         let _ = std::fs::remove_file(path);

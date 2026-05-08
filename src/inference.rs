@@ -2176,7 +2176,7 @@ fn trace_forward_memory(phase: &str) {
     let q8_file_cache_mib = q8_reads.cache_bytes as f64 / (1024.0 * 1024.0);
     let q8_file_cache_capacity_mib = q8_reads.cache_capacity_bytes as f64 / (1024.0 * 1024.0);
     eprintln!(
-        "camelid_forward_memory_trace phase={phase} rss_kib={rss_kib} free_like_pages={free_like_pages} free_like_mib={free_like_mib} throttled_pages={throttled_pages} q8_file_read_calls={} q8_file_read_bytes={} q8_file_read_mib={q8_file_read_mib:.2} q8_file_cache_hits={} q8_file_cache_hit_bytes={} q8_file_cache_hit_mib={q8_file_cache_hit_mib:.2} q8_file_cache_misses={} q8_file_cache_miss_bytes={} q8_file_cache_miss_mib={q8_file_cache_miss_mib:.2} q8_file_cache_inserts={} q8_file_cache_insert_bytes={} q8_file_cache_insert_mib={q8_file_cache_insert_mib:.2} q8_file_cache_evictions={} q8_file_cache_evicted_bytes={} q8_file_cache_evicted_mib={q8_file_cache_evicted_mib:.2} q8_file_cache_merges={} q8_file_cache_merged_bytes={} q8_file_cache_merged_mib={q8_file_cache_merged_mib:.2} q8_file_cache_entries={} q8_file_cache_bytes={} q8_file_cache_mib={q8_file_cache_mib:.2} q8_file_cache_capacity_bytes={} q8_file_cache_capacity_mib={q8_file_cache_capacity_mib:.2}",
+        "camelid_forward_memory_trace phase={phase} rss_kib={rss_kib} free_like_pages={free_like_pages} free_like_mib={free_like_mib} throttled_pages={throttled_pages} q8_file_read_calls={} q8_file_read_bytes={} q8_file_read_mib={q8_file_read_mib:.2} q8_file_cache_hits={} q8_file_cache_hit_bytes={} q8_file_cache_hit_mib={q8_file_cache_hit_mib:.2} q8_file_cache_misses={} q8_file_cache_miss_bytes={} q8_file_cache_miss_mib={q8_file_cache_miss_mib:.2} q8_file_cache_inserts={} q8_file_cache_insert_bytes={} q8_file_cache_insert_mib={q8_file_cache_insert_mib:.2} q8_file_cache_evictions={} q8_file_cache_evicted_bytes={} q8_file_cache_evicted_mib={q8_file_cache_evicted_mib:.2} q8_file_cache_merges={} q8_file_cache_merged_bytes={} q8_file_cache_merged_mib={q8_file_cache_merged_mib:.2} q8_file_cache_decoded_scale_hits={} q8_file_cache_decoded_scale_hit_blocks={} q8_file_cache_entries={} q8_file_cache_bytes={} q8_file_cache_mib={q8_file_cache_mib:.2} q8_file_cache_capacity_bytes={} q8_file_cache_capacity_mib={q8_file_cache_capacity_mib:.2}",
         q8_reads.read_calls,
         q8_reads.read_bytes,
         q8_reads.cache_hits,
@@ -2189,6 +2189,8 @@ fn trace_forward_memory(phase: &str) {
         q8_reads.cache_evicted_bytes,
         q8_reads.cache_merges,
         q8_reads.cache_merged_bytes,
+        q8_reads.cache_decoded_scale_hits,
+        q8_reads.cache_decoded_scale_hit_blocks,
         q8_reads.cache_entries,
         q8_reads.cache_bytes,
         q8_reads.cache_capacity_bytes
@@ -2497,6 +2499,8 @@ fn q8_file_read_stats_has_activity(stats: Q8_0FileReadStats) -> bool {
         || stats.cache_evicted_bytes > 0
         || stats.cache_merges > 0
         || stats.cache_merged_bytes > 0
+        || stats.cache_decoded_scale_hits > 0
+        || stats.cache_decoded_scale_hit_blocks > 0
 }
 
 fn add_q8_file_read_stats_delta(target: &mut Q8_0FileReadStats, delta: Q8_0FileReadStats) {
@@ -2520,6 +2524,12 @@ fn add_q8_file_read_stats_delta(target: &mut Q8_0FileReadStats, delta: Q8_0FileR
     target.cache_merged_bytes = target
         .cache_merged_bytes
         .saturating_add(delta.cache_merged_bytes);
+    target.cache_decoded_scale_hits = target
+        .cache_decoded_scale_hits
+        .saturating_add(delta.cache_decoded_scale_hits);
+    target.cache_decoded_scale_hit_blocks = target
+        .cache_decoded_scale_hit_blocks
+        .saturating_add(delta.cache_decoded_scale_hit_blocks);
     target.cache_entries = delta.cache_entries;
     target.cache_bytes = delta.cache_bytes;
     target.cache_capacity_bytes = delta.cache_capacity_bytes;
