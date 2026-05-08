@@ -277,6 +277,16 @@ fn encodes_known_piece_with_space_prefix() {
 }
 
 #[test]
+fn parse_special_spm_uses_vocab_piece_after_control_dummy_prefix() {
+    let tokenizer = load_fixture(false, false, true);
+
+    assert_eq!(
+        tokenizer.encode("<s>hello", false, true).unwrap(),
+        vec![1, 6, 4]
+    );
+}
+
+#[test]
 fn falls_back_to_byte_tokens() {
     let tokenizer = load_fixture(false, false, false);
     assert_eq!(tokenizer.encode("!", false, false).unwrap(), vec![5]);
