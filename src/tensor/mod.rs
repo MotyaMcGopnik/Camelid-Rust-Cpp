@@ -145,16 +145,26 @@ impl Q8_0FileBacking {
         if out.is_empty() {
             return Ok(());
         }
-        if q8_file_cache_get(&self.path, offset, out) {
+        let Q8FileCacheRead::Missing { ranges } =
+            q8_file_cache_prepare_read(&self.path, offset, out)
+        else {
             return Ok(());
-        }
+        };
         let file = self.file()?;
-        file.read_exact_at(out, offset)
-            .map_err(|source| BackendError::Io {
-                path: self.path.clone(),
-                source,
+        for range in ranges {
+            let range_offset = offset.checked_add(range.out_start as u64).ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(
+                    "q8_0 file cache read offset overflow".to_string(),
+                )
             })?;
-        record_q8_0_file_read(out.len());
+            let out_end = range.out_start + range.len;
+            file.read_exact_at(&mut out[range.out_start..out_end], range_offset)
+                .map_err(|source| BackendError::Io {
+                    path: self.path.clone(),
+                    source,
+                })?;
+            record_q8_0_file_read(range.len);
+        }
         q8_file_cache_insert(self.path.clone(), offset, out);
         Ok(())
     }
@@ -903,6 +913,137 @@ struct Q8FileCacheEntry {
     bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Q8FileCacheRead {
+    Hit,
+    Missing {
+        ranges: Vec<Q8FileCacheMissingRange>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Q8FileCacheMissingRange {
+    out_start: usize,
+    len: usize,
+}
+
+fn q8_file_cache_prepare_read(path: &Path, offset: u64, out: &mut [u8]) -> Q8FileCacheRead {
+    let out_len = out.len();
+    let capacity = q8_file_cache_capacity_bytes();
+    if capacity == 0 {
+        q8_file_cache_apply_capacity(0);
+        return q8_file_cache_missing_all(out_len);
+    }
+    let Some(request_end) = offset.checked_add(out_len as u64) else {
+        record_q8_file_cache_miss(out_len);
+        return q8_file_cache_missing_all(out_len);
+    };
+    let Some(cache) = Q8_FILE_CACHE.get() else {
+        record_q8_file_cache_miss(out_len);
+        return q8_file_cache_missing_all(out_len);
+    };
+    let mut cache = cache.lock().expect("q8 file cache mutex poisoned");
+    cache.apply_capacity(capacity);
+
+    let mut missing_ranges = vec![Q8FileCacheMissingRange {
+        out_start: 0,
+        len: out_len,
+    }];
+    let mut touched_indices = Vec::new();
+    let mut hit_bytes = 0usize;
+
+    for (idx, entry) in cache.entries.iter().enumerate().rev() {
+        if entry.path != path {
+            continue;
+        }
+        let Some(entry_end) = entry.offset.checked_add(entry.bytes.len() as u64) else {
+            continue;
+        };
+        let overlap_start = entry.offset.max(offset);
+        let overlap_end = entry_end.min(request_end);
+        if overlap_start >= overlap_end {
+            continue;
+        }
+        let overlap_out_start = (overlap_start - offset) as usize;
+        let overlap_out_end = (overlap_end - offset) as usize;
+        let mut next_missing = Vec::new();
+        let mut touched = false;
+        for missing in missing_ranges {
+            let missing_end = missing.out_start + missing.len;
+            let copy_start = missing.out_start.max(overlap_out_start);
+            let copy_end = missing_end.min(overlap_out_end);
+            if copy_start < copy_end {
+                let entry_start = (offset + copy_start as u64 - entry.offset) as usize;
+                let copy_len = copy_end - copy_start;
+                out[copy_start..copy_end]
+                    .copy_from_slice(&entry.bytes[entry_start..entry_start + copy_len]);
+                hit_bytes += copy_len;
+                touched = true;
+                if missing.out_start < copy_start {
+                    next_missing.push(Q8FileCacheMissingRange {
+                        out_start: missing.out_start,
+                        len: copy_start - missing.out_start,
+                    });
+                }
+                if copy_end < missing_end {
+                    next_missing.push(Q8FileCacheMissingRange {
+                        out_start: copy_end,
+                        len: missing_end - copy_end,
+                    });
+                }
+            } else {
+                next_missing.push(missing);
+            }
+        }
+        missing_ranges = next_missing;
+        if touched {
+            touched_indices.push(idx);
+        }
+        if missing_ranges.is_empty() {
+            break;
+        }
+    }
+
+    if hit_bytes == 0 {
+        record_q8_file_cache_miss(out_len);
+        return q8_file_cache_missing_all(out_len);
+    }
+    q8_file_cache_mark_used(&mut cache, &touched_indices);
+    Q8_0_FILE_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+    Q8_0_FILE_CACHE_HIT_BYTES.fetch_add(hit_bytes as u64, Ordering::Relaxed);
+    if missing_ranges.is_empty() {
+        return Q8FileCacheRead::Hit;
+    }
+    let miss_bytes = missing_ranges.iter().map(|range| range.len as u64).sum();
+    Q8_0_FILE_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+    Q8_0_FILE_CACHE_MISS_BYTES.fetch_add(miss_bytes, Ordering::Relaxed);
+    Q8FileCacheRead::Missing {
+        ranges: missing_ranges,
+    }
+}
+
+fn q8_file_cache_missing_all(len: usize) -> Q8FileCacheRead {
+    Q8FileCacheRead::Missing {
+        ranges: vec![Q8FileCacheMissingRange { out_start: 0, len }],
+    }
+}
+
+fn q8_file_cache_mark_used(cache: &mut Q8FileCache, indices: &[usize]) {
+    if indices.is_empty() {
+        return;
+    }
+    let mut indices = indices.to_vec();
+    indices.sort_unstable();
+    indices.dedup();
+    let mut entries = Vec::with_capacity(indices.len());
+    for idx in indices.into_iter().rev() {
+        entries.push(cache.entries.remove(idx));
+    }
+    entries.reverse();
+    cache.entries.extend(entries);
+}
+
+#[cfg(test)]
 fn q8_file_cache_get(path: &Path, offset: u64, out: &mut [u8]) -> bool {
     let capacity = q8_file_cache_capacity_bytes();
     if capacity == 0 {
@@ -1465,7 +1606,7 @@ fn f16_bits_to_f32(bits: u16) -> f32 {
 mod tests {
     use super::{
         f16_bits_to_f32, parse_byte_count, q8_0_file_read_stats, q8_file_cache_get,
-        q8_file_cache_insert, CpuTensor,
+        q8_file_cache_insert, CpuTensor, Q8_0FileBacking,
     };
     use crate::test_support::env_lock;
 
@@ -1757,6 +1898,60 @@ mod tests {
         assert_eq!(stats.cache_entries, 1);
         assert_eq!(stats.cache_bytes, 16);
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_file_cache_file_read_reuses_partial_overlap_and_reads_gaps() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "0");
+        let _ = q8_0_file_read_stats();
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/camelid-q8-cache-partial-file-read-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"abcdefghijklmnopqrstuvwxyz").unwrap();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES", "32");
+        let backing = Q8_0FileBacking::new(path.clone(), 0, 0);
+
+        let start = q8_0_file_read_stats();
+        let mut seed = [0_u8; 8];
+        backing.read_exact_at_cached(&mut seed, 0).unwrap();
+        let seed_stats = q8_0_file_read_stats().saturating_delta_since(start);
+        assert_eq!(&seed, b"abcdefgh");
+        assert_eq!(seed_stats.read_calls, 1);
+        assert_eq!(seed_stats.read_bytes, 8);
+        assert_eq!(seed_stats.cache_misses, 1);
+        assert_eq!(seed_stats.cache_miss_bytes, 8);
+
+        let after_seed = q8_0_file_read_stats();
+        let mut partial = [0_u8; 16];
+        backing.read_exact_at_cached(&mut partial, 4).unwrap();
+        let partial_stats = q8_0_file_read_stats().saturating_delta_since(after_seed);
+        assert_eq!(&partial, b"efghijklmnopqrst");
+        assert_eq!(partial_stats.read_calls, 1);
+        assert_eq!(partial_stats.read_bytes, 12);
+        assert_eq!(partial_stats.cache_hits, 1);
+        assert_eq!(partial_stats.cache_hit_bytes, 4);
+        assert_eq!(partial_stats.cache_misses, 1);
+        assert_eq!(partial_stats.cache_miss_bytes, 12);
+        assert_eq!(partial_stats.cache_entries, 1);
+        assert_eq!(partial_stats.cache_bytes, 20);
+
+        let after_partial = q8_0_file_read_stats();
+        let mut cached_again = [0_u8; 16];
+        backing.read_exact_at_cached(&mut cached_again, 4).unwrap();
+        let cached_stats = q8_0_file_read_stats().saturating_delta_since(after_partial);
+        assert_eq!(&cached_again, b"efghijklmnopqrst");
+        assert_eq!(cached_stats.read_calls, 0);
+        assert_eq!(cached_stats.read_bytes, 0);
+        assert_eq!(cached_stats.cache_hits, 1);
+        assert_eq!(cached_stats.cache_hit_bytes, 16);
+        assert_eq!(cached_stats.cache_misses, 0);
+        assert_eq!(cached_stats.cache_miss_bytes, 0);
+
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

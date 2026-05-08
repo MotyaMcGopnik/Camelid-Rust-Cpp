@@ -5543,8 +5543,18 @@ fn should_use_borrowed_q8_0_block_dot(
 fn q8_0_block_dot_enabled() -> bool {
     // Keep known-good parity on the dequantized f32 path by default. The q8_0 x q8_0
     // block-dot path remains available as an explicit performance/diagnostic probe.
+    q8_0_env_flag_enabled("BACKENDINFERENCE_Q8_0_BLOCK_DOT")
+}
+
+fn q8_0_file_reader_block_dot_enabled() -> bool {
+    // Lazy/file-backed Q8 rows are a separate runtime surface. Keep them on the proven
+    // f32-input reader path unless a reader-specific probe is explicitly requested.
+    q8_0_env_flag_enabled("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT")
+}
+
+fn q8_0_env_flag_enabled(key: &str) -> bool {
     matches!(
-        env::var("BACKENDINFERENCE_Q8_0_BLOCK_DOT"),
+        env::var(key),
         Ok(value)
             if value.eq_ignore_ascii_case("1")
                 || value.eq_ignore_ascii_case("true")
@@ -5769,7 +5779,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
     })?;
     let mut output = vec![0.0_f32; output_len];
     let parallelize_output = should_parallelize_q8_0_file_reader_output(output_width);
-    let use_q8_0_block_dot = q8_0_block_dot_enabled();
+    let use_q8_0_block_dot = q8_0_file_reader_block_dot_enabled();
     let chunk_rows = q8_0_file_reader_chunk_rows_for_batch(
         row_bytes_len,
         output_width,
@@ -6320,7 +6330,7 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
         )
     })?;
     let output_width = output.len();
-    let use_q8_0_block_dot = q8_0_block_dot_enabled();
+    let use_q8_0_block_dot = q8_0_file_reader_block_dot_enabled();
     with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
         with_q8_0_file_reader_quantized_inputs(|quantized_input_blocks| {
             quantized_input_blocks.clear();
@@ -8557,6 +8567,7 @@ mod tests {
             "BACKENDINFERENCE_PARALLEL_LINEAR",
             "BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS",
             "BACKENDINFERENCE_Q8_0_BLOCK_DOT",
+            "BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT",
             "BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES",
             "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
             "BACKENDINFERENCE_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES",
@@ -8881,6 +8892,19 @@ mod tests {
 
         assert_eq!(actual.shape.dims, vec![1, 1]);
         assert_close(actual.data[0], 8.0);
+    }
+
+    #[test]
+    fn q8_0_file_reader_block_dot_uses_separate_opt_in() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        std::env::set_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT", "on");
+        assert!(q8_0_block_dot_enabled());
+        assert!(!q8_0_file_reader_block_dot_enabled());
+
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "on");
+        assert!(q8_0_file_reader_block_dot_enabled());
     }
 
     #[test]
@@ -9265,7 +9289,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
-        std::env::set_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT", "on");
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "on");
 
         let rows: Vec<Q8_0Block> = (0..3)
             .map(|row| Q8_0Block {
@@ -9299,7 +9323,7 @@ mod tests {
             .unwrap();
 
         assert_slice_close(&actual, &expected);
-        std::env::remove_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT");
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT");
     }
 
     #[test]
@@ -9387,7 +9411,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
-        std::env::set_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT", "on");
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "on");
 
         let rows: Vec<Q8_0Block> = (0..4)
             .map(|row| Q8_0Block {
@@ -9431,7 +9455,7 @@ mod tests {
         .unwrap();
 
         assert_slice_close(&actual.data, &expected);
-        std::env::remove_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT");
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT");
     }
 
     #[test]
@@ -10557,6 +10581,7 @@ mod tests {
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
         std::env::set_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT", "on");
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "on");
         std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
 
         let input_values = (0..32)
@@ -10617,6 +10642,7 @@ mod tests {
             .q8_direct_decoded_component_delta
             .is_some_and(|delta| delta.is_finite()));
         std::env::remove_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT");
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT");
     }
 
     #[test]
