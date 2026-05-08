@@ -162,6 +162,28 @@ export default function ChatWorkspace({
     selectedModel ? selectedModelName : 'Choose a local model',
     `Local ${CHAT_DEMO_TOKEN_CAP}-token preview`,
   ]
+  const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
+  const readinessLabel = selectedModelRunnable
+    ? 'Ready for local chat'
+    : supportBlocked
+      ? 'Exact support row required'
+      : selectedModel
+        ? 'Waiting for runtime readiness'
+        : 'Choose a model to begin'
+  const starterPrompts = [
+    {
+      label: 'Smoke reply',
+      prompt: 'Reply with one concise sentence proving the local chat path is awake.',
+    },
+    {
+      label: 'Model summary',
+      prompt: 'In one short paragraph, summarize the loaded local model and the support contract Camelid is using.',
+    },
+    {
+      label: 'Guardrail check',
+      prompt: 'Explain in plain English why Camelid requires loaded_now, generation_ready, and an exact compatibility row before chat unlocks.',
+    },
+  ]
 
   const renderCapabilityStrip = (stage = false) => (
     <div className={`chat-capability-strip ${stage ? 'chat-capability-strip-stage' : ''}`} aria-label="Camelid support contract and chat readiness">
@@ -244,29 +266,23 @@ export default function ChatWorkspace({
       <div className={`chat-canvas ${isFreshThread ? 'chat-canvas-empty' : ''}`}>
         {isFreshThread ? (
           <div className="chat-empty-shell chat-empty-shell-gemini">
-            <div className="chat-empty-stage chat-empty-stage-clean">
+            <div className={`chat-empty-stage chat-empty-stage-clean chat-empty-stage-product is-${readinessState}`}>
               <div className="chat-empty-hero chat-empty-hero-gemini chat-empty-hero-clean">
-                <div className="chat-empty-orb" aria-hidden="true">
+                <div className="chat-empty-orb chat-empty-orb-product" aria-hidden="true">
                   <span>C</span>
                   <i />
                 </div>
                 <p className="chat-empty-greeting">Camelid local chat</p>
                 <h2>{emptyHeroTitle}</h2>
                 <p className="hero-summary">{emptyHeroSummary}</p>
-                <div className="chat-empty-proofbar" aria-label="Current chat guard summary">
+                <div className={`chat-empty-readiness-ribbon is-${readinessState}`} aria-label="Current chat readiness">
+                  <span className="readiness-ribbon-dot" aria-hidden="true" />
+                  <strong>{readinessLabel}</strong>
+                  <small>{selectedModel ? selectedModelName : 'No local model selected'}</small>
+                </div>
+                <div className="chat-empty-proofbar chat-empty-proofbar-product" aria-label="Current chat guard summary">
                   {proofPills.map((pill) => <span key={pill}>{pill}</span>)}
                 </div>
-                <p className="chat-empty-contract-note">Chat becomes available once the selected local model is loaded and ready.</p>
-              </div>
-
-              <div className="chat-empty-readiness chat-empty-readiness-ledger" aria-label="Local chat readiness summary">
-                {readinessFacts.map((item) => (
-                  <div key={item.label} className={`chat-empty-readiness-card ${item.tone ? `is-${item.tone}` : ''}`}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                    <small>{item.copy}</small>
-                  </div>
-                ))}
               </div>
 
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean">
@@ -274,13 +290,42 @@ export default function ChatWorkspace({
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
                   <div className="composer-gemini-tools composer-gemini-tools-stage composer-gemini-tools-stage-clean">
                     {renderModelPicker()}
+                    <span className={`composer-meta-pill composer-meta-pill-readiness is-${readinessState}`}>{readinessLabel}</span>
                     {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Library</button>}
                   </div>
                   <div className="composer-gemini-actions composer-gemini-actions-stage">
                     <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? 'Sending…' : 'Send'}</button>
                   </div>
                 </div>
-                <p className="composer-gemini-disclaimer">Raw local replies are capped at {CHAT_DEMO_TOKEN_CAP} demo tokens until longer-generation polish is validated.</p>
+                <div className="composer-gemini-disclaimer composer-gemini-disclaimer-product">
+                  <span>Raw local replies are capped at {CHAT_DEMO_TOKEN_CAP} demo tokens until longer-generation polish is validated.</span>
+                  <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>View support contract</button>
+                </div>
+              </div>
+
+              <div className="chat-starter-chips chat-starter-chips-centered chat-starter-chips-stage" aria-label="Starter prompts">
+                {starterPrompts.map((starter) => (
+                  <button
+                    key={starter.label}
+                    type="button"
+                    className="chat-starter-chip chat-starter-chip-stage chat-starter-chip-product"
+                    onClick={() => setComposer(starter.prompt)}
+                    disabled={!selectedModelRunnable || sending}
+                    title={selectedModelRunnable ? starter.prompt : 'Starter prompts unlock after a model is ready and supported.'}
+                  >
+                    {starter.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="chat-empty-readiness chat-empty-readiness-ledger chat-empty-readiness-product" aria-label="Local chat readiness summary">
+                {readinessFacts.map((item) => (
+                  <div key={item.label} className={`chat-empty-readiness-card ${item.tone ? `is-${item.tone}` : ''}`}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                    <small>{item.copy}</small>
+                  </div>
+                ))}
               </div>
 
               <p className="chat-empty-status-note">{selectedModelMeta}</p>
