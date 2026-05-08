@@ -305,6 +305,33 @@ export default function ChatWorkspace({
     ? compatibilityHintCopy(selectedCompatibilityHint)
     : 'Choose a model before inferring any support boundary. Camelid will not promote filenames or saved paths into compatibility claims.'
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
+  const runtimeStatusLabel = selectedModelRunnable
+    ? 'Local chat ready'
+    : selectedRuntimeReady
+      ? 'Runtime ready, support gated'
+      : runtime?.loaded_now
+        ? 'Loaded, not generation-ready'
+        : 'No generation-ready model'
+  const runtimeStatusCopy = selectedModelRunnable
+    ? `${selectedModelName} is loaded now and generation_ready=true.`
+    : selectedRuntimeReady
+      ? 'The runtime is ready; Camelid still needs an exact supported row before chat unlocks.'
+      : runtime?.loaded_now
+        ? 'Wait for generation_ready=true before sending prompts.'
+        : 'Load a local GGUF from Library to start the readiness check.'
+  const supportStatusLabel = selectedModelCapabilitySupported
+    ? 'Exact row supported'
+    : selectedModel
+      ? selectedCompatibilityLabel
+      : 'Choose model first'
+  const supportStatusCopy = selectedModelCapabilitySupported
+    ? 'COMPATIBILITY.md and /api/capabilities agree for this model and quant.'
+    : selectedModel
+      ? selectedCompatibilityCopy
+      : 'Camelid does not infer broad support from filenames, families, or saved paths.'
+  const readinessFinePrint = selectedModelRunnable
+    ? 'Ready for this loaded exact row only. Broader model, quant, context, and throughput claims still follow the published support contract.'
+    : 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
   const emptyHeroEyebrow = 'Camelid'
   const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
@@ -378,6 +405,19 @@ export default function ChatWorkspace({
                 {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
               </div>
 
+              <div className={`chat-readiness-strip is-${readinessState}`} aria-label="Chat readiness and support boundary">
+                <div className="chat-readiness-card">
+                  <span>Runtime</span>
+                  <strong>{runtimeStatusLabel}</strong>
+                  <small>{runtimeStatusCopy}</small>
+                </div>
+                <div className="chat-readiness-card">
+                  <span>Support</span>
+                  <strong>{supportStatusLabel}</strong>
+                  <small>{supportStatusCopy}</small>
+                </div>
+              </div>
+
               <div className="composer composer-gemini composer-gemini-stage composer-gemini-stage-clean composer-gemini-product">
                 <textarea className="composer-input composer-input-gemini composer-input-gemini-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : 'Load a model first'} disabled={sending || !selectedModelRunnable} />
                 <div className="composer-gemini-footer composer-gemini-footer-stage composer-gemini-footer-stage-clean">
@@ -389,6 +429,7 @@ export default function ChatWorkspace({
                     <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{sending ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
                   </div>
                 </div>
+                <p className={`composer-gemini-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
               </div>
             </div>
           </div>
