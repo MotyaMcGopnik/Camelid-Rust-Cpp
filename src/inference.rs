@@ -6527,10 +6527,11 @@ fn q8_0_file_reader_chunk_rows(row_bytes_len: usize, output_width: usize) -> Res
         )
     })?;
     let two_chunk_bytes = chunk_bytes.saturating_mul(2);
-    // Llama 3 8B Q8_0 FFN matrices sit just under two 32 MiB chunks. Reading those
-    // near-two-chunk tensors as one bounded burst cuts one syscall/read phase per
+    // Llama 3 8B Q8_0 FFN matrices sit just under two 32 MiB chunks; other exact
+    // tracked Q8 shapes may land exactly on the two-chunk boundary. Reading those
+    // one-or-two-chunk tensors as one bounded burst cuts one syscall/read phase per
     // tensor without changing file-backed output values or enabling the global Q8 cache.
-    if budget_rows < output_width && tensor_bytes < two_chunk_bytes {
+    if budget_rows < output_width && tensor_bytes <= two_chunk_bytes {
         return Ok(output_width);
     }
     Ok(budget_rows)
@@ -8246,7 +8247,8 @@ mod tests {
             32
         );
         assert_eq!(q8_0_file_reader_chunk_rows(32, 63).unwrap(), 63);
-        assert_eq!(q8_0_file_reader_chunk_rows(32, 64).unwrap(), 32);
+        assert_eq!(q8_0_file_reader_chunk_rows(32, 64).unwrap(), 64);
+        assert_eq!(q8_0_file_reader_chunk_rows(32, 65).unwrap(), 32);
 
         std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES", "1 KiB");
         std::env::set_var(
@@ -9228,7 +9230,7 @@ mod tests {
         );
 
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
-        let rows: Vec<Q8_0Block> = (0..4)
+        let rows: Vec<Q8_0Block> = (0..5)
             .map(|row| Q8_0Block {
                 scale: f16_bits_to_f32(f32_to_f16_bits(0.25 + row as f32 * 0.125)),
                 quants: std::array::from_fn(|idx| idx as i8 - 8 + row as i8),
@@ -9268,7 +9270,7 @@ mod tests {
         let reads = q8_0_file_read_stats().saturating_delta_since(start);
 
         assert_slice_close(&actual, &expected.data);
-        assert_eq!(reads.read_calls, 2);
+        assert_eq!(reads.read_calls, 3);
         assert_eq!(
             reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
@@ -9277,7 +9279,7 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_file_backed_accumulate_coalesces_near_two_chunk_tensor_read() {
+    fn q8_0_file_backed_accumulate_coalesces_exact_two_chunk_tensor_read() {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
@@ -9287,7 +9289,7 @@ mod tests {
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
         );
 
-        let rows: Vec<Q8_0Block> = (0..3)
+        let rows: Vec<Q8_0Block> = (0..4)
             .map(|row| Q8_0Block {
                 scale: f16_bits_to_f32(f32_to_f16_bits(0.25 + row as f32 * 0.125)),
                 quants: std::array::from_fn(|idx| idx as i8 - 8 + row as i8),
@@ -9403,7 +9405,7 @@ mod tests {
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
         );
 
-        let rows: Vec<Q8_0Block> = (0..4)
+        let rows: Vec<Q8_0Block> = (0..5)
             .map(|row| Q8_0Block {
                 scale: 0.125 + row as f32 * 0.03125,
                 quants: std::array::from_fn(|idx| idx as i8 - 8 + row as i8),
@@ -9426,7 +9428,7 @@ mod tests {
         let input = CpuTensor::from_f32("input", vec![3, 32], input_values).unwrap();
         let weight = CpuTensor::from_f32_with_q8_0_blocks(
             "weight",
-            vec![4, 32],
+            vec![rows.len(), 32],
             dequantized_q8_0_rows(&rows),
             rows.clone(),
         )
@@ -9447,7 +9449,7 @@ mod tests {
         let reads = q8_0_file_read_stats().saturating_delta_since(start);
 
         assert_slice_close(&actual.data, &expected.data);
-        assert_eq!(reads.read_calls, 2);
+        assert_eq!(reads.read_calls, 3);
         assert_eq!(
             reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
@@ -9518,7 +9520,7 @@ mod tests {
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
         );
 
-        let rows: Vec<Q8_0Block> = (0..4)
+        let rows: Vec<Q8_0Block> = (0..5)
             .map(|row| Q8_0Block {
                 scale: 0.125 + row as f32 * 0.03125,
                 quants: std::array::from_fn(|idx| idx as i8 - 7 + row as i8),
@@ -9541,7 +9543,7 @@ mod tests {
         let input = CpuTensor::from_f32("input", vec![3, 32], input_values).unwrap();
         let weight = CpuTensor::from_f32_with_q8_0_blocks(
             "weight",
-            vec![4, 32],
+            vec![rows.len(), 32],
             dequantized_q8_0_rows(&rows),
             rows.clone(),
         )
@@ -9575,14 +9577,14 @@ mod tests {
 
         assert_slice_close(&first.data, &expected.data);
         assert_slice_close(&second.data, &expected.data);
-        assert_eq!(first_reads.read_calls, 2);
+        assert_eq!(first_reads.read_calls, 3);
         assert_eq!(
             first_reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
         );
         assert_eq!(second_reads.read_calls, 0);
         assert_eq!(second_reads.read_bytes, 0);
-        assert_eq!(second_reads.cache_hits, 2);
+        assert_eq!(second_reads.cache_hits, 3);
         assert_eq!(
             second_reads.cache_hit_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
@@ -9602,7 +9604,7 @@ mod tests {
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
         );
 
-        let rows: Vec<Q8_0Block> = (0..4)
+        let rows: Vec<Q8_0Block> = (0..5)
             .map(|row| Q8_0Block {
                 scale: 0.125 + row as f32 * 0.03125,
                 quants: std::array::from_fn(|idx| idx as i8 - 9 + row as i8),
@@ -9625,7 +9627,7 @@ mod tests {
         let input = CpuTensor::from_f32("output_norm_batch", vec![3, 32], input_values).unwrap();
         let expected_weight = CpuTensor::from_f32_with_q8_0_blocks(
             "expected.weight",
-            vec![4, 32],
+            vec![rows.len(), 32],
             dequantized_q8_0_rows(&rows),
             rows.clone(),
         )
@@ -9634,7 +9636,9 @@ mod tests {
             matmul_rhs_transposed_q8_0_block_dot(&input, &expected_weight, "expected").unwrap();
         let output_weight = CpuTensor::q8_0_file_backed_linear(
             "output.weight",
-            crate::tensor::TensorShape { dims: vec![32, 4] },
+            crate::tensor::TensorShape {
+                dims: vec![32, rows.len()],
+            },
             Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len()),
         );
         let start = q8_0_file_read_stats();
@@ -9642,9 +9646,9 @@ mod tests {
         let actual = output_projection_runtime(&input, &output_weight, "actual", false).unwrap();
         let reads = q8_0_file_read_stats().saturating_delta_since(start);
 
-        assert_eq!(actual.shape.dims, vec![3, 4]);
+        assert_eq!(actual.shape.dims, vec![3, 5]);
         assert_slice_close(&actual.data, &expected.data);
-        assert_eq!(reads.read_calls, 2);
+        assert_eq!(reads.read_calls, 3);
         assert_eq!(
             reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * rows.len()) as u64
