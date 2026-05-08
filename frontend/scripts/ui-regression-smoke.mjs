@@ -27,6 +27,13 @@ assert.match(readmeSource, /dark, collapsed-rail chat surface/i, 'README caption
 
 const chatWorkspaceSource = readFileSync(new URL('../src/views/ChatWorkspace.jsx', import.meta.url), 'utf8')
 const dashboardHookSource = readFileSync(new URL('../src/hooks/useDashboardData.js', import.meta.url), 'utf8')
+const visibleUiSources = [
+  '../src/views/ChatWorkspace.jsx',
+  '../src/views/ApiView.jsx',
+  '../src/views/SystemView.jsx',
+  '../src/views/ModelsView.jsx',
+  '../src/hooks/useDashboardData.js',
+].map((path) => [path, readFileSync(new URL(path, import.meta.url), 'utf8')])
 assert.match(chatWorkspaceSource, /pending is-streaming/, 'pending assistant row should use the same streaming Pac-Man state as live token rows')
 assert.match(chatWorkspaceSource, /splitFenceInfo/, 'streaming/incomplete fenced code blocks should be parsed as code instead of prose')
 assert.match(chatWorkspaceSource, /pushCodeBlock/, 'code block rendering should stay centralized for complete and incomplete fences')
@@ -34,17 +41,22 @@ assert.match(chatWorkspaceSource, /streaming=\{Boolean\(message\.streaming\)\}/,
 assert.match(chatWorkspaceSource, /incomplete:\s*incompleteFence,\s*streaming/, 'unclosed streaming fences should reach the code-card renderer as active incomplete code')
 assert.match(chatWorkspaceSource, /aria-busy=\{stillGenerating \? 'true' : undefined\}/, 'incomplete streaming code cards should expose busy state')
 assert.match(chatWorkspaceSource, /hasOpenCodeFence/, 'streaming rows should detect open fenced code so the active state can call that out')
-assert.match(chatWorkspaceSource, /function StreamingStatus[\s\S]*Still generating — response is active/, 'live assistant rows should keep an explicit still-generating status while the backend is active')
-assert.match(chatWorkspaceSource, /Still generating — code block is still open/, 'streaming open code fences should visibly say the code block is still incomplete')
+assert.match(chatWorkspaceSource, /ACTIVE_STREAMING_LABEL\s*=\s*'Still generating — response is active'/, 'live assistant rows should keep an explicit still-generating status while the backend is active')
+assert.match(chatWorkspaceSource, /OPEN_CODE_STREAMING_LABEL\s*=\s*'Still generating — code block is still open'/, 'streaming open code fences should visibly say the code block is still incomplete')
 assert.match(chatWorkspaceSource, /assistantStreaming && <StreamingStatus/, 'token-streaming assistant rows should render the active status badge before streamed content')
-assert.match(chatWorkspaceSource, /Still generating; waiting for the first token/, 'pre-token pending rows should visibly say the backend is still generating')
+assert.match(chatWorkspaceSource, /FIRST_TOKEN_STREAMING_LABEL\s*=\s*'Still generating; waiting for the first token'/, 'pre-token pending rows should visibly say the backend is still generating')
+assert.match(chatWorkspaceSource, /aria-busy=\{assistantStreaming \? 'true' : undefined\}/, 'streaming assistant rows should expose row-level busy state while text is incomplete')
+assert.match(chatWorkspaceSource, /data-streaming-state=\{assistantStreaming \? 'active' : undefined\}/, 'streaming assistant rows should expose an active state marker for regression coverage')
+assert.match(chatWorkspaceSource, /pending is-streaming" aria-busy="true" data-streaming-state="active"/, 'pre-token pending rows should be active while the backend is thinking')
 assert.match(chatWorkspaceSource, /hasStreamingAssistant[\s\S]*generationActive/, 'a persisted streaming row should keep the UI active even if the send call state changes')
 assert.match(chatWorkspaceSource, /message-code-card-status[^>]*>Still generating</, 'incomplete streaming code blocks should show a still-generating badge')
 assert.match(dashboardHookSource, /function extractSseEvents/, 'stream parser should keep SSE boundary handling centralized')
 assert.match(dashboardHookSource, /replace\(/, 'stream parser should normalize line endings before splitting SSE events')
 assert.match(dashboardHookSource, /split\('\\n\\n'\)/, 'stream parser should split normalized SSE events on blank lines for partial rendering')
 assert.match(dashboardHookSource, /finish_reason:\s*'error',[\s\S]*streaming:\s*false/, 'failed generations should clear streaming state instead of leaving active pellets/status forever')
-assert.doesNotMatch(chatWorkspaceSource, /\b(OpenAI|ChatGPT|Claude|Gemini)\b/, 'Chat visible copy should not mention competitor brands')
+for (const [path, source] of visibleUiSources) {
+  assert.doesNotMatch(source, /\b(OpenAI|ChatGPT|Claude|Gemini)\b/, `${path} visible copy should not mention competitor brands`)
+}
 assert.doesNotMatch(chatWorkspaceSource, /max[-_\s]?tokens?|token\s+limit/i, 'Chat UI should not expose a visible max-token picker or cap')
 
 const componentCss = readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8')
@@ -56,14 +68,19 @@ assert.match(componentCss, /\.message-live-status\s*{[^}]*border-radius:\s*999px
 assert.match(componentCss, /\.message-live-status-compact\s*{[^}]*margin-top:\s*0[^}]*margin-bottom:\s*12px/s, 'active badges should sit above streamed content instead of hiding below partial code')
 assert.match(componentCss, /\.message-code-card\.is-generating\s*{/, 'incomplete streaming code cards should have an active visual treatment')
 const pacmanRule = componentCss.match(/\/\* Tiny Pac-Man assistant marker[\s\S]*?\.message-row-gemini\.assistant\.is-streaming::before/s)?.[0] || ''
-assert.match(pacmanRule, /width:\s*14px/, 'Pac-Man should stay small')
-assert.match(pacmanRule, /height:\s*14px/, 'Pac-Man should stay small')
+assert.match(pacmanRule, /--assistant-pacman-size:\s*12px/, 'Pac-Man should stay small')
+assert.match(pacmanRule, /width:\s*var\(--assistant-pacman-size\)/, 'Pac-Man width should stay tied to the small game marker size')
+assert.match(pacmanRule, /height:\s*var\(--assistant-pacman-size\)/, 'Pac-Man height should stay tied to the small game marker size')
 assert.match(pacmanRule, /transform:\s*none/, 'Pac-Man should not bob or float')
+assert.match(pacmanRule, /position:\s*absolute/, 'Pac-Man should stay anchored rather than float in the text flow')
 const streamingPelletRule = componentCss.match(/\.message-row-gemini\.assistant\.is-streaming::after\s*{[\s\S]*?\n}/)?.[0] || ''
 assert.match(streamingPelletRule, /transform:\s*none/, 'streaming pellets should not bob or float')
+assert.match(streamingPelletRule, /width:\s*24px/, 'streaming pellets should stay small and game-like')
 const pelletKeyframes = componentCss.match(/@keyframes camelid-pellets-feed\s*{[\s\S]*?\n}/)?.[0] || ''
 assert.doesNotMatch(pelletKeyframes, /translateY|scale[XY]?\(/, 'pellet animation should stay game-steady without bobbing or scaling')
+const pacmanAndPellets = `${pacmanRule}\n${streamingPelletRule}\n${pelletKeyframes}`
 assert.doesNotMatch(componentCss, /camelid-pacman-bob/, 'Pac-Man should stay game-steady instead of bobbing')
+assert.doesNotMatch(pacmanAndPellets, /translateY|translate3d|scale[XY]?\(/, 'Pac-Man and pellet styling should not bob, float, or scale')
 assert.doesNotMatch(componentCss, /assistant::after\s*{/, 'completed assistant rows must not keep pellet animation')
 
 console.log('UI regression smoke passed')

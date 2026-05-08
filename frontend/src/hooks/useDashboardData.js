@@ -449,7 +449,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [loadingModelId, setLoadingModelId] = useState('')
   const [pendingChat, setPendingChat] = useState(null)
   const [registerForm, setRegisterForm] = useState({ id: '', name: '', model_path: '', runtime_model_name: '' })
-  const [externalForm, setExternalForm] = useState({ id: '', name: '', source: 'OpenAI', api_base: 'https://api.openai.com/v1', api_key: '', model_name: '' })
+  const [externalForm, setExternalForm] = useState({ id: '', name: '', source: 'Hosted API', api_base: 'https://api.example/v1', api_key: '', model_name: '' })
   const [localModels, setLocalModels] = useState(() => readJsonStorage(LOCAL_MODELS_STORAGE_KEY, []).map(normalizeLocalModelRecord).filter(Boolean))
   const [localConversations, setLocalConversations] = useState(() => normalizeStoredConversations(readJsonStorage(CONVERSATIONS_STORAGE_KEY, [])))
   const [localMemories, setLocalMemories] = useState(() => readJsonStorage(MEMORIES_STORAGE_KEY, []))

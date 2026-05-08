@@ -36,7 +36,7 @@ function formatModelMeta(model) {
 }
 
 function formatModelOrigin(model) {
-  if (isExternalModel(model)) return 'Connected through an external OpenAI-compatible API.'
+  if (isExternalModel(model)) return 'Connected through an external /v1-compatible API.'
   if (model.status === 'registered') return 'Imported from a local GGUF file and waiting for its first successful load.'
   if (model.status === 'downloading') return 'Downloading into Camelid-managed storage.'
   if (model.status === 'canceling') return 'Stopping the download and cleaning up the partial file.'
@@ -941,7 +941,7 @@ export default function ModelsView({
           <div className="models-section-heading">
             <div>
               <p className="panel-kicker">Hosted API setup</p>
-              <h3>Planned OpenAI-compatible API link</h3>
+              <h3>Planned hosted /v1-compatible API link</h3>
             </div>
             <p className="model-summary">This form preserves the intended fields, but it stays disabled because the current Camelid API does not expose hosted-provider routing.</p>
           </div>
@@ -953,7 +953,7 @@ export default function ModelsView({
             </div>
             <div className="composer-actions import-grid import-grid-advanced">
               <input value={externalForm.source} onChange={(e) => setExternalForm((form) => ({ ...form, source: e.target.value }))} placeholder="Provider label" />
-              <input value={externalForm.api_base} onChange={(e) => setExternalForm((form) => ({ ...form, api_base: e.target.value }))} placeholder="https://api.openai.com/v1" />
+              <input value={externalForm.api_base} onChange={(e) => setExternalForm((form) => ({ ...form, api_base: e.target.value }))} placeholder="https://api.example/v1" />
             </div>
             <div className="composer-actions import-grid import-grid-advanced">
               <input value={externalForm.id} onChange={(e) => setExternalForm((form) => ({ ...form, id: e.target.value }))} placeholder="Internal model ID (optional)" />

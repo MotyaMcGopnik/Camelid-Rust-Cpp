@@ -230,7 +230,11 @@ const hasOpenCodeFence = (content) => {
   return Boolean(matches && matches.length % 2 === 1)
 }
 
-function StreamingStatus({ elapsedSeconds, label = 'Still generating — response is active', compact = false }) {
+const ACTIVE_STREAMING_LABEL = 'Still generating — response is active'
+const OPEN_CODE_STREAMING_LABEL = 'Still generating — code block is still open'
+const FIRST_TOKEN_STREAMING_LABEL = 'Still generating; waiting for the first token'
+
+function StreamingStatus({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact = false }) {
   return (
     <div className={`message-live-status ${compact ? 'message-live-status-compact' : ''}`} role="status" aria-live="polite">
       <span className="message-live-dot" aria-hidden="true" />
@@ -503,15 +507,20 @@ export default function ChatWorkspace({
                 const messageContent = cleanLegacyDemoCapCopy(message.content)
                 const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
                 const liveStatusLabel = hasOpenCodeFence(messageContent)
-                  ? 'Still generating — code block is still open'
-                  : 'Still generating — response is active'
+                  ? OPEN_CODE_STREAMING_LABEL
+                  : ACTIVE_STREAMING_LABEL
                 const hasTokenMetrics = message.role === 'assistant' && (
                   message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined ||
                   message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined
                 )
 
                 return (
-                  <article key={message.id} className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}>
+                  <article
+                    key={message.id}
+                    className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}
+                    aria-busy={assistantStreaming ? 'true' : undefined}
+                    data-streaming-state={assistantStreaming ? 'active' : undefined}
+                  >
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
                       {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact />}
                       {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} streaming={Boolean(message.streaming)} /> : <p>{messageContent}</p>}
@@ -534,9 +543,9 @@ export default function ChatWorkspace({
                       </div>
                     </article>
                   )}
-                  <article className="message-row message-row-gemini assistant pending is-streaming">
+                  <article className="message-row message-row-gemini assistant pending is-streaming" aria-busy="true" data-streaming-state="active">
                     <div className="message-bubble message-bubble-gemini assistant pending">
-                      <StreamingStatus elapsedSeconds={generationElapsedSeconds} label="Still generating; waiting for the first token" />
+                      <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={FIRST_TOKEN_STREAMING_LABEL} />
                       <p className="message-placeholder-copy">Camelid is running locally. Tokens will appear as they are generated.</p>
                     </div>
                   </article>

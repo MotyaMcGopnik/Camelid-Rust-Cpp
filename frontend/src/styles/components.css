@@ -5882,19 +5882,33 @@ textarea.composer-input-gemini {
 }
 
 /* Tiny Pac-Man assistant marker; game-steady, with pellets only while text streams. */
+.message-row-gemini.assistant {
+  --assistant-pacman-size: 12px;
+  --assistant-pacman-left: -26px;
+  --assistant-pacman-top: 11px;
+  --assistant-pellets-left: -10px;
+  --assistant-pellets-top: 14px;
+}
+
 .message-row-gemini.assistant::before {
   content: '';
   position: absolute;
-  left: -32px;
-  top: 8px;
+  left: var(--assistant-pacman-left);
+  top: var(--assistant-pacman-top);
   display: block;
-  width: 14px;
-  height: 14px;
+  width: var(--assistant-pacman-size);
+  height: var(--assistant-pacman-size);
+  margin: 0;
+  border: 0;
   border-radius: 50%;
   background: conic-gradient(from 42deg, transparent 0 78deg, #ffd84d 78deg 360deg);
-  filter: drop-shadow(0 0 6px rgba(255, 216, 77, 0.24));
-  transform: none;
+  color: transparent;
+  filter: drop-shadow(0 0 5px rgba(255, 216, 77, 0.2));
+  font-size: 0;
+  line-height: 0;
   text-shadow: none;
+  transform: none;
+  transition: none;
   z-index: 2;
 }
 
@@ -5909,21 +5923,22 @@ textarea.composer-input-gemini {
 .message-row-gemini.assistant.is-streaming::after {
   content: '';
   position: absolute;
-  left: -14px;
-  top: 12px;
-  width: 32px;
-  height: 5px;
+  left: var(--assistant-pellets-left);
+  top: var(--assistant-pellets-top);
+  width: 24px;
+  height: 4px;
   pointer-events: none;
-  background: radial-gradient(circle, rgba(255, 232, 132, 0.98) 0 1.4px, transparent 1.75px) 100% 50% / 9px 5px repeat-x;
-  filter: drop-shadow(0 0 4px rgba(255, 216, 77, 0.18));
-  opacity: 0.88;
+  background: radial-gradient(circle, rgba(255, 232, 132, 0.98) 0 1.2px, transparent 1.55px) 100% 50% / 8px 4px repeat-x;
+  filter: drop-shadow(0 0 3px rgba(255, 216, 77, 0.16));
+  opacity: 0.86;
   transform: none;
-  animation: camelid-pellets-feed 520ms steps(4, end) infinite;
+  transition: none;
+  animation: camelid-pellets-feed 520ms steps(3, end) infinite;
   z-index: 1;
 }
 
 .message-row-gemini.assistant.pending.is-streaming::after {
-  width: 36px;
+  width: 28px;
 }
 
 .message-row-gemini.assistant:not(.is-streaming)::after {
@@ -5932,15 +5947,21 @@ textarea.composer-input-gemini {
 }
 
 @media (max-width: 860px) {
+  .message-row-gemini.assistant {
+    --assistant-pacman-left: -20px;
+    --assistant-pacman-top: 10px;
+    --assistant-pellets-left: -6px;
+    --assistant-pellets-top: 13px;
+    padding-left: 4px;
+  }
+
   .message-row-gemini.assistant::before {
-    left: -18px;
-    top: 8px;
+    position: absolute;
+    float: none;
   }
 
   .message-row-gemini.assistant.is-streaming::after {
-    left: 0;
-    top: 12px;
-    width: 34px;
+    width: 20px;
   }
 }
 

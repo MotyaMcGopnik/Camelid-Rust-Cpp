@@ -67,7 +67,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
             <div className="activity-item">Camelid is using the local CPU generation path today; GPU acceleration remains future work.</div>
             <div className="activity-item">Current next-chat model state: {describeModelState(selectedModel)}</div>
             <div className="activity-item">Chat stays blocked until Camelid reports generation_ready for the selected model; once ready, chat runs until EOS, an explicit request limit, or the backend context window.</div>
-            <div className="activity-item">The OpenAI-compatible local API is exposed at {apiBase}.</div>
+            <div className="activity-item">The standard /v1-compatible local API is exposed at {apiBase}.</div>
           </div>
         </div>
       </div>
@@ -76,7 +76,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
         <div className="panel-header-row panel-header-row-wide">
           <div>
             <p className="panel-kicker">Developer</p>
-            <h2>OpenAI-compatible local API</h2>
+            <h2>Standard /v1-compatible local API</h2>
             <p className="hero-summary">Use the same local runtime through standard endpoints for apps, scripts, and quick terminal checks.</p>
           </div>
           <div className={`status-pill ${runtime?.generation_ready ? 'ready' : 'warm'}`}>{runtime?.generation_ready ? 'Local /v1 generation ready' : runtime?.loaded_now ? 'Local /v1 loaded, not ready' : 'Load a model to use generation'}</div>

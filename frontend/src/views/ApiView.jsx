@@ -36,7 +36,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
         <div className="panel-header-row panel-header-row-wide">
           <div>
             <p className="panel-kicker">Endpoints</p>
-            <h2>OpenAI-compatible surface</h2>
+            <h2>Standard /v1-compatible surface</h2>
             <p className="hero-summary">Generation endpoints stay useful only when runtime readiness is green and the selected local GGUF has an exact supported compatibility row. Capability rows explain supported and guarded lanes, but they never override loaded_now/generation_ready or active_model_id matching.</p>
           </div>
           <div className={`status-pill ${generationReady ? 'ready' : 'warm'}`}>{generationReady ? 'Local /v1 generation ready' : 'Load a generation-ready model'}</div>
