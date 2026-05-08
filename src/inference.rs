@@ -4999,7 +4999,7 @@ fn output_projection_q8_0_reconstructed_logit(
     };
     let mut scales = vec![0.0_f32; blocks_per_row];
     decode_q8_0_encoded_row_scales(row_bytes, &mut scales);
-    if q8_0_block_dot_enabled() {
+    if q8_0_file_reader_block_dot_enabled() {
         let quantized_input = quantize_q8_0_row(&output_norm.data[..hidden_width]);
         Ok(Some(dot_q8_0_encoded_row_quantized_input_with_scales(
             &quantized_input.blocks,
@@ -5547,9 +5547,23 @@ fn q8_0_block_dot_enabled() -> bool {
 }
 
 fn q8_0_file_reader_block_dot_enabled() -> bool {
-    // Lazy/file-backed Q8 rows are a separate runtime surface. Keep them on the proven
-    // f32-input reader path unless a reader-specific probe is explicitly requested.
-    q8_0_env_flag_enabled("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT")
+    // Lazy/file-backed Q8 rows are Camelid's production Q8_0 surface. Use the
+    // quantized-input block-dot path by default to match llama.cpp-style Q8_0 matmul
+    // tie-break behavior, while keeping an explicit dequantized-f32 escape hatch.
+    !q8_0_env_flag_disabled("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT")
+}
+
+fn q8_0_env_flag_disabled(key: &str) -> bool {
+    matches!(
+        env::var(key),
+        Ok(value)
+            if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled")
+                || value.eq_ignore_ascii_case("dequantized")
+                || value.eq_ignore_ascii_case("f32")
+    )
 }
 
 fn q8_0_env_flag_enabled(key: &str) -> bool {
@@ -8895,9 +8909,15 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_file_reader_block_dot_uses_separate_opt_in() {
+    fn q8_0_file_reader_block_dot_defaults_on_with_separate_escape_hatch() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
+
+        assert!(!q8_0_block_dot_enabled());
+        assert!(q8_0_file_reader_block_dot_enabled());
+
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "off");
+        assert!(!q8_0_file_reader_block_dot_enabled());
 
         std::env::set_var("BACKENDINFERENCE_Q8_0_BLOCK_DOT", "on");
         assert!(q8_0_block_dot_enabled());
@@ -8974,7 +8994,10 @@ mod tests {
 
     #[test]
     fn q8_0_block_reader_linear_matches_existing_q8_path() {
+        let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "off");
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         let row0 = Q8_0Block {
             scale: 0.5,
@@ -9026,6 +9049,7 @@ mod tests {
 
         assert_eq!(actual.shape.dims, expected.shape.dims);
         assert_slice_close(&actual.data, &expected.data);
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT");
     }
 
     #[test]
@@ -9035,6 +9059,7 @@ mod tests {
         clear_dense_diagnostic_env();
         std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR", "on");
         std::env::set_var("BACKENDINFERENCE_PARALLEL_LINEAR_MIN_OUTPUTS", "1");
+        std::env::set_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT", "off");
         std::env::set_var(
             "BACKENDINFERENCE_Q8_0_FILE_READER_CHUNK_BYTES",
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2).to_string(),
@@ -9096,6 +9121,7 @@ mod tests {
 
         assert_eq!(actual.shape.dims, expected.shape.dims);
         assert_slice_close(&actual.data, &expected.data);
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_READER_BLOCK_DOT");
     }
 
     #[test]
@@ -9209,7 +9235,7 @@ mod tests {
             rows.clone(),
         )
         .unwrap();
-        let expected = matmul_rhs_transposed_with_precision(&input, &weight, "expected").unwrap();
+        let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
 
         let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
         let mut actual = vec![0.0; rows.len()];
@@ -9266,7 +9292,7 @@ mod tests {
             rows.clone(),
         )
         .unwrap();
-        let expected = matmul_rhs_transposed_with_precision(&input, &weight, "expected").unwrap();
+        let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
         let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
         let mut actual = vec![0.0; rows.len()];
         let start = q8_0_file_read_stats();
@@ -9382,7 +9408,7 @@ mod tests {
             rows.clone(),
         )
         .unwrap();
-        let expected = matmul_rhs_transposed_with_precision(&input, &weight, "expected").unwrap();
+        let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
         let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
         let start = q8_0_file_read_stats();
 
@@ -9497,7 +9523,7 @@ mod tests {
             rows.clone(),
         )
         .unwrap();
-        let expected = matmul_rhs_transposed_with_precision(&input, &weight, "expected").unwrap();
+        let expected = matmul_rhs_transposed_q8_0_block_dot(&input, &weight, "expected").unwrap();
         let backing = Q8_0FileBacking::new(temp_file.path().to_path_buf(), 0, rows.len());
 
         let start = q8_0_file_read_stats();
@@ -9582,7 +9608,7 @@ mod tests {
         )
         .unwrap();
         let expected =
-            matmul_rhs_transposed_with_precision(&input, &expected_weight, "expected").unwrap();
+            matmul_rhs_transposed_q8_0_block_dot(&input, &expected_weight, "expected").unwrap();
         let output_weight = CpuTensor::q8_0_file_backed_linear(
             "output.weight",
             crate::tensor::TensorShape { dims: vec![32, 4] },
