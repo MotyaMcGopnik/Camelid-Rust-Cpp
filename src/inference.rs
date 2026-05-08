@@ -4899,8 +4899,40 @@ fn output_projection_token_row(
             output_weight.name
         )));
     }
+    if !hidden_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection q8_0 diagnostic hidden width {hidden_width} is not block aligned"
+        )));
+    }
+
+    let row_count = match layout {
+        EffectiveOutputProjectionRowLayout::DescriptorOutputInput => output_weight.dim(0)?,
+        EffectiveOutputProjectionRowLayout::TokenMajorReinterpret => output_weight.dim(1)?,
+        EffectiveOutputProjectionRowLayout::DescriptorInputOutput => unreachable!(
+            "descriptor input/output layout is rejected for file-backed q8_0 diagnostics"
+        ),
+    };
+    if token_index >= row_count {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection q8_0 diagnostic token row {token_index} exceeds row count {row_count} for tensor {}",
+            output_weight.name
+        )));
+    }
 
     let blocks_per_row = hidden_width / Q8_0_BLOCK_VALUES;
+    let expected_blocks = row_count.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "output projection q8_0 diagnostic block count overflow".to_string(),
+        )
+    })?;
+    if backing.num_blocks != expected_blocks {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection q8_0 diagnostic expected {expected_blocks} blocks for tensor {} shape {:?}, got {}",
+            output_weight.name,
+            output_weight.shape.dims,
+            backing.num_blocks
+        )));
+    }
     let row_block_start = token_index.checked_mul(blocks_per_row).ok_or_else(|| {
         BackendError::RuntimeShapeMismatch(
             "output projection token row block offset overflow".to_string(),
@@ -10626,6 +10658,75 @@ mod tests {
             reads.read_bytes,
             (Q8BlockReader::BLOCK_SIZE_BYTES * 2) as u64
         );
+    }
+
+    #[test]
+    fn output_projection_diagnostics_reject_q8_0_file_backed_unaligned_rows_before_read() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+
+        let output_norm = CpuTensor::from_f32("output_norm", vec![1, 33], vec![0.0; 33]).unwrap();
+        let logits = CpuTensor::from_f32("logits", vec![1, 1], vec![0.0]).unwrap();
+        let output_weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            crate::tensor::TensorShape { dims: vec![33, 1] },
+            Q8_0FileBacking::new("unused-q8-output.gguf".into(), 0, 1),
+        );
+
+        let start = q8_0_file_read_stats();
+        let err = output_projection_diagnostics(
+            &output_norm,
+            &output_weight,
+            &logits,
+            &[0],
+            None,
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert!(err.contains("hidden width 33 is not block aligned"));
+        assert_eq!(reads.read_calls, 0);
+        assert_eq!(reads.read_bytes, 0);
+    }
+
+    #[test]
+    fn output_projection_diagnostics_reject_q8_0_file_backing_block_mismatch_before_read() {
+        let _env_guard = env_lock();
+        let _q8_guard = crate::test_support::q8_file_state_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("BACKENDINFERENCE_Q8_0_FILE_CACHE_BYTES");
+
+        let output_norm = CpuTensor::from_f32("output_norm", vec![1, 32], vec![0.0; 32]).unwrap();
+        let logits = CpuTensor::from_f32("logits", vec![1, 2], vec![0.0, 0.0]).unwrap();
+        let output_weight = CpuTensor::q8_0_file_backed_linear(
+            "output.weight",
+            crate::tensor::TensorShape { dims: vec![32, 2] },
+            Q8_0FileBacking::new("unused-q8-output.gguf".into(), 0, 1),
+        );
+
+        let start = q8_0_file_read_stats();
+        let err = output_projection_diagnostics(
+            &output_norm,
+            &output_weight,
+            &logits,
+            &[1],
+            None,
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        let reads = q8_0_file_read_stats().saturating_delta_since(start);
+
+        assert!(err.contains("expected 2 blocks"));
+        assert!(err.contains("got 1"));
+        assert_eq!(reads.read_calls, 0);
+        assert_eq!(reads.read_bytes, 0);
     }
 
     #[test]
