@@ -465,7 +465,7 @@ export default function ChatWorkspace({
 
       {!isFreshThread && (
         <div className="composer composer-gemini composer-gemini-floating">
-          <textarea className="composer-input composer-input-gemini" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask a local test prompt' : 'Pick a ready model first, then start your chat'} disabled={sending || !selectedModelRunnable} />
+          <textarea className="composer-input composer-input-gemini" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask Camelid' : 'Load a model first'} disabled={sending || !selectedModelRunnable} />
           <div className="composer-gemini-footer">
             <div className="composer-gemini-tools">
               {renderModelPicker()}

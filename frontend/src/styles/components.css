@@ -5432,3 +5432,198 @@ textarea.composer-input-gemini {
   max-width: min(34vw, 360px);
   font-size: 1rem;
 }
+
+/* Polished chat reading layout: centered prose, compact prompt pill, and clean floating composer. */
+.chat-layout-gemini:not(.chat-layout-empty) {
+  min-height: calc(100vh - 70px);
+}
+
+.chat-layout-gemini:not(.chat-layout-empty) .chat-canvas {
+  position: relative;
+  min-height: calc(100vh - 78px);
+  padding: 10px clamp(18px, 4vw, 64px) 0;
+}
+
+.chat-layout-gemini:not(.chat-layout-empty) .chat-session-strip {
+  display: none;
+}
+
+.chat-layout-gemini:not(.chat-layout-empty) .chat-thread-gemini {
+  width: min(100%, 820px);
+  padding: 16px 0 250px;
+}
+
+.message-row-gemini {
+  position: relative;
+  gap: 28px;
+  margin: 0 auto 30px;
+}
+
+.message-row-gemini.assistant {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+}
+
+.message-row-gemini.assistant::before {
+  content: '✦';
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: #7aa7ff;
+  font-size: 1.35rem;
+  line-height: 1;
+  text-shadow: 0 0 18px rgba(122, 167, 255, 0.42);
+  transform: translateY(2px);
+}
+
+.message-row-gemini.user {
+  justify-content: center;
+  margin-bottom: 42px;
+}
+
+.message-bubble-gemini.user {
+  max-width: min(78%, 620px);
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-chip) 76%, rgba(255, 255, 255, 0.05));
+  color: color-mix(in srgb, var(--color-text) 90%, white 10%);
+  text-align: left;
+}
+
+.message-bubble-gemini.user p {
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.message-bubble-gemini.assistant {
+  width: min(100%, 720px);
+  max-width: 720px;
+}
+
+.message-markdown {
+  gap: 22px;
+  font-size: clamp(1.03rem, 1.1vw, 1.12rem);
+  line-height: 1.88;
+}
+
+.message-markdown p,
+.message-markdown ul {
+  max-width: 68ch;
+  color: color-mix(in srgb, var(--color-text) 89%, var(--color-text-muted) 11%);
+}
+
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown .message-section-heading {
+  margin-top: 22px;
+  max-width: 68ch;
+  color: color-mix(in srgb, var(--color-text) 94%, white 6%);
+  font-size: 1rem;
+  font-weight: 780;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.message-code-card {
+  max-width: 720px;
+}
+
+.chat-layout-gemini:not(.chat-layout-empty)::after {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  height: 190px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--color-bg) 94%, transparent) 48%, var(--color-bg));
+}
+
+.composer-gemini-floating {
+  position: fixed;
+  left: 50%;
+  bottom: 34px;
+  z-index: 5;
+  width: min(760px, calc(100vw - 420px));
+  max-width: calc(100vw - 32px);
+  transform: translateX(-50%);
+  border-radius: 30px;
+  border-color: color-mix(in srgb, var(--color-border-soft) 36%, transparent);
+  background: color-mix(in srgb, #1f2123 92%, var(--color-bg-elevated) 8%);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 18px 22px 16px;
+}
+
+.composer-gemini-floating .composer-input-gemini {
+  min-height: 54px !important;
+  padding: 2px 2px 16px;
+  color: var(--color-text);
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.composer-gemini-floating .composer-input-gemini::placeholder {
+  color: color-mix(in srgb, var(--color-text-muted) 86%, transparent);
+}
+
+.composer-gemini-floating .composer-gemini-footer {
+  padding-top: 4px;
+}
+
+.composer-gemini-floating .composer-meta-pill,
+.composer-gemini-floating .subtle-action,
+.composer-gemini-floating .composer-tool-label {
+  display: none;
+}
+
+.composer-gemini-floating .composer-model-picker {
+  min-height: 34px;
+  padding: 0 28px 0 10px;
+  border: 0;
+  background: transparent;
+}
+
+.composer-gemini-floating .composer-model-select {
+  max-width: 180px;
+  color: color-mix(in srgb, var(--color-text-muted) 88%, var(--color-text) 12%);
+  font-size: 0.82rem;
+}
+
+.composer-gemini-floating .composer-send-button {
+  min-width: 64px;
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 8px 14px;
+}
+
+@media (max-width: 1080px) {
+  .composer-gemini-floating {
+    width: min(760px, calc(100vw - 48px));
+  }
+}
+
+@media (max-width: 760px) {
+  .message-row-gemini.assistant {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .message-row-gemini.assistant::before {
+    width: 26px;
+    height: 26px;
+    font-size: 1.05rem;
+  }
+
+  .message-bubble-gemini.user {
+    max-width: 94%;
+  }
+
+  .composer-gemini-floating {
+    bottom: 14px;
+    width: calc(100vw - 24px);
+    padding: 14px 16px 13px;
+  }
+}
