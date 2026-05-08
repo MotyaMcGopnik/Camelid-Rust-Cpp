@@ -53,8 +53,41 @@ const renderInlineMarkdown = (text, keyPrefix) => {
   })
 }
 
+const normalizeProseForReading = (text) => String(text || '')
+  .replace(/\r\n/g, '\n')
+  .replace(/\s+(Page\s+\d+\b)/gi, '\n\n$1')
+  .replace(/\s+(References?\s*:)/gi, '\n\n$1')
+  .replace(/\s+(Works\s+Cited\s*:)/gi, '\n\n$1')
+  .replace(/\s+([•*-]\s+["“])/g, '\n$1')
+
+const splitLongParagraph = (value) => {
+  const text = String(value || '').trim()
+  if (text.length <= 520) return text ? [text] : []
+  const sentences = text.match(/[^.!?]+[.!?]+["”']?|[^.!?]+$/g) || [text]
+  const paragraphs = []
+  let current = ''
+
+  sentences.forEach((sentence) => {
+    const next = `${current}${current ? ' ' : ''}${sentence.trim()}`.trim()
+    if (current && (next.length > 620 || current.split(/[.!?]+/).filter(Boolean).length >= 4)) {
+      paragraphs.push(current)
+      current = sentence.trim()
+    } else {
+      current = next
+    }
+  })
+  if (current) paragraphs.push(current)
+  return paragraphs
+}
+
+const pushParagraphBlocks = (blocks, value, keyPrefix) => {
+  splitLongParagraph(value).forEach((paragraph) => {
+    blocks.push(<p key={`${keyPrefix}-p-${blocks.length}`}>{renderInlineMarkdown(paragraph, `${keyPrefix}-p-${blocks.length}`)}</p>)
+  })
+}
+
 const renderMarkdownText = (text, keyPrefix) => {
-  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n')
+  const lines = normalizeProseForReading(text).split('\n')
   const blocks = []
   let paragraph = []
   let list = []
@@ -63,7 +96,7 @@ const renderMarkdownText = (text, keyPrefix) => {
     if (paragraph.length) {
       const value = paragraph.join(' ').trim()
       if (value) {
-        blocks.push(<p key={`${keyPrefix}-p-${blocks.length}`}>{renderInlineMarkdown(value, `${keyPrefix}-p-${blocks.length}`)}</p>)
+        pushParagraphBlocks(blocks, value, keyPrefix)
       }
       paragraph = []
     }
@@ -94,6 +127,26 @@ const renderMarkdownText = (text, keyPrefix) => {
       flushList()
       const Tag = heading[1].length === 1 ? 'h2' : 'h3'
       blocks.push(<Tag key={`${keyPrefix}-h-${blocks.length}`}>{renderInlineMarkdown(heading[2], `${keyPrefix}-h-${blocks.length}`)}</Tag>)
+      return
+    }
+    const pageHeading = line.match(/^(Page\s+\d+)\b[:\s.-]*(.*)$/i)
+    if (pageHeading) {
+      flushParagraph()
+      flushList()
+      blocks.push(<h3 className="message-section-heading" key={`${keyPrefix}-page-${blocks.length}`}>{pageHeading[1]}</h3>)
+      if (pageHeading[2]) {
+        pushParagraphBlocks(blocks, pageHeading[2], keyPrefix)
+      }
+      return
+    }
+    const referencesHeading = line.match(/^(References?|Works\s+Cited)\s*:?(.*)$/i)
+    if (referencesHeading) {
+      flushParagraph()
+      flushList()
+      blocks.push(<h3 className="message-section-heading" key={`${keyPrefix}-ref-${blocks.length}`}>{referencesHeading[1]}</h3>)
+      if (referencesHeading[2]) {
+        pushParagraphBlocks(blocks, referencesHeading[2].replace(/^\s*[:*-]\s*/, ''), keyPrefix)
+      }
       return
     }
     const listItem = line.match(/^[-*]\s+(.+)$/)
