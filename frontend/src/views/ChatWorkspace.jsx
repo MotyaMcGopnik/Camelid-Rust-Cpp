@@ -1,4 +1,4 @@
-import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, formatCapabilityStatus, getCurrentCompatibilityTarget, isCompatibilitySupportedForModel, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, isSupportedCapabilityStatus } from '../lib/capabilities'
 import { clampText, formatDate, formatRate } from '../lib/formatters'
 import { getChatGateState } from '../lib/chatGate'
 import { describeModelState, getModelStatusLabel, isRunnableInCurrentRuntime } from '../lib/modelState'
@@ -14,11 +14,15 @@ const formatProbability = (value) => {
   return `${(number * 100).toFixed(number >= 0.1 ? 1 : 2)}%`
 }
 
-const summarizeGuardedFeatures = (features) => {
-  const guarded = features.filter((feature) => isGuardedCapabilityStatus(feature.status))
-  if (!guarded.length) return 'No unsupported or partial API rows advertised by /api/capabilities.'
-  const summary = guarded.slice(0, 3).map((feature) => `${feature.id}: ${formatCapabilityStatus(feature.status)}`).join(' · ')
-  return `${guarded.length} guarded API feature${guarded.length === 1 ? '' : 's'}: ${summary}${guarded.length > 3 ? ' · …' : ''}`
+const cleanLegacyDemoCapCopy = (value) => {
+  if (typeof value !== 'string') return value
+  return value
+    .replace(/\s*\(demo cap\)/gi, '')
+    .replace(/\s*·\s*raw\s+16-token-cap\s+local\s+run;\s*inspect\s+before\s+trusting\s+polish/gi, ' · raw local run')
+    .replace(/\s*Longer-generation\s+polish\s+still\s+needs\s+separate\s+validation\.?/gi, '')
+    .replace(/\s*Longer\s+generation\s+is\s+not\s+polished\s+yet\.?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 export default function ChatWorkspace({
@@ -67,14 +71,13 @@ export default function ChatWorkspace({
   const speedLabel = latestTelemetryMessage?.tokens_out_per_sec !== null && latestTelemetryMessage?.tokens_out_per_sec !== undefined
     ? formatRate(latestTelemetryMessage.tokens_out_per_sec)
     : 'Waiting for first reply'
-  const latestTopLogits = (latestTelemetryMessage?.top_logits || []).slice(0, 5)
   const latestGeneratedTokens = latestTelemetryMessage?.usage?.completion_tokens
   const latestFirstGeneratedToken = latestTelemetryMessage?.generated_token_ids?.[0]
   const latestFirstTokenCopy = latestFirstGeneratedToken !== null && latestFirstGeneratedToken !== undefined ? ` · first token #${latestFirstGeneratedToken}` : ''
   const latestCompletionCopy = latestGeneratedTokens === 1
     ? `1 completion token${latestFirstTokenCopy} · first-token path completed`
     : latestGeneratedTokens
-      ? `${latestGeneratedTokens} completion tokens${latestFirstTokenCopy} · raw local run; inspect before trusting polish`
+      ? `${latestGeneratedTokens} completion tokens${latestFirstTokenCopy} · raw local run`
       : 'First reply will establish the live TPS baseline for this loaded model.'
   const staleTelemetryModelLabel = latestVisibleAssistantMessage?.model_id && !latestTelemetryMatchesSelection
     ? (latestVisibleAssistantMessage.model_name || latestVisibleAssistantMessage.model_id)
@@ -96,34 +99,15 @@ export default function ChatWorkspace({
         ? 'Ready to chat'
         : speedLabel
   const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !sending
-  const supportContract = capabilities?.support_contract
-  const apiFeatures = capabilities?.api_features || []
-  const chatFeature = apiFeatures.find((feature) => feature.id === 'openai_chat_completions')
-  const currentCompatibilityTarget = getCurrentCompatibilityTarget(capabilities)
-  const supportedCompatibilityRows = (capabilities?.model_compatibility || []).filter((target) => isSupportedCapabilityStatus(target.status))
-  const supportedCompatibilitySummary = supportedCompatibilityRows.map((target) => target.id).join(' · ')
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
   const selectedCompatibilityTarget = selectedCompatibilityHint?.kind === 'compatibility' ? selectedCompatibilityHint.target : null
   const selectedCompatibilitySupported = selectedCompatibilityTarget ? isSupportedCapabilityStatus(selectedCompatibilityTarget.status) : false
-  const capabilityGate = supportContract?.current_gate || 'No /api/capabilities contract'
-  const compatibilityLabel = supportedCompatibilitySummary || (currentCompatibilityTarget
-    ? `${currentCompatibilityTarget.id} · ${formatCapabilityStatus(currentCompatibilityTarget.status)}`
-    : 'No compatibility target advertised')
   const selectedCompatibilityLabel = selectedModel
     ? compatibilityHintLabel(selectedCompatibilityHint, 'No matching COMPATIBILITY.md row')
     : 'No model selected'
   const selectedCompatibilityCopy = selectedModel
     ? compatibilityHintCopy(selectedCompatibilityHint)
     : 'Choose a model before inferring any support boundary. Camelid will not promote filenames or saved paths into compatibility claims.'
-  const compatibilityEvidence = supportedCompatibilitySummary
-    ? `Supported rows: ${supportedCompatibilitySummary}. Runtime loaded_now=true and generation_ready=true are still required.`
-    : currentCompatibilityTarget
-      ? currentCompatibilityTarget.evidence || currentCompatibilityTarget.next_step
-      : 'Camelid will not infer model-family or quantization support from filenames or saved browser paths.'
-  const chatFeatureCopy = chatFeature
-    ? `${formatCapabilityStatus(chatFeature.status)} · ${chatFeature.notes}`
-    : 'Chat capability was not advertised; health and typed backend errors remain the source of truth.'
-  const guardedFeatureSummary = summarizeGuardedFeatures(apiFeatures)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
   const emptyHeroEyebrow = selectedModelRunnable
     ? 'Local chat preview'
@@ -186,54 +170,19 @@ export default function ChatWorkspace({
     },
   ]
   const honestyTitle = selectedModelRunnable
-    ? 'Short local chat is available'
+    ? 'Local chat is available'
     : supportBlocked
       ? 'Loaded is not enough'
       : selectedModel
         ? 'Still waiting on readiness'
         : 'Choose a model first'
   const honestyCopy = selectedModelRunnable
-    ? `Only ${selectedModelName} in this supported Q8_0 row is unlocked here; broader model support and long polished generation are not implied.`
+    ? `Only ${selectedModelName} in this supported Q8_0 row is unlocked here; broader model support is not implied.`
     : supportBlocked
       ? 'The UI will not turn a visible GGUF path into a support claim without a matching capabilities row.'
       : selectedModel
         ? 'The composer unlocks after the selected model is loaded, generation-ready, and support-matched.'
         : 'Saved paths, filenames, and catalog names do not create support claims by themselves.'
-
-  const renderCapabilityStrip = (stage = false) => (
-    <div className={`chat-capability-strip ${stage ? 'chat-capability-strip-stage' : ''}`} aria-label="Camelid support contract and chat readiness">
-      <div>
-        <span>Support gate</span>
-        <strong>{capabilityGate}</strong>
-        <small>{compatibilityLabel}</small>
-      </div>
-      <div>
-        <span>Chat unlock</span>
-        <strong>{selectedModelRunnable ? 'loaded_now=true + generation_ready=true + exact compatibility row' : supportBlocked ? 'Blocked by exact-row compatibility contract' : 'Blocked until health is ready'}</strong>
-        <small>loaded_now={runtime?.loaded_now ? 'true' : 'false'} · generation_ready={runtime?.generation_ready ? 'true' : 'false'}; chat requires active_model_id to equal the selected local GGUF and match an exact supported COMPATIBILITY.md row.</small>
-      </div>
-      <div>
-        <span>API guardrails</span>
-        <strong>{chatFeatureCopy}</strong>
-        <small>{guardedFeatureSummary}</small>
-      </div>
-      {stage && (
-        <>
-          <div>
-            <span>Selected model contract</span>
-            <strong>{selectedCompatibilityLabel}</strong>
-            <small>{selectedCompatibilitySupported ? selectedCompatibilityCopy : `${selectedCompatibilityCopy} Chat still requires the runtime health gate.`}</small>
-          </div>
-          <div>
-            <span>Evidence note</span>
-            <strong>No filename optimism</strong>
-            <small>{compatibilityEvidence}</small>
-            <button type="button" className="ghost-button ghost-button-quiet" onClick={() => setTab('api')}>Open API contract</button>
-          </div>
-        </>
-      )}
-    </div>
-  )
 
   const renderModelPicker = () => {
     if (!hasRunnableChoices) {
@@ -352,36 +301,12 @@ export default function ChatWorkspace({
           </div>
         ) : (
           <>
-            {renderCapabilityStrip()}
-
-            {selectedModelRunnable && (
-              <div className="precision-strip panel" aria-label="Camelid precision telemetry">
-                <div className="precision-speed-card">
-                  <span>Last local reply speed</span>
-                  <strong>{speedLabel}</strong>
-                  <small>{staleTelemetryModelLabel ? `Last reply used ${staleTelemetryModelLabel}. Send one prompt with ${selectedModel?.name || 'this model'} to refresh telemetry.` : latestCompletionCopy}</small>
-                </div>
-                <div className="precision-logit-card">
-                  <div className="precision-logit-head">
-                    <span>Diagnostic logits</span>
-                    <strong>Top-5 first-token probabilities</strong>
-                  </div>
-                  {latestTopLogits.length > 0 ? (
-                    <div className="logit-list" role="list">
-                      {latestTopLogits.map((entry) => (
-                        <div key={`${entry.rank}-${entry.token_id}`} className={`logit-row ${entry.selected ? 'selected' : ''}`} role="listitem">
-                          <span className="logit-rank">#{entry.rank}</span>
-                          <code title={`token ${entry.token_id}`}>{entry.text || `#${entry.token_id}`}</code>
-                          <span className="logit-probability">{formatProbability(entry.probability)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="precision-empty">{staleTelemetryModelLabel ? 'Telemetry is hidden here because it belongs to a different selected model. Send a fresh prompt to avoid stale readouts.' : 'Awaiting the next completion. The backend returns first-token top logits with completed responses; streaming token-level probabilities are not wired yet.'}</p>
-                  )}
-                </div>
-              </div>
-            )}
+            <div className={`chat-session-strip is-${readinessState}`} aria-label="Current Camelid chat status">
+              <span className="chat-session-dot" aria-hidden="true" />
+              <strong>{selectedModelName}</strong>
+              <small>{selectedModelRunnable ? (staleTelemetryModelLabel ? `Last reply used ${staleTelemetryModelLabel}` : latestCompletionCopy) : readinessLabel}</small>
+              <button type="button" className="composer-contract-link" onClick={() => setTab('api')}>Contract</button>
+            </div>
 
             {!selectedModelRunnable && (
               <div className="setup-card setup-card-inline setup-card-gemini">
@@ -411,6 +336,8 @@ export default function ChatWorkspace({
                       ? `Raw local output · ${messageCompletionTokens} completion tokens.${firstTokenCopy}`
                       : 'Raw local output.'
                   : ''
+                const messageContent = cleanLegacyDemoCapCopy(message.content)
+                const cleanDiagnosticCopy = cleanLegacyDemoCapCopy(diagnosticCopy)
 
                 return (
                   <article key={message.id} className={`message-row message-row-gemini ${message.role}`}>
@@ -420,10 +347,10 @@ export default function ChatWorkspace({
                           <span className="message-micro-meta">{[modelLabel, hasMetrics ? `${formatRate(message.tokens_out_per_sec)} out` : 'raw local reply'].filter(Boolean).join(' · ')}</span>
                         </div>
                       )}
-                      <p>{message.content}</p>
-                      {message.role === 'assistant' && (diagnosticCopy || hasMetrics) && (
+                      <p>{messageContent}</p>
+                      {message.role === 'assistant' && (cleanDiagnosticCopy || hasMetrics) && (
                         <div className="message-footnote">
-                          {diagnosticCopy && <span>{diagnosticCopy}</span>}
+                          {cleanDiagnosticCopy && <span>{cleanDiagnosticCopy}</span>}
                           {message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined && <span>In {formatRate(message.tokens_in_per_sec)}</span>}
                           {message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined && <span>Out {formatRate(message.tokens_out_per_sec)}</span>}
                         </div>

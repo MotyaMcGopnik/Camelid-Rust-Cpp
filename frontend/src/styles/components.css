@@ -2158,9 +2158,67 @@
   width: min(100%, 760px);
   min-height: 0;
   margin: 0 auto;
-  padding: 12px 0 220px;
+  padding: 18px 0 220px;
   background: transparent;
   overflow: visible;
+}
+
+.chat-session-strip {
+  width: min(100%, 760px);
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 4px auto 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 44%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg-elevated) 42%, transparent);
+  color: var(--color-text-muted);
+  backdrop-filter: blur(14px);
+}
+
+.chat-session-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text) 90%, var(--color-text-muted) 10%);
+  font-size: 0.82rem;
+  font-weight: 680;
+}
+
+.chat-session-strip small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+}
+
+.chat-session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-text-muted) 11%, transparent);
+}
+
+.chat-session-strip.is-ready .chat-session-dot {
+  background: var(--color-ready);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-ready) 15%, transparent);
+}
+
+.chat-session-strip.is-blocked .chat-session-dot {
+  background: var(--color-error);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+.chat-session-strip.is-waiting .chat-session-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 14%, transparent);
 }
 
 .setup-card-gemini {

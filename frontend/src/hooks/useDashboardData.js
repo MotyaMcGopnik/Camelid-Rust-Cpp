@@ -127,6 +127,35 @@ function optionalString(value) {
   return trimmed || null
 }
 
+function cleanLegacyDemoCapCopy(value) {
+  if (typeof value !== 'string') return value
+  return value
+    .replace(/\s*\(demo cap\)/gi, '')
+    .replace(/\s*·\s*raw\s+16-token-cap\s+local\s+run;\s*inspect\s+before\s+trusting\s+polish/gi, ' · raw local run')
+    .replace(/\s*Longer-generation\s+polish\s+still\s+needs\s+separate\s+validation\.?/gi, '')
+    .replace(/\s*Longer\s+generation\s+is\s+not\s+polished\s+yet\.?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+function normalizeStoredMessage(message) {
+  if (!message || typeof message !== 'object') return message
+  const { demo_token_cap: _demoTokenCap, ...rest } = message
+  return {
+    ...rest,
+    content: cleanLegacyDemoCapCopy(rest.content),
+  }
+}
+
+function normalizeStoredConversations(records) {
+  return (Array.isArray(records) ? records : []).map((conversation) => ({
+    ...conversation,
+    messages: Array.isArray(conversation?.messages)
+      ? conversation.messages.map(normalizeStoredMessage)
+      : [],
+  }))
+}
+
 function normalizeLocalModelStatus(status) {
   return status === 'ready' || status === 'registered' || status === 'failed' ? status : 'registered'
 }
@@ -348,14 +377,14 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [registerForm, setRegisterForm] = useState({ id: '', name: '', model_path: '', runtime_model_name: '' })
   const [externalForm, setExternalForm] = useState({ id: '', name: '', source: 'OpenAI', api_base: 'https://api.openai.com/v1', api_key: '', model_name: '' })
   const [localModels, setLocalModels] = useState(() => readJsonStorage(LOCAL_MODELS_STORAGE_KEY, []).map(normalizeLocalModelRecord).filter(Boolean))
-  const [localConversations, setLocalConversations] = useState(() => readJsonStorage(CONVERSATIONS_STORAGE_KEY, []))
+  const [localConversations, setLocalConversations] = useState(() => normalizeStoredConversations(readJsonStorage(CONVERSATIONS_STORAGE_KEY, [])))
   const [localMemories, setLocalMemories] = useState(() => readJsonStorage(MEMORIES_STORAGE_KEY, []))
 
   const normalizedApiBase = normalizeApiBase(apiBase)
 
   const persistConversations = (updater) => {
     setLocalConversations((current) => {
-      const next = typeof updater === 'function' ? updater(current) : updater
+      const next = normalizeStoredConversations(typeof updater === 'function' ? updater(current) : updater)
       writeJsonStorage(CONVERSATIONS_STORAGE_KEY, next)
       return next
     })
