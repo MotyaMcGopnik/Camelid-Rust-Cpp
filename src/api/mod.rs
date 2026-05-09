@@ -376,6 +376,8 @@ pub struct GenerationDiagnostics {
     pub generated_token_ids: Vec<u32>,
     pub dense_metadata: DenseDiagnosticMetadata,
     pub top_logits: Vec<LogitDiagnostic>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub step_top_logits: Vec<Vec<LogitDiagnostic>>,
     pub output_projection: Vec<LlamaOutputProjectionDiagnostic>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dense: Option<LlamaForwardDiagnostics>,
@@ -611,6 +613,7 @@ struct GeneratedText {
     generated_token_ids: Vec<u32>,
     dense_metadata: DenseDiagnosticMetadata,
     top_logits: Vec<LogitDiagnostic>,
+    step_top_logits: Vec<Vec<LogitDiagnostic>>,
     output_projection: Vec<LlamaOutputProjectionDiagnostic>,
     dense: Option<LlamaForwardDiagnostics>,
     completion_tokens: usize,
@@ -623,12 +626,14 @@ struct GeneratedTokens {
     token_ids: Vec<u32>,
     dense_metadata: DenseDiagnosticMetadata,
     top_logits: Vec<RawLogitDiagnostic>,
+    step_top_logits: Vec<Vec<RawLogitDiagnostic>>,
     output_projection: Vec<LlamaOutputProjectionDiagnostic>,
     dense: Option<LlamaForwardDiagnostics>,
     finish_reason: &'static str,
     timings: GenerationTimings,
 }
 
+#[derive(Clone)]
 struct RawLogitDiagnostic {
     token_id: u32,
     logit: f32,
@@ -1493,6 +1498,7 @@ async fn completions(
                 generated_token_ids,
                 dense_metadata,
                 top_logits,
+                step_top_logits,
                 output_projection,
                 dense,
                 completion_tokens,
@@ -1521,6 +1527,7 @@ async fn completions(
                         generated_token_ids,
                         dense_metadata,
                         top_logits,
+                        step_top_logits,
                         output_projection,
                         dense,
                         timings_ms: timings,
@@ -1600,6 +1607,7 @@ async fn chat_completions(
                     generated_token_ids: generated.generated_token_ids,
                     dense_metadata: generated.dense_metadata,
                     top_logits: generated.top_logits,
+                    step_top_logits: generated.step_top_logits,
                     output_projection: generated.output_projection,
                     dense: generated.dense,
                     timings_ms: generated.timings,
@@ -2449,6 +2457,22 @@ fn generate_decoded_tokens(
         generated_token_ids: generated.token_ids,
         dense_metadata: generated.dense_metadata,
         top_logits,
+        step_top_logits: generated
+            .step_top_logits
+            .iter()
+            .map(|step| {
+                step.iter()
+                    .map(|entry| LogitDiagnostic {
+                        token_id: entry.token_id,
+                        logit: entry.logit,
+                        probability: entry.probability,
+                        rank: entry.rank,
+                        selected: entry.selected,
+                        text: tokenizer.decode(&[entry.token_id], true).ok(),
+                    })
+                    .collect()
+            })
+            .collect(),
         output_projection: generated.output_projection,
         dense: generated.dense,
         finish_reason: generated.finish_reason,
@@ -2606,6 +2630,8 @@ fn generate_token_ids(
     let mut history = prepared.token_ids.clone();
     let mut generated = Vec::new();
     let mut top_logits = Vec::new();
+    let mut step_top_logits = Vec::new();
+    let collect_step_top_logits = !prepared.logit_diagnostic_token_ids.is_empty();
     let mut output_projection = Vec::new();
     let mut dense = None;
     let mut finish_reason = "length";
@@ -2681,8 +2707,8 @@ fn generate_token_ids(
         }
         forward_timings.add_assign(&step.timings);
         sample += step.sample;
-        if top_logits.is_empty() {
-            top_logits =
+        if top_logits.is_empty() || collect_step_top_logits {
+            let current_top_logits =
                 top_logit_diagnostics(&step.logits, 8, &prepared.logit_diagnostic_token_ids)
                     .map_err(|err| {
                         Box::new(api_error(
@@ -2692,31 +2718,37 @@ fn generate_token_ids(
                             None,
                         ))
                     })?;
-            let projection_token_ids = top_logits
-                .iter()
-                .map(|entry| entry.token_id)
-                .collect::<Vec<_>>();
-            if prepared.collect_dense_diagnostics {
-                output_projection = output_projection_diagnostics(
-                    &step.output_norm_state,
-                    prepared.session.weights.output_projection(),
-                    &step.logits,
-                    &projection_token_ids,
-                    Some(&step.hidden_state),
-                    Some(&prepared.session.weights.output_norm),
-                    step.diagnostics
-                        .as_ref()
-                        .map(|diagnostics| diagnostics.final_norm.scale),
-                )
-                .map_err(|err| {
-                    Box::new(api_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "output_projection_diagnostic_failed",
-                        err.to_string(),
-                        None,
-                    ))
-                })?;
-                dense = step.diagnostics.clone();
+            if collect_step_top_logits {
+                step_top_logits.push(current_top_logits.clone());
+            }
+            if top_logits.is_empty() {
+                top_logits = current_top_logits;
+                let projection_token_ids = top_logits
+                    .iter()
+                    .map(|entry| entry.token_id)
+                    .collect::<Vec<_>>();
+                if prepared.collect_dense_diagnostics {
+                    output_projection = output_projection_diagnostics(
+                        &step.output_norm_state,
+                        prepared.session.weights.output_projection(),
+                        &step.logits,
+                        &projection_token_ids,
+                        Some(&step.hidden_state),
+                        Some(&prepared.session.weights.output_norm),
+                        step.diagnostics
+                            .as_ref()
+                            .map(|diagnostics| diagnostics.final_norm.scale),
+                    )
+                    .map_err(|err| {
+                        Box::new(api_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "output_projection_diagnostic_failed",
+                            err.to_string(),
+                            None,
+                        ))
+                    })?;
+                    dense = step.diagnostics.clone();
+                }
             }
         }
         generated.push(step.next_token_id);
@@ -2753,6 +2785,7 @@ fn generate_token_ids(
         token_ids: generated,
         dense_metadata: prepared.dense_metadata,
         top_logits,
+        step_top_logits,
         output_projection,
         dense,
         finish_reason,
