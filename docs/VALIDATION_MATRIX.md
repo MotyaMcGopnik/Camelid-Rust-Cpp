@@ -1,6 +1,6 @@
 # Validation Matrix
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 Run the smallest meaningful validation lane for your change. If a change affects support language, readiness behavior, or exact-row claims, update docs and evidence references together.
 
@@ -10,7 +10,7 @@ Every public surface should tell the same four-row story:
 
 - TinyLlama 1.1B Chat Q8_0 is the supported current gate, with checked 512-context/template/RSS evidence.
 - Llama 3.2 1B and 3B Instruct Q8_0 are exact-row smoke-supported through checked 512/1024/2048 bounded context packs where row-specific PASS artifacts are cited.
-- Llama 3 8B Instruct Q8_0 is exact-row smoke-supported through the checked bounded 512-context pack on current `main`; 1024/2048 remain red until a fresh current-head PASS bundle plus docs/API/frontend alignment lands. The newest committed 1024/2048 PASS bundle, `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T024342Z-head-b49034007f2e/manifest.json`, is historical after later runtime/source/support-surface changes.
+- Llama 3 8B Instruct Q8_0 is exact-row smoke-supported through checked bounded 512/1024/2048-context packs on current `main`; the 1024/2048 buckets are backed by `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T041451Z-head-8e26be0a73c0/manifest.json` and older 1024/2048 bundles remain historical source-head evidence.
 - Current-head language requires a fresh canonical PASS after later runtime/source commits; broad/full support for every non-TinyLlama row still requires model-native/larger context beyond checked packs, arbitrary-template evidence, throughput, portability, and durable normalized current-head bundles.
 
 Next-family public language is locked to planning/validation, not support:
