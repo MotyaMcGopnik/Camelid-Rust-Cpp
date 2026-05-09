@@ -3615,6 +3615,30 @@ mod tests {
             .current_gate
             .contains("no model-native/larger context beyond the checked packs"));
 
+        let q8 = response
+            .supported_quantization
+            .iter()
+            .find(|item| item.id == "Q8_0")
+            .expect("Q8_0 row should stay advertised");
+        assert!(q8.notes.contains(
+            "exact Llama 3 8B Q8_0 row is checked only through the bounded 512-context pack"
+        ));
+        assert!(q8.notes.contains(
+            "8B 1024/2048 remain not promoted until fresh current-head PASS artifacts plus docs/API/frontend alignment exist"
+        ));
+
+        let llama_bpe = response
+            .supported_model_families
+            .iter()
+            .find(|item| item.id == "llama_bpe_decoder_exact_1b_3b_8b_q8_0")
+            .expect("Llama BPE exact-row family should stay advertised");
+        assert!(llama_bpe.notes.contains(
+            "exact Llama 3 8B Instruct Q8_0 is checked only through the bounded 512-context pack"
+        ));
+        assert!(llama_bpe.notes.contains(
+            "8B 1024/2048 remain not promoted until fresh current-head PASS artifacts plus docs/API/frontend alignment exist"
+        ));
+
         let eight_b = response
             .model_compatibility
             .iter()
