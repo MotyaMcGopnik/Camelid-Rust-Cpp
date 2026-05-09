@@ -241,7 +241,7 @@ const FIRST_TOKEN_STREAMING_LABEL = 'Still generating; waiting for the first tok
 
 function StreamingStatus({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact = false, tail = false }) {
   return (
-    <div className={`message-live-status ${compact ? 'message-live-status-compact' : ''} ${tail ? 'message-live-status-tail' : ''}`} role="status" aria-live="polite">
+    <div className={`message-live-status ${compact ? 'message-live-status-compact' : ''} ${tail ? 'message-live-status-tail' : ''}`} role="status" aria-live="polite" aria-label={label} data-live-status="active">
       <span className="message-live-dot" aria-hidden="true" />
       <span>{label}</span>
       <span>{elapsedSeconds}s elapsed</span>
@@ -513,7 +513,8 @@ export default function ChatWorkspace({
               {visibleMessages.map((message) => {
                 const messageContent = cleanLegacyDemoCapCopy(message.content)
                 const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
-                const liveStatusLabel = hasOpenCodeFence(messageContent)
+                const isOpenStreamingCode = assistantStreaming && hasOpenCodeFence(messageContent)
+                const liveStatusLabel = isOpenStreamingCode
                   ? OPEN_CODE_STREAMING_LABEL
                   : ACTIVE_STREAMING_LABEL
                 const hasTokenMetrics = message.role === 'assistant' && (
@@ -527,6 +528,7 @@ export default function ChatWorkspace({
                     className={`message-row message-row-gemini ${message.role} ${message.streaming ? 'is-streaming' : ''}`}
                     aria-busy={assistantStreaming ? 'true' : undefined}
                     data-streaming-state={assistantStreaming ? 'active' : undefined}
+                    data-streaming-code-state={isOpenStreamingCode ? 'open' : undefined}
                   >
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
                       {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact />}
