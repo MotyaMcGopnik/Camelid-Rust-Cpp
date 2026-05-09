@@ -842,7 +842,12 @@ impl CpuTensor {
         if let Some(backing) = self.q8_0_file_backing.as_ref() {
             return self.embedding_lookup_q8_0_file_backed(token_ids, name, vocab, width, backing);
         }
-        let mut out = Vec::with_capacity(token_ids.len() * width);
+        let output_len = token_ids.len().checked_mul(width).ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "embedding lookup output element count overflow".to_string(),
+            )
+        })?;
+        let mut out = Vec::with_capacity(output_len);
         for token_id in token_ids {
             let token_idx = usize::try_from(*token_id).map_err(|_| {
                 BackendError::RuntimeShapeMismatch(format!(
@@ -854,8 +859,15 @@ impl CpuTensor {
                     "token id {token_id} out of range for vocab size {vocab}"
                 )));
             }
-            let start = token_idx * width;
-            out.extend_from_slice(&self.data[start..start + width]);
+            let start = token_idx.checked_mul(width).ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(
+                    "embedding lookup row start overflow".to_string(),
+                )
+            })?;
+            let end = start.checked_add(width).ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch("embedding lookup row end overflow".to_string())
+            })?;
+            out.extend_from_slice(&self.data[start..end]);
         }
         Self::from_f32(name, vec![token_ids.len(), width], out)
     }
@@ -893,9 +905,20 @@ impl CpuTensor {
                 backing.num_blocks
             )));
         }
-        let row_bytes = blocks_per_row * Q8_0_BLOCK_BYTES;
+        let row_bytes = blocks_per_row
+            .checked_mul(Q8_0_BLOCK_BYTES)
+            .ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(
+                    "file-backed q8_0 embedding row byte count overflow".to_string(),
+                )
+            })?;
+        let output_len = token_ids.len().checked_mul(width).ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(
+                "file-backed q8_0 embedding output element count overflow".to_string(),
+            )
+        })?;
         let mut row = vec![0_u8; row_bytes];
-        let mut out = Vec::with_capacity(token_ids.len() * width);
+        let mut out = Vec::with_capacity(output_len);
         for token_id in token_ids {
             let token_idx = usize::try_from(*token_id).map_err(|_| {
                 BackendError::RuntimeShapeMismatch(format!(
@@ -907,7 +930,24 @@ impl CpuTensor {
                     "token id {token_id} out of range for vocab size {vocab}"
                 )));
             }
-            let offset = backing.absolute_offset + (token_idx * row_bytes) as u64;
+            let relative_offset = token_idx.checked_mul(row_bytes).ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(
+                    "file-backed q8_0 embedding row byte offset overflow".to_string(),
+                )
+            })?;
+            let relative_offset = u64::try_from(relative_offset).map_err(|_| {
+                BackendError::RuntimeShapeMismatch(
+                    "file-backed q8_0 embedding row byte offset does not fit u64".to_string(),
+                )
+            })?;
+            let offset = backing
+                .absolute_offset
+                .checked_add(relative_offset)
+                .ok_or_else(|| {
+                    BackendError::RuntimeShapeMismatch(
+                        "file-backed q8_0 embedding absolute row byte offset overflow".to_string(),
+                    )
+                })?;
             backing.read_exact_at_cached(&mut row, offset)?;
             for block in row.chunks_exact(Q8_0_BLOCK_BYTES) {
                 let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
@@ -2095,7 +2135,7 @@ mod tests {
     use super::{
         f16_bits_to_f32, parse_byte_count, q8_0_file_read_stats, q8_file_cache_get,
         q8_file_cache_insert, with_q8_file_cache_capacity_override, CpuTensor, Q8_0FileBacking,
-        Q8_0_BLOCK_BYTES,
+        TensorShape, Q8_0_BLOCK_BYTES,
     };
     use crate::test_support::env_lock;
 
@@ -2160,6 +2200,24 @@ mod tests {
         assert_eq!(stats.cache_capacity_bytes, 0);
         let _ = std::fs::remove_file(path);
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_file_backed_embedding_rejects_absolute_row_offset_overflow() {
+        let _env_guard = env_lock();
+        let tensor = CpuTensor::q8_0_file_backed_linear(
+            "token_embd.weight",
+            TensorShape { dims: vec![2, 32] },
+            Q8_0FileBacking::new("unused.gguf".into(), u64::MAX - 16, 2),
+        );
+
+        let err = tensor.embedding_lookup(&[1], "embedding").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("file-backed q8_0 embedding absolute row byte offset overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
