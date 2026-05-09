@@ -214,10 +214,15 @@ const pushCodeBlock = (blocks, language, code, keyPrefix, { incomplete = false, 
   const trimmedCode = String(code || '').replace(/^\n+|\n+$/g, '')
   const stillGenerating = Boolean(incomplete && streaming)
   blocks.push(
-    <figure className={`message-code-card ${stillGenerating ? 'is-generating' : ''}`} aria-busy={stillGenerating ? 'true' : undefined} key={`code-${blocks.length}`}>
+    <figure
+      className={`message-code-card ${stillGenerating ? 'is-generating' : ''}`}
+      aria-busy={stillGenerating ? 'true' : undefined}
+      data-code-streaming-state={stillGenerating ? 'open' : undefined}
+      key={`code-${blocks.length}`}
+    >
       <figcaption>
         <span className="message-code-card-title">{language}</span>
-        {stillGenerating && <span className="message-code-card-status">Still generating</span>}
+        {stillGenerating && <span className="message-code-card-status" aria-live="polite">Still generating — code block open</span>}
         <button type="button" onClick={() => copyText(trimmedCode)} aria-label={`Copy ${language} code`}>Copy</button>
       </figcaption>
       <pre><code>{renderHighlightedCode(trimmedCode, language, keyPrefix)}</code></pre>
@@ -234,9 +239,9 @@ const ACTIVE_STREAMING_LABEL = 'Still generating — response is active'
 const OPEN_CODE_STREAMING_LABEL = 'Still generating — code block is still open'
 const FIRST_TOKEN_STREAMING_LABEL = 'Still generating; waiting for the first token'
 
-function StreamingStatus({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact = false }) {
+function StreamingStatus({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact = false, tail = false }) {
   return (
-    <div className={`message-live-status ${compact ? 'message-live-status-compact' : ''}`} role="status" aria-live="polite">
+    <div className={`message-live-status ${compact ? 'message-live-status-compact' : ''} ${tail ? 'message-live-status-tail' : ''}`} role="status" aria-live="polite">
       <span className="message-live-dot" aria-hidden="true" />
       <span>{label}</span>
       <span>{elapsedSeconds}s elapsed</span>
@@ -300,7 +305,9 @@ export default function ChatWorkspace({
     pendingPrompt && [...visibleMessages].reverse().some((message) => message.role === 'user' && message.content === pendingPrompt),
   )
   const pendingUserPrompt = pendingPromptAlreadyVisible ? '' : pendingPrompt
-  const awaitingAssistant = Boolean(sending && pendingPrompt && !hasStreamingAssistant)
+  const lastVisibleMessage = visibleMessages.at(-1)
+  const lastVisibleMessageIsUser = lastVisibleMessage?.role === 'user'
+  const awaitingAssistant = Boolean(sending && !hasStreamingAssistant && (pendingPrompt || lastVisibleMessageIsUser))
 
   useEffect(() => {
     if (!generationActive) {
@@ -524,6 +531,7 @@ export default function ChatWorkspace({
                     <div className={`message-bubble message-bubble-gemini ${message.role}`}>
                       {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact />}
                       {message.role === 'assistant' ? <AssistantMarkdown content={messageContent} streaming={Boolean(message.streaming)} /> : <p>{messageContent}</p>}
+                      {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} tail />}
                       {hasTokenMetrics && (
                         <div className="message-token-metrics" aria-label="Generation speed">
                           <span>In {formatRate(message.tokens_in_per_sec)}</span>

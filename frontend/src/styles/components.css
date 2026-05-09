@@ -1472,6 +1472,12 @@
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(255, 216, 77, 0.08);
 }
 
+.message-code-card.is-generating figcaption {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 .message-code-card figcaption {
   min-height: 46px;
   display: flex;
@@ -5865,6 +5871,11 @@ textarea.composer-input-gemini {
   margin-bottom: 12px;
 }
 
+.message-live-status-tail {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
 .message-live-status span:not(.message-live-dot) + span {
   padding-left: 8px;
   border-left: 1px solid color-mix(in srgb, var(--color-border-soft) 42%, transparent);
@@ -5903,12 +5914,14 @@ textarea.composer-input-gemini {
   border-radius: 50%;
   background: conic-gradient(from 42deg, transparent 0 78deg, #ffd84d 78deg 360deg);
   color: transparent;
-  filter: drop-shadow(0 0 5px rgba(255, 216, 77, 0.2));
+  filter: none;
   font-size: 0;
   line-height: 0;
   text-shadow: none;
   transform: none;
+  transform-origin: 50% 50%;
   transition: none;
+  will-change: background;
   z-index: 2;
 }
 
