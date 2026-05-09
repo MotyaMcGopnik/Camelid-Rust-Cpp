@@ -376,6 +376,8 @@ pub struct GenerationDiagnostics {
     pub generated_token_ids: Vec<u32>,
     pub dense_metadata: DenseDiagnosticMetadata,
     pub top_logits: Vec<LogitDiagnostic>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub step_top_logits: Vec<Vec<LogitDiagnostic>>,
     pub output_projection: Vec<LlamaOutputProjectionDiagnostic>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dense: Option<LlamaForwardDiagnostics>,
@@ -611,6 +613,7 @@ struct GeneratedText {
     generated_token_ids: Vec<u32>,
     dense_metadata: DenseDiagnosticMetadata,
     top_logits: Vec<LogitDiagnostic>,
+    step_top_logits: Vec<Vec<LogitDiagnostic>>,
     output_projection: Vec<LlamaOutputProjectionDiagnostic>,
     dense: Option<LlamaForwardDiagnostics>,
     completion_tokens: usize,
@@ -623,12 +626,14 @@ struct GeneratedTokens {
     token_ids: Vec<u32>,
     dense_metadata: DenseDiagnosticMetadata,
     top_logits: Vec<RawLogitDiagnostic>,
+    step_top_logits: Vec<Vec<RawLogitDiagnostic>>,
     output_projection: Vec<LlamaOutputProjectionDiagnostic>,
     dense: Option<LlamaForwardDiagnostics>,
     finish_reason: &'static str,
     timings: GenerationTimings,
 }
 
+#[derive(Clone)]
 struct RawLogitDiagnostic {
     token_id: u32,
     logit: f32,
@@ -781,8 +786,8 @@ fn capabilities_response() -> CapabilitiesResponse {
             },
             SupportItem {
                 id: "mixtral_moe",
-                status: "active_validation_unsupported",
-                notes: "public readiness: in active validation for Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf only; not supported yet. Source/SHA/license, sparse GGUF metadata, tokenizer/template references, bounded metadata-load RSS, and typed MoE unsupported behavior exist, but expert routing, generation parity, API/WebUI readiness, full-model RSS, and promotion bundle evidence are missing",
+                status: "active_validation_partial_runtime",
+                notes: "public readiness: Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded exact-row MoE runtime evidence only. Top-k expert routing runs with lazy/file-backed rank-3 Q8 experts; prompt-token parity, one-token smoke, Hello/2+2/color/yes/OK 5-token parity, and full-model RSS evidence exist. Known blocker: Count to three diverges on a near-tie at step 2, so broad Mixtral, frontend, long-context, and production support remain unclaimed.",
             },
             SupportItem {
                 id: "qwen25",
@@ -1050,19 +1055,19 @@ fn capabilities_response() -> CapabilitiesResponse {
                 id: "mixtral_8x7b_instruct_v0_1_q8_0",
                 family: "mixtral_moe",
                 quantization: "Q8_0",
-                status: "active_validation_unsupported",
-                support_scope: "bringup_exact_row_unsupported",
-                full_support_status: "blocked_unsupported_moe_runtime",
-                full_support_blockers: "MoE top-k expert routing is not implemented; deterministic generation parity, API/WebUI readiness, and full-model RSS/timing evidence are missing",
+                status: "active_validation_partial_runtime",
+                support_scope: "exact_row_bounded_moe_runtime_only",
+                full_support_status: "blocked_known_step2_near_tie_divergence",
+                full_support_blockers: "Count to three still diverges at step 2 on a comma/dot near-tie; API/WebUI readiness, long-context evidence, production throughput, portability, and durable broad prompt coverage are missing",
                 metadata_parses: "validated_sparse_header",
                 tokenizer_works: "validated_against_llama_cpp_reference",
-                tensors_load: "unsupported_typed_error_before_expert_routing",
-                generation_runs: "blocked_typed_unsupported_moe",
-                parity_audited: "prompt_token_reference_only",
-                performance_measured: "metadata_load_rss_only",
-                frontend_load_path_verified: "fail_closed_unsupported_moe",
-                frontend_readiness_gate: "fail-closed: Mixtral row must remain unsupported until MoE routing plus exact-row generation parity evidence exist",
-                tested_context: "metadata_and_tokenizer_only",
+                tensors_load: "validated_lazy_file_backed_rank3_q8_experts",
+                generation_runs: "bounded_runtime_smoke_and_5prompt_parity_observed",
+                parity_audited: "prompt_tokens_one_token_hello_and_5_of_6_short_prompts_match",
+                performance_measured: "full_model_runtime_smoke_rss_observed",
+                frontend_load_path_verified: "fail_closed_partial_runtime_only",
+                frontend_readiness_gate: "fail-closed for broad readiness: exact row may be described only as bounded backend runtime evidence until the step-2 divergence and API/WebUI gates close",
+                tested_context: "short_prompt_5token_probe_only",
                 chat_template_renderer: "mixtral_instruct_v0_1_metadata_template_validated",
                 chat_template_shape_pack: "validated_reference_pack",
                 chat_template_shape_pack_id: "mixtral-instruct-v0.1-chat-template-pack-v1",
@@ -1075,11 +1080,11 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_2048_pack: "not_started",
                 bounded_context_2048_pack_id: "mixtral-context-2048-smoke-v1",
                 bounded_context_2048_window: 2048,
-                latest_checked_bucket: "mixtral_8x7b_q8_metadata_tokenizer_20260509",
-                latest_checked_result: "unsupported_moe_typed_guard",
-                latest_checked_output: "fixtures/tokenizer/mixtral-8x7b-instruct-v0.1-reference-pack.json",
-                evidence: "exact row leserg/Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF at commit 93c0492d1891b5147f42b2648d9fccc140910a2f, license apache-2.0, GGUF ETag 77b8ee314ae3e77cefaba7f33841235da3346c34171547fe10e8a85f127973a7, size 49626319776 bytes; sparse-header metadata parses with llama.expert_count=8 and expert_used_count=2 plus expert tensors, tokenizer/template prompts match llama.cpp reference pack fixtures/tokenizer/mixtral-8x7b-instruct-v0.1-reference-pack.json; generation remains typed unsupported because MoE routing is absent",
-                next_step: "implement and unit-test the smallest MoE top-k expert-routing vertical slice before attempting deterministic one-prompt generation parity or any API/WebUI support claim",
+                latest_checked_bucket: "mixtral_8x7b_q8_short_prompt_probe_20260509",
+                latest_checked_result: "partial_pass_5_of_6_short_prompts_step2_divergence_known",
+                latest_checked_output: "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-support-probe-20260509/summary.json",
+                evidence: "exact row leserg/Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF at commit 93c0492d1891b5147f42b2648d9fccc140910a2f, license apache-2.0, GGUF ETag 77b8ee314ae3e77cefaba7f33841235da3346c34171547fe10e8a85f127973a7, size 49626319776 bytes and sha256 c48f9680d5aa60703ed0fd38e29fc6556b3490f8f6c9919a31c9da7996039f81; sparse-header metadata parses with llama.expert_count=8 and expert_used_count=2 plus rank-3 expert tensors; tokenizer/template prompts match llama.cpp reference pack fixtures/tokenizer/mixtral-8x7b-instruct-v0.1-reference-pack.json; MoE top-k expert routing runs with selected-weight renormalization and lazy/file-backed Q8 experts; evidence bundles include mixtral-8x7b-v0.1-q8-moe-runtime-parity-20260509, mixtral-8x7b-v0.1-q8-larger-support-probe-20260509, mixtral-8x7b-v0.1-q8-step-logit-debug-20260509, and mixtral-8x7b-v0.1-q8-support-probe-20260509. Short-prompt probe matched llama.cpp for Hello, What is 2+2?, Name a color., Say yes., and Write OK.; Count to three. remains a known near-tie divergence at generated step 2.",
+                next_step: "close the Count to three step-2 decode-vs-prefill numeric parity divergence, then run API/WebUI/RSS and longer-context promotion bundles before any broad Mixtral support claim",
             },
             ModelCompatibilityTarget {
                 id: "qwen25_7b_instruct_q8_0",
@@ -1493,6 +1498,7 @@ async fn completions(
                 generated_token_ids,
                 dense_metadata,
                 top_logits,
+                step_top_logits,
                 output_projection,
                 dense,
                 completion_tokens,
@@ -1521,6 +1527,7 @@ async fn completions(
                         generated_token_ids,
                         dense_metadata,
                         top_logits,
+                        step_top_logits,
                         output_projection,
                         dense,
                         timings_ms: timings,
@@ -1600,6 +1607,7 @@ async fn chat_completions(
                     generated_token_ids: generated.generated_token_ids,
                     dense_metadata: generated.dense_metadata,
                     top_logits: generated.top_logits,
+                    step_top_logits: generated.step_top_logits,
                     output_projection: generated.output_projection,
                     dense: generated.dense,
                     timings_ms: generated.timings,
@@ -2449,6 +2457,22 @@ fn generate_decoded_tokens(
         generated_token_ids: generated.token_ids,
         dense_metadata: generated.dense_metadata,
         top_logits,
+        step_top_logits: generated
+            .step_top_logits
+            .iter()
+            .map(|step| {
+                step.iter()
+                    .map(|entry| LogitDiagnostic {
+                        token_id: entry.token_id,
+                        logit: entry.logit,
+                        probability: entry.probability,
+                        rank: entry.rank,
+                        selected: entry.selected,
+                        text: tokenizer.decode(&[entry.token_id], true).ok(),
+                    })
+                    .collect()
+            })
+            .collect(),
         output_projection: generated.output_projection,
         dense: generated.dense,
         finish_reason: generated.finish_reason,
@@ -2606,6 +2630,8 @@ fn generate_token_ids(
     let mut history = prepared.token_ids.clone();
     let mut generated = Vec::new();
     let mut top_logits = Vec::new();
+    let mut step_top_logits = Vec::new();
+    let collect_step_top_logits = !prepared.logit_diagnostic_token_ids.is_empty();
     let mut output_projection = Vec::new();
     let mut dense = None;
     let mut finish_reason = "length";
@@ -2681,8 +2707,8 @@ fn generate_token_ids(
         }
         forward_timings.add_assign(&step.timings);
         sample += step.sample;
-        if top_logits.is_empty() {
-            top_logits =
+        if top_logits.is_empty() || collect_step_top_logits {
+            let current_top_logits =
                 top_logit_diagnostics(&step.logits, 8, &prepared.logit_diagnostic_token_ids)
                     .map_err(|err| {
                         Box::new(api_error(
@@ -2692,31 +2718,37 @@ fn generate_token_ids(
                             None,
                         ))
                     })?;
-            let projection_token_ids = top_logits
-                .iter()
-                .map(|entry| entry.token_id)
-                .collect::<Vec<_>>();
-            if prepared.collect_dense_diagnostics {
-                output_projection = output_projection_diagnostics(
-                    &step.output_norm_state,
-                    prepared.session.weights.output_projection(),
-                    &step.logits,
-                    &projection_token_ids,
-                    Some(&step.hidden_state),
-                    Some(&prepared.session.weights.output_norm),
-                    step.diagnostics
-                        .as_ref()
-                        .map(|diagnostics| diagnostics.final_norm.scale),
-                )
-                .map_err(|err| {
-                    Box::new(api_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "output_projection_diagnostic_failed",
-                        err.to_string(),
-                        None,
-                    ))
-                })?;
-                dense = step.diagnostics.clone();
+            if collect_step_top_logits {
+                step_top_logits.push(current_top_logits.clone());
+            }
+            if top_logits.is_empty() {
+                top_logits = current_top_logits;
+                let projection_token_ids = top_logits
+                    .iter()
+                    .map(|entry| entry.token_id)
+                    .collect::<Vec<_>>();
+                if prepared.collect_dense_diagnostics {
+                    output_projection = output_projection_diagnostics(
+                        &step.output_norm_state,
+                        prepared.session.weights.output_projection(),
+                        &step.logits,
+                        &projection_token_ids,
+                        Some(&step.hidden_state),
+                        Some(&prepared.session.weights.output_norm),
+                        step.diagnostics
+                            .as_ref()
+                            .map(|diagnostics| diagnostics.final_norm.scale),
+                    )
+                    .map_err(|err| {
+                        Box::new(api_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "output_projection_diagnostic_failed",
+                            err.to_string(),
+                            None,
+                        ))
+                    })?;
+                    dense = step.diagnostics.clone();
+                }
             }
         }
         generated.push(step.next_token_id);
@@ -2753,6 +2785,7 @@ fn generate_token_ids(
         token_ids: generated,
         dense_metadata: prepared.dense_metadata,
         top_logits,
+        step_top_logits,
         output_projection,
         dense,
         finish_reason,
