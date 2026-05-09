@@ -74,6 +74,7 @@ function validateSummaryAgreement(bundleRel, manifest, summary) {
   if (typeof manifest.passed === 'boolean' && typeof summary.passed === 'boolean' && manifest.passed !== summary.passed) {
     fail(bundleRel, `manifest passed=${manifest.passed} disagrees with summary passed=${summary.passed}`)
   }
+  validateCurrentHeadAgreement(bundleRel, manifest, summary)
   if (typeof manifest.claim_boundary === 'string' && typeof summary.claim_boundary === 'string' && manifest.claim_boundary !== summary.claim_boundary) {
     fail(bundleRel, 'manifest and summary claim_boundary differ')
   }
@@ -92,6 +93,9 @@ function validateSummaryAgreement(bundleRel, manifest, summary) {
       compareRowField(bundleRel, rowId, manifestRow, summaryRow, 'max_tokens')
       compareRowField(bundleRel, rowId, manifestRow, summaryRow, 'max_resident_set_kib')
       compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow)
+      compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow, 'prefill_q8_file_reads')
+      compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow, 'first_token_q8_file_reads')
+      compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow, 'generation_q8_file_reads')
       if (typeof summaryRow.passed === 'boolean') {
         const manifestPassed = rowPassed(manifestRow)
         if (manifestPassed !== summaryRow.passed) fail(bundleRel, `${rowId} summary passed=${summaryRow.passed} disagrees with manifest row checks`)
@@ -454,12 +458,34 @@ function compareRowField(bundleRel, rowId, manifestRow, summaryRow, field) {
   }
 }
 
-function compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow) {
-  const manifestStats = manifestRow.q8_file_reads
-  const summaryStats = summaryRow.q8_file_reads
+function validateCurrentHeadAgreement(bundleRel, manifest, summary) {
+  const manifestHead = firstString(manifest.git_head, manifest.source_runtime_head, manifest.source_head, manifest.head)
+  const summaryHead = firstString(summary.git_head, summary.source_runtime_head, summary.source_head, summary.head)
+  const isCurrentHeadBundle = manifest.schema === 'camelid.llama3_8b_context_1024_2048_current_head_public_evidence.v1'
+  if (isCurrentHeadBundle) {
+    if (!manifestHead || !/^[a-f0-9]{12,40}$/.test(manifestHead)) {
+      fail(bundleRel, 'Llama 3 8B context-1024/2048 manifest must record a source/runtime head')
+    }
+    if (!summaryHead || !/^[a-f0-9]{12,40}$/.test(summaryHead)) {
+      fail(bundleRel, 'Llama 3 8B context-1024/2048 summary must record the same source/runtime head as manifest')
+    }
+  }
+  if (manifestHead && summaryHead && manifestHead !== summaryHead) {
+    fail(bundleRel, `summary head mismatch: manifest=${JSON.stringify(manifestHead)} summary=${JSON.stringify(summaryHead)}`)
+  }
+}
+
+function firstString(...values) {
+  return values.find((value) => typeof value === 'string' && value.length > 0)
+}
+
+function compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow, field = 'q8_file_reads') {
+  const manifestStats = manifestRow[field]
+  const summaryStats = summaryRow[field]
   if (manifestStats === undefined && summaryStats === undefined) return
+  if (manifestStats == null && summaryStats == null) return
   if (!isPlainObject(manifestStats) || !isPlainObject(summaryStats)) {
-    fail(bundleRel, `${rowId} q8_file_reads must be present in both manifest and summary when recorded`)
+    fail(bundleRel, `${rowId} ${field} must be present in both manifest and summary when recorded`)
     return
   }
   const keys = [
@@ -481,7 +507,7 @@ function compareQ8FileReadStats(bundleRel, rowId, manifestRow, summaryRow) {
   ]
   for (const key of keys) {
     if (manifestStats[key] !== summaryStats[key]) {
-      fail(bundleRel, `${rowId} q8_file_reads.${key} mismatch: manifest=${JSON.stringify(manifestStats[key])} summary=${JSON.stringify(summaryStats[key])}`)
+      fail(bundleRel, `${rowId} ${field}.${key} mismatch: manifest=${JSON.stringify(manifestStats[key])} summary=${JSON.stringify(summaryStats[key])}`)
     }
   }
 }

@@ -35,6 +35,8 @@ assert.notEqual(bad.status, 0, 'invalid context evidence should fail')
 assert.match(bad.stderr, /generated_tokens_match must be true/)
 assert.match(bad.stderr, /source_prompt_pack must be qa\/prompt-packs\/llama3-context-1024-smoke\.json/)
 assert.match(bad.stderr, /q8_file_reads\.read_bytes mismatch/)
+assert.match(bad.stderr, /prefill_q8_file_reads\.read_calls mismatch/)
+assert.match(bad.stderr, /summary head mismatch/)
 assert.match(bad.stderr, /backend_generated_tokens must stay \[34,2735,35,12,7854\]/)
 
 async function writeBundle(root, { mutate }) {
@@ -177,6 +179,7 @@ async function writeEightBContext1024And2048Bundle(root, { mutate }) {
   const dir = join(root, 'llama3-8b-context-1024-2048-test')
   await mkdir(dir, { recursive: true })
   const boundary = 'Promotes only exact llama3_8b_instruct_q8_0 bounded 1024/2048 prompt packs. It does not promote neighboring rows, other quantizations, model-native/larger context buckets, arbitrary templates, broad/full Llama-family support, production throughput, or portability support.'
+  const currentHead = '9e3c64f2cfab098f9cccbc8e5f879ecd99d73666'
   const rows = [
     contextRow({
       rowId: 'llama3_8b_instruct_q8_0',
@@ -185,6 +188,7 @@ async function writeEightBContext1024And2048Bundle(root, { mutate }) {
       generatedText: 'CMLD-102',
       rawArtifact: 'target/llama3-8b-context-1024-2048-test/pack-1024/report.json',
       q8FileReads: q8FileReads({ readCalls: 3210, readBytes: 54703408384 }),
+      prefillQ8FileReads: q8FileReads({ readCalls: 1111, readBytes: 2147483648 }),
     }),
     contextRow({
       rowId: 'llama3_8b_instruct_q8_0',
@@ -193,6 +197,7 @@ async function writeEightBContext1024And2048Bundle(root, { mutate }) {
       generatedText: 'CMLD-204',
       rawArtifact: 'target/llama3-8b-context-1024-2048-test/pack-2048/report.json',
       q8FileReads: q8FileReads({ readCalls: 4879, readBytes: 69538945536 }),
+      prefillQ8FileReads: q8FileReads({ readCalls: 2222, readBytes: 4294967296 }),
     }),
   ]
   const summaryRows = rows.map((row) => ({
@@ -203,10 +208,15 @@ async function writeEightBContext1024And2048Bundle(root, { mutate }) {
     max_resident_set_kib: row.max_resident_set_kib,
     passed: row.passed,
     q8_file_reads: { ...row.q8_file_reads },
+    prefill_q8_file_reads: { ...row.prefill_q8_file_reads },
   }))
-  if (mutate) summaryRows[1].q8_file_reads.read_bytes += 1
+  if (mutate) {
+    summaryRows[1].q8_file_reads.read_bytes += 1
+    summaryRows[0].prefill_q8_file_reads.read_calls += 1
+  }
   const manifest = {
     schema: 'camelid.llama3_8b_context_1024_2048_current_head_public_evidence.v1',
+    git_head: currentHead,
     passed: true,
     checkout_clean: true,
     pack: {
@@ -220,6 +230,7 @@ async function writeEightBContext1024And2048Bundle(root, { mutate }) {
   const summary = {
     schema: 'camelid.llama3_8b_context_1024_2048_current_head_summary.v1',
     source_manifest: 'manifest.json',
+    head: mutate ? 'aaaaaaaaaaaa098f9cccbc8e5f879ecd99d73666' : currentHead,
     passed: true,
     rows: summaryRows,
     claim_boundary: boundary,
@@ -228,7 +239,7 @@ async function writeEightBContext1024And2048Bundle(root, { mutate }) {
   await writeFile(join(dir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
 }
 
-function contextRow({ rowId, contextWindow, promptId, generatedText, rawArtifact, q8FileReads }) {
+function contextRow({ rowId, contextWindow, promptId, generatedText, rawArtifact, q8FileReads, prefillQ8FileReads }) {
   return {
     row_id: rowId,
     context_window: contextWindow,
@@ -245,6 +256,7 @@ function contextRow({ rowId, contextWindow, promptId, generatedText, rawArtifact
     raw_artifact: rawArtifact,
     passed: true,
     ...(q8FileReads ? { q8_file_reads: q8FileReads } : {}),
+    ...(prefillQ8FileReads ? { prefill_q8_file_reads: prefillQ8FileReads } : {}),
   }
 }
 
