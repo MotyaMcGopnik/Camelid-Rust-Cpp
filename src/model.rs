@@ -23,6 +23,7 @@ pub struct LlamaModelConfig {
     pub rms_norm_epsilon: f32,
     pub vocab_size: Option<u32>,
     pub file_type: Option<u32>,
+    pub moe: Option<MixtralMoeMetadata>,
 }
 
 impl LlamaModelConfig {
@@ -37,12 +38,7 @@ impl LlamaModelConfig {
             }
         };
 
-        if let Some(moe) = MixtralMoeMetadata::from_gguf(gguf, architecture) {
-            return Err(BackendError::UnsupportedModelArchitecture(format!(
-                "{} MoE runtime is not implemented: expert_count={}, expert_used_count={}, router tensor pattern blk.N.ffn_gate_inp.weight plus expert tensors blk.N.ffn_{{gate,up,down}}_exps.weight require top-k expert routing; dense LLaMA/Mistral generation is disabled for this exact GGUF until that path has parity evidence",
-                moe.family_label, moe.expert_count, moe.expert_used_count
-            )));
-        }
+        let moe = MixtralMoeMetadata::from_gguf(gguf, architecture);
 
         let attention_head_count = required_u32(
             gguf,
@@ -100,6 +96,7 @@ impl LlamaModelConfig {
                     )
                 }),
             file_type: gguf.metadata_u32("general.file_type"),
+            moe,
         })
     }
 }
@@ -156,9 +153,22 @@ pub struct LlamaLayerTensors {
     pub attention_v: GgufTensorDescriptor,
     pub attention_output: GgufTensorDescriptor,
     pub ffn_norm: GgufTensorDescriptor,
-    pub ffn_gate: GgufTensorDescriptor,
-    pub ffn_up: GgufTensorDescriptor,
-    pub ffn_down: GgufTensorDescriptor,
+    pub ffn: LlamaFfnTensors,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum LlamaFfnTensors {
+    Dense {
+        gate: GgufTensorDescriptor,
+        up: GgufTensorDescriptor,
+        down: GgufTensorDescriptor,
+    },
+    MoE {
+        router: GgufTensorDescriptor,
+        gate_experts: GgufTensorDescriptor,
+        up_experts: GgufTensorDescriptor,
+        down_experts: GgufTensorDescriptor,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -196,9 +206,32 @@ impl LlamaTensorBinding {
                     &format!("blk.{layer_idx}.attn_output.weight"),
                 )?,
                 ffn_norm: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_norm.weight"))?,
-                ffn_gate: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_gate.weight"))?,
-                ffn_up: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_up.weight"))?,
-                ffn_down: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_down.weight"))?,
+                ffn: if config.moe.is_some() {
+                    LlamaFfnTensors::MoE {
+                        router: required_tensor(
+                            gguf,
+                            &format!("blk.{layer_idx}.ffn_gate_inp.weight"),
+                        )?,
+                        gate_experts: required_tensor(
+                            gguf,
+                            &format!("blk.{layer_idx}.ffn_gate_exps.weight"),
+                        )?,
+                        up_experts: required_tensor(
+                            gguf,
+                            &format!("blk.{layer_idx}.ffn_up_exps.weight"),
+                        )?,
+                        down_experts: required_tensor(
+                            gguf,
+                            &format!("blk.{layer_idx}.ffn_down_exps.weight"),
+                        )?,
+                    }
+                } else {
+                    LlamaFfnTensors::Dense {
+                        gate: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_gate.weight"))?,
+                        up: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_up.weight"))?,
+                        down: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_down.weight"))?,
+                    }
+                },
             });
         }
 
@@ -288,24 +321,73 @@ impl LlamaTensorBinding {
                 &[dims.embedding_length],
                 &format!("layer {idx} ffn norm"),
             )?;
-            require_descriptor_matrix_shape(
-                &layer.ffn_gate,
-                dims.embedding_length,
-                dims.feed_forward_length,
-                &format!("layer {idx} ffn gate"),
-            )?;
-            require_descriptor_matrix_shape(
-                &layer.ffn_up,
-                dims.embedding_length,
-                dims.feed_forward_length,
-                &format!("layer {idx} ffn up"),
-            )?;
-            require_descriptor_matrix_shape(
-                &layer.ffn_down,
-                dims.feed_forward_length,
-                dims.embedding_length,
-                &format!("layer {idx} ffn down"),
-            )?;
+            match &layer.ffn {
+                LlamaFfnTensors::Dense { gate, up, down } => {
+                    require_descriptor_matrix_shape(
+                        gate,
+                        dims.embedding_length,
+                        dims.feed_forward_length,
+                        &format!("layer {idx} ffn gate"),
+                    )?;
+                    require_descriptor_matrix_shape(
+                        up,
+                        dims.embedding_length,
+                        dims.feed_forward_length,
+                        &format!("layer {idx} ffn up"),
+                    )?;
+                    require_descriptor_matrix_shape(
+                        down,
+                        dims.feed_forward_length,
+                        dims.embedding_length,
+                        &format!("layer {idx} ffn down"),
+                    )?;
+                }
+                LlamaFfnTensors::MoE {
+                    router,
+                    gate_experts,
+                    up_experts,
+                    down_experts,
+                } => {
+                    let moe = config.moe.as_ref().ok_or_else(|| {
+                        BackendError::InvalidModelMetadata(
+                            "MoE tensors were bound for a dense config".to_string(),
+                        )
+                    })?;
+                    require_descriptor_matrix_shape(
+                        router,
+                        dims.embedding_length,
+                        moe.expert_count as usize,
+                        &format!("layer {idx} ffn router"),
+                    )?;
+                    require_descriptor_shape(
+                        gate_experts,
+                        &[
+                            dims.embedding_length,
+                            dims.feed_forward_length,
+                            moe.expert_count as usize,
+                        ],
+                        &format!("layer {idx} ffn gate experts"),
+                    )?;
+                    require_descriptor_shape(
+                        up_experts,
+                        &[
+                            dims.embedding_length,
+                            dims.feed_forward_length,
+                            moe.expert_count as usize,
+                        ],
+                        &format!("layer {idx} ffn up experts"),
+                    )?;
+                    require_descriptor_shape(
+                        down_experts,
+                        &[
+                            dims.feed_forward_length,
+                            dims.embedding_length,
+                            moe.expert_count as usize,
+                        ],
+                        &format!("layer {idx} ffn down experts"),
+                    )?;
+                }
+            }
         }
 
         Ok(())

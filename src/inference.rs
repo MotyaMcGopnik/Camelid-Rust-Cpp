@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::{
     gguf::GgufTensorType,
-    model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
+    model::{DenseLlamaDims, LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
     tensor::{
         dot_product, parse_byte_count_env, q8_0_file_read_stats, record_q8_0_file_read,
         should_parallelize_linear_output, with_q8_file_cache_capacity_override, CpuTensor,
@@ -198,6 +198,7 @@ pub struct LlamaLayerWeights {
     pub ffn_gate: CpuTensor,
     pub ffn_up: CpuTensor,
     pub ffn_down: CpuTensor,
+    pub moe_router: Option<CpuTensor>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -670,6 +671,10 @@ impl LlamaLoadedWeights {
                     || tensor_has_q8_0_file_backing(&layer.ffn_gate)
                     || tensor_has_q8_0_file_backing(&layer.ffn_up)
                     || tensor_has_q8_0_file_backing(&layer.ffn_down)
+                    || layer
+                        .moe_router
+                        .as_ref()
+                        .is_some_and(tensor_has_q8_0_file_backing)
             })
     }
 
@@ -685,6 +690,7 @@ impl LlamaLoadedWeights {
                     &layer.ffn_gate,
                     &layer.ffn_up,
                     &layer.ffn_down,
+                    layer.moe_router.as_ref().unwrap_or(&layer.ffn_norm),
                 ]
                 .into_iter()
                 .map(tensor_q8_0_file_backed_storage_bytes)
@@ -722,6 +728,25 @@ impl LlamaLoadedWeights {
             .transpose()?;
         let mut layers = Vec::with_capacity(binding.layers.len());
         for layer in &binding.layers {
+            let (ffn_gate, ffn_up, ffn_down, moe_router) = match &layer.ffn {
+                LlamaFfnTensors::Dense { gate, up, down } => (
+                    load_linear(&gate.name)?,
+                    load_linear(&up.name)?,
+                    load_linear(&down.name)?,
+                    None,
+                ),
+                LlamaFfnTensors::MoE {
+                    router,
+                    gate_experts,
+                    up_experts,
+                    down_experts,
+                } => (
+                    store.load_q8_0_file_backed_tensor(&gate_experts.name)?,
+                    store.load_q8_0_file_backed_tensor(&up_experts.name)?,
+                    store.load_q8_0_file_backed_tensor(&down_experts.name)?,
+                    Some(store.load_cpu_f32(&router.name)?),
+                ),
+            };
             layers.push(LlamaLayerWeights {
                 attention_norm: store.load_cpu_f32(&layer.attention_norm.name)?,
                 attention_q: load_linear(&layer.attention_q.name)?,
@@ -729,9 +754,10 @@ impl LlamaLoadedWeights {
                 attention_v: load_linear(&layer.attention_v.name)?,
                 attention_output: load_linear(&layer.attention_output.name)?,
                 ffn_norm: store.load_cpu_f32(&layer.ffn_norm.name)?,
-                ffn_gate: load_linear(&layer.ffn_gate.name)?,
-                ffn_up: load_linear(&layer.ffn_up.name)?,
-                ffn_down: load_linear(&layer.ffn_down.name)?,
+                ffn_gate,
+                ffn_up,
+                ffn_down,
+                moe_router,
             });
         }
         Ok(Self {
@@ -3367,48 +3393,92 @@ fn forward_layer_timed(
     }
     trace_forward_layer_memory(layer_idx, "ffn_norm_done");
 
-    let activated = gated_ffn_activation(
-        &ffn_norm,
-        &layer.ffn_gate,
-        &layer.ffn_up,
-        format!("layer_{layer_idx}_ffn_activated"),
-        collect_diagnostics,
-    )?;
-    timings.ffn_gate = activated.gate;
-    timings.ffn_up = activated.up;
-    timings.ffn_activation = activated.activation;
-    let ffn_gate_stats = activated.gate_stats;
-    let ffn_up_stats = activated.up_stats;
-    let ffn_gate_diagnostic = activated.gate_diagnostic;
-    let ffn_up_diagnostic = activated.up_diagnostic;
-    let ffn_activation_diagnostic = activated.activation_diagnostic;
-    let activated = activated.tensor;
-    let ffn_activation_stats = collect_diagnostics
-        .then(|| LlamaTensorStats::from_tensor(&activated))
-        .transpose()?;
-    if let Some(memory) = &mut memory {
-        memory.record_after_ffn_activation(capture_memory_sample(kv_cache));
-    }
-    trace_forward_layer_memory(layer_idx, "ffn_gate_up_activation_done");
-
-    let started = Instant::now();
-    let mut ffn_out = linear_for_role_runtime(
-        &activated,
-        &layer.ffn_down,
-        format!("layer_{layer_idx}_ffn_down"),
-        "ffn_down",
-        collect_diagnostics,
-    )?;
+    let (
+        mut ffn_out,
+        ffn_gate_stats,
+        ffn_up_stats,
+        ffn_gate_diagnostic,
+        ffn_up_diagnostic,
+        ffn_activation_diagnostic,
+        ffn_activation_stats,
+        ffn_down_diagnostic,
+        ffn_output_stats,
+    ) = if let (Some(moe), Some(router)) = (&params.config.moe, &layer.moe_router) {
+        if collect_diagnostics {
+            return Err(BackendError::UnsupportedModelArchitecture(
+                    "Mixtral MoE diagnostics are not implemented yet; generation remains runtime-only until parity evidence is collected".to_string(),
+                ));
+        }
+        let (ffn_out, gate, up, activation, down) = mixtral_moe_ffn(
+            &ffn_norm,
+            router,
+            &layer.ffn_gate,
+            &layer.ffn_up,
+            &layer.ffn_down,
+            moe.expert_used_count as usize,
+            format!("layer_{layer_idx}_mixtral_moe_ffn"),
+        )?;
+        timings.ffn_gate = gate;
+        timings.ffn_up = up;
+        timings.ffn_activation = activation;
+        timings.ffn_down = down;
+        (ffn_out, None, None, None, None, None, None, None, None)
+    } else {
+        let activated = gated_ffn_activation(
+            &ffn_norm,
+            &layer.ffn_gate,
+            &layer.ffn_up,
+            format!("layer_{layer_idx}_ffn_activated"),
+            collect_diagnostics,
+        )?;
+        timings.ffn_gate = activated.gate;
+        timings.ffn_up = activated.up;
+        timings.ffn_activation = activated.activation;
+        let ffn_gate_stats = activated.gate_stats;
+        let ffn_up_stats = activated.up_stats;
+        let ffn_gate_diagnostic = activated.gate_diagnostic;
+        let ffn_up_diagnostic = activated.up_diagnostic;
+        let ffn_activation_diagnostic = activated.activation_diagnostic;
+        let activated = activated.tensor;
+        let ffn_activation_stats = collect_diagnostics
+            .then(|| LlamaTensorStats::from_tensor(&activated))
+            .transpose()?;
+        if let Some(memory) = &mut memory {
+            memory.record_after_ffn_activation(capture_memory_sample(kv_cache));
+        }
+        trace_forward_layer_memory(layer_idx, "ffn_gate_up_activation_done");
+        let started = Instant::now();
+        let ffn_out = linear_for_role_runtime(
+            &activated,
+            &layer.ffn_down,
+            format!("layer_{layer_idx}_ffn_down"),
+            "ffn_down",
+            collect_diagnostics,
+        )?;
+        let ffn_output_stats = collect_diagnostics
+            .then(|| LlamaTensorStats::from_tensor(&ffn_out))
+            .transpose()?;
+        let ffn_down_diagnostic = collect_diagnostics
+            .then(|| {
+                linear_projection_diagnostics(&activated, &layer.ffn_down, &ffn_out, "ffn_down")
+            })
+            .transpose()?;
+        timings.ffn_down = started.elapsed().as_micros();
+        (
+            ffn_out,
+            ffn_gate_stats,
+            ffn_up_stats,
+            ffn_gate_diagnostic,
+            ffn_up_diagnostic,
+            ffn_activation_diagnostic,
+            ffn_activation_stats,
+            ffn_down_diagnostic,
+            ffn_output_stats,
+        )
+    };
     if collect_diagnostics && diagnostic_zero_delta(DeltaZeroTarget::Ffn, layer_idx)? {
         ffn_out = zero_like(&ffn_out, format!("layer_{layer_idx}_ffn_down_zeroed"))?;
     }
-    let ffn_output_stats = collect_diagnostics
-        .then(|| LlamaTensorStats::from_tensor(&ffn_out))
-        .transpose()?;
-    let ffn_down_diagnostic = collect_diagnostics
-        .then(|| linear_projection_diagnostics(&activated, &layer.ffn_down, &ffn_out, "ffn_down"))
-        .transpose()?;
-    timings.ffn_down = started.elapsed().as_micros();
     if let Some(memory) = &mut memory {
         memory.record_after_ffn_down(capture_memory_sample(kv_cache));
     }
@@ -3679,30 +3749,47 @@ fn forward_prefill_layer_chunk_timed(
     }
     trace_chunk_memory("ffn_norm_done");
 
-    let activated = gated_ffn_activation_batch(
-        &ffn_norm,
-        &layer.ffn_gate,
-        &layer.ffn_up,
-        format!("layer_{layer_idx}_prefill_ffn_activated"),
-    )?;
-    timings.ffn_gate = activated.gate;
-    timings.ffn_up = activated.up;
-    timings.ffn_activation = activated.activation;
-    let activated = activated.tensor;
-    if let Some(memory) = &mut memory {
-        memory.record_after_ffn_activation(capture_memory_sample(kv_cache));
-    }
-    trace_chunk_memory("ffn_gate_up_activation_done");
-
-    let started = Instant::now();
-    let ffn_out = linear_for_role_runtime(
-        &activated,
-        &layer.ffn_down,
-        format!("layer_{layer_idx}_prefill_ffn_down"),
-        "ffn_down",
-        false,
-    )?;
-    timings.ffn_down = started.elapsed().as_micros();
+    let ffn_out = if let (Some(moe), Some(router)) = (&params.config.moe, &layer.moe_router) {
+        let (ffn_out, gate, up, activation, down) = mixtral_moe_ffn(
+            &ffn_norm,
+            router,
+            &layer.ffn_gate,
+            &layer.ffn_up,
+            &layer.ffn_down,
+            moe.expert_used_count as usize,
+            format!("layer_{layer_idx}_prefill_mixtral_moe_ffn"),
+        )?;
+        timings.ffn_gate = gate;
+        timings.ffn_up = up;
+        timings.ffn_activation = activation;
+        timings.ffn_down = down;
+        ffn_out
+    } else {
+        let activated = gated_ffn_activation_batch(
+            &ffn_norm,
+            &layer.ffn_gate,
+            &layer.ffn_up,
+            format!("layer_{layer_idx}_prefill_ffn_activated"),
+        )?;
+        timings.ffn_gate = activated.gate;
+        timings.ffn_up = activated.up;
+        timings.ffn_activation = activated.activation;
+        let activated = activated.tensor;
+        if let Some(memory) = &mut memory {
+            memory.record_after_ffn_activation(capture_memory_sample(kv_cache));
+        }
+        trace_chunk_memory("ffn_gate_up_activation_done");
+        let started = Instant::now();
+        let ffn_out = linear_for_role_runtime(
+            &activated,
+            &layer.ffn_down,
+            format!("layer_{layer_idx}_prefill_ffn_down"),
+            "ffn_down",
+            false,
+        )?;
+        timings.ffn_down = started.elapsed().as_micros();
+        ffn_out
+    };
     if let Some(memory) = &mut memory {
         memory.record_after_ffn_down(capture_memory_sample(kv_cache));
     }
@@ -5455,6 +5542,165 @@ fn gated_ffn_activation_batch(
     })
 }
 
+fn softmax_top_k(logits: &[f32], k: usize) -> Vec<(usize, f32)> {
+    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut scored = logits
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| (idx, (*value - max).exp()))
+        .collect::<Vec<_>>();
+    let sum = scored.iter().map(|(_, value)| *value).sum::<f32>();
+    for (_, value) in &mut scored {
+        *value /= sum;
+    }
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored.truncate(k);
+    scored
+}
+
+fn expert_matrix_view(
+    weight: &CpuTensor,
+    expert_idx: usize,
+    input_width: usize,
+    output_width: usize,
+    name: impl Into<String>,
+) -> Result<CpuTensor> {
+    if weight.rank() != 3 {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "MoE expert tensor {} expected rank 3, got {:?}",
+            weight.name, weight.shape.dims
+        )));
+    }
+    let experts = weight.dim(2)?;
+    if expert_idx >= experts {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "MoE expert index {expert_idx} out of bounds for {} experts",
+            experts
+        )));
+    }
+    let expert_elements = input_width.checked_mul(output_width).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("MoE expert element count overflow".to_string())
+    })?;
+    if weight.dim(0)? != input_width || weight.dim(1)? != output_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "MoE expert tensor {} expected per-expert dims [{input_width}, {output_width}], got {:?}",
+            weight.name, weight.shape.dims
+        )));
+    }
+    let block_offset = expert_elements.checked_mul(expert_idx).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch("MoE expert offset overflow".to_string())
+    })? / Q8_0_BLOCK_VALUES;
+    let block_count = expert_elements / Q8_0_BLOCK_VALUES;
+    let mut tensor = if let Some(backing) = &weight.q8_0_file_backing {
+        CpuTensor::q8_0_file_backed_linear(
+            name,
+            TensorShape {
+                dims: vec![output_width, input_width],
+            },
+            Q8_0FileBacking::new(
+                backing.path.clone(),
+                backing.absolute_offset + (block_offset * Q8BlockReader::BLOCK_SIZE_BYTES) as u64,
+                block_count,
+            ),
+        )
+    } else {
+        let start = expert_elements * expert_idx;
+        let end = start + expert_elements;
+        let data = weight
+            .data
+            .get(start..end)
+            .ok_or_else(|| {
+                BackendError::RuntimeShapeMismatch(format!(
+                    "MoE expert slice {start}..{end} missing from {}",
+                    weight.name
+                ))
+            })?
+            .to_vec();
+        CpuTensor::from_f32(name, vec![output_width, input_width], data)?
+    };
+    tensor.source_type = weight.source_type;
+    if let Some(blocks) = &weight.q8_0_blocks {
+        tensor.q8_0_blocks = Some(blocks[block_offset..block_offset + block_count].to_vec());
+    }
+    Ok(tensor)
+}
+
+fn mixtral_moe_ffn(
+    input: &CpuTensor,
+    router: &CpuTensor,
+    gate_experts: &CpuTensor,
+    up_experts: &CpuTensor,
+    down_experts: &CpuTensor,
+    expert_used_count: usize,
+    name: impl Into<String>,
+) -> Result<(CpuTensor, u128, u128, u128, u128)> {
+    if input.rank() != 2 {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Mixtral MoE FFN expects rank-2 input, got {:?}",
+            input.shape.dims
+        )));
+    }
+    let rows = input.dim(0)?;
+    let hidden = input.dim(1)?;
+    let ff = gate_experts.dim(1)?;
+    let expert_count = router.dim(0)?.max(router.dim(1)?);
+    let router_started = Instant::now();
+    let logits = linear_for_role_runtime(input, router, "mixtral_router", "linear", false)?;
+    let router_elapsed = router_started.elapsed().as_micros();
+    let mut output = vec![0.0_f32; rows * hidden];
+    let mut gate_elapsed = 0;
+    let mut up_elapsed = 0;
+    let mut activation_elapsed = 0;
+    let mut down_elapsed = 0;
+    for row in 0..rows {
+        let row_input = CpuTensor::from_f32(
+            "mixtral_moe_row",
+            vec![1, hidden],
+            input.data[row * hidden..(row + 1) * hidden].to_vec(),
+        )?;
+        let top = softmax_top_k(
+            &logits.data[row * expert_count..(row + 1) * expert_count],
+            expert_used_count,
+        );
+        for (expert_idx, weight) in top {
+            let gate =
+                expert_matrix_view(gate_experts, expert_idx, hidden, ff, "mixtral_gate_expert")?;
+            let up = expert_matrix_view(up_experts, expert_idx, hidden, ff, "mixtral_up_expert")?;
+            let down =
+                expert_matrix_view(down_experts, expert_idx, ff, hidden, "mixtral_down_expert")?;
+            let activated =
+                gated_ffn_activation(&row_input, &gate, &up, "mixtral_expert_activated", false)?;
+            gate_elapsed += activated.gate;
+            up_elapsed += activated.up;
+            activation_elapsed += activated.activation;
+            let started = Instant::now();
+            let expert_out = linear_for_role_runtime(
+                &activated.tensor,
+                &down,
+                "mixtral_expert_down",
+                "ffn_down",
+                false,
+            )?;
+            down_elapsed += started.elapsed().as_micros();
+            for col in 0..hidden {
+                output[row * hidden + col] += expert_out.data[col] * weight;
+            }
+        }
+    }
+    Ok((
+        CpuTensor::from_f32(name, vec![rows, hidden], output)?,
+        gate_elapsed + router_elapsed,
+        up_elapsed,
+        activation_elapsed,
+        down_elapsed,
+    ))
+}
+
 fn ffn_activation_diagnostics(
     gate: &CpuTensor,
     up: &CpuTensor,
@@ -5730,12 +5976,30 @@ fn auto_retain_q8_0_blocks_for_fast_local_chat(binding: &LlamaTensorBinding) -> 
             &layer.attention_k,
             &layer.attention_v,
             &layer.attention_output,
-            &layer.ffn_gate,
-            &layer.ffn_up,
-            &layer.ffn_down,
         ] {
             if add_linear(desc).is_none() {
                 return false;
+            }
+        }
+        match &layer.ffn {
+            LlamaFfnTensors::Dense { gate, up, down } => {
+                for desc in [gate, up, down] {
+                    if add_linear(desc).is_none() {
+                        return false;
+                    }
+                }
+            }
+            LlamaFfnTensors::MoE {
+                router,
+                gate_experts,
+                up_experts,
+                down_experts,
+            } => {
+                for desc in [router, gate_experts, up_experts, down_experts] {
+                    if add_linear(desc).is_none() {
+                        return false;
+                    }
+                }
             }
         }
     }
@@ -8840,6 +9104,7 @@ mod tests {
                     .unwrap(),
                 ffn_down: CpuTensor::from_f32("blk.0.ffn_down.weight", vec![2, 2], vec![1.0; 4])
                     .unwrap(),
+                moe_router: None,
             }],
         }
     }
@@ -9112,6 +9377,7 @@ mod tests {
             rms_norm_epsilon: 1.0e-5,
             vocab_size: Some(2),
             file_type: None,
+            moe: None,
         };
         let dense_vector = |name: &str| CpuTensor::from_f32(name, vec![32], vec![1.0; 32]).unwrap();
         let dense_matrix =
@@ -9141,6 +9407,7 @@ mod tests {
                 ffn_gate: dense_matrix("blk.0.ffn_gate.weight"),
                 ffn_up: dense_matrix("blk.0.ffn_up.weight"),
                 ffn_down: dense_matrix("blk.0.ffn_down.weight"),
+                moe_router: None,
             }],
         };
         let mut session = LlamaInferenceSession::new(config, weights).unwrap();
@@ -10934,6 +11201,7 @@ mod tests {
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
@@ -10969,6 +11237,7 @@ mod tests {
             rms_norm_epsilon: 1e-5,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
 
@@ -11014,6 +11283,7 @@ mod tests {
             rms_norm_epsilon: 1e-5,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
 
@@ -11063,6 +11333,7 @@ mod tests {
             rms_norm_epsilon: 1e-5,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
         let rope_freqs = CpuTensor::from_f32("rope_freqs.weight", vec![2], vec![1.0, 4.0]).unwrap();
@@ -11119,6 +11390,7 @@ mod tests {
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
         let reported = apply_rope(&tensor, 1, 2, &config, None, "query_rope").unwrap();
@@ -11180,6 +11452,7 @@ mod tests {
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 0.0]).unwrap();
         let head_dim = 4;
@@ -11253,6 +11526,7 @@ mod tests {
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 2], vec![1.0, 0.0]).unwrap();
         let head_dim = 2;
@@ -11325,6 +11599,7 @@ mod tests {
             rms_norm_epsilon: 1e-6,
             vocab_size: None,
             file_type: None,
+            moe: None,
         };
         let tensor = CpuTensor::from_f32("query", vec![1, 2], vec![1.0, 0.0]).unwrap();
 
@@ -12221,6 +12496,7 @@ mod tests {
             rms_norm_epsilon: 0.0,
             vocab_size: Some(3),
             file_type: None,
+            moe: None,
         };
         let weights = Arc::new(LlamaLoadedWeights {
             token_embedding: CpuTensor::from_f32(
@@ -12298,6 +12574,7 @@ mod tests {
                     vec![1.0, 0.0, 0.0, 1.0],
                 )
                 .unwrap(),
+                moe_router: None,
             }],
         });
         let mut session = LlamaInferenceSession::new(config, weights).unwrap();
@@ -12461,6 +12738,7 @@ mod tests {
             rms_norm_epsilon: 1.0e-5,
             vocab_size: Some(4),
             file_type: None,
+            moe: None,
         };
         let weights = Arc::new(LlamaLoadedWeights {
             token_embedding: CpuTensor::from_f32(
@@ -12531,6 +12809,7 @@ mod tests {
                     vec![0.7, -0.2, 0.4, 0.3],
                 )
                 .unwrap(),
+                moe_router: None,
             }],
         });
 
@@ -12669,6 +12948,7 @@ mod tests {
             rms_norm_epsilon: 1.0e-5,
             vocab_size: Some(4),
             file_type: None,
+            moe: None,
         };
         let layer = LlamaLayerWeights {
             attention_norm: CpuTensor::from_f32("blk.0.attn_norm.weight", vec![2], vec![1.0, 1.0])
@@ -12717,6 +12997,7 @@ mod tests {
                 vec![1.0, 0.0, 0.0, 1.0],
             )
             .unwrap(),
+            moe_router: None,
         };
         let hidden = CpuTensor::from_f32("hidden", vec![2, 2], vec![0.1, 0.2, 0.3, 0.4]).unwrap();
         let plan = LlamaKvCachePlan::from_config(&config).unwrap();
@@ -12766,6 +13047,7 @@ mod tests {
             rms_norm_epsilon: 1.0e-5,
             vocab_size: Some(4),
             file_type: None,
+            moe: None,
         };
         let kv_cache = LlamaKvCache::new(LlamaKvCachePlan::from_config(&config).unwrap()).unwrap();
         let query = CpuTensor::from_f32("query", vec![1, 2], vec![0.1, 0.2]).unwrap();
@@ -12905,6 +13187,7 @@ mod tests {
             rms_norm_epsilon: 1.0e-5,
             vocab_size: Some(4),
             file_type: None,
+            moe: None,
         };
         let weights = Arc::new(LlamaLoadedWeights {
             token_embedding: CpuTensor::from_f32(
@@ -12975,6 +13258,7 @@ mod tests {
                     vec![0.7, -0.2, 0.4, 0.3],
                 )
                 .unwrap(),
+                moe_router: None,
             }],
         });
 
@@ -13480,5 +13764,44 @@ mod tests {
             sampled_attention_trace_heads(32, 8, 4, GqaHeadMapping::Modulo),
             vec![0, 1, 2, 3, 28, 29, 30, 31]
         );
+    }
+
+    #[test]
+    fn mixtral_moe_ffn_routes_top_k_experts() {
+        let input = CpuTensor::from_f32("input", vec![1, 2], vec![1.0, 1.0]).unwrap();
+        let router = CpuTensor::from_f32("router", vec![2, 2], vec![10.0, 0.0, 0.0, 0.0]).unwrap();
+        let gate_experts = CpuTensor::from_f32(
+            "gate_experts",
+            vec![2, 2, 2],
+            vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+        let up_experts = CpuTensor::from_f32(
+            "up_experts",
+            vec![2, 2, 2],
+            vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+        let down_experts = CpuTensor::from_f32(
+            "down_experts",
+            vec![2, 2, 2],
+            vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+
+        let (out, ..) = mixtral_moe_ffn(
+            &input,
+            &router,
+            &gate_experts,
+            &up_experts,
+            &down_experts,
+            2,
+            "out",
+        )
+        .unwrap();
+
+        let expected = 1.0 / (1.0 + (-1.0_f32).exp());
+        assert!((out.data[0] - expected).abs() < 1.0e-3, "{:?}", out.data);
+        assert!((out.data[1] - expected).abs() < 1.0e-3, "{:?}", out.data);
     }
 }

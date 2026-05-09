@@ -1935,6 +1935,15 @@ impl TensorStore {
         if shape.dims.len() != 2 {
             return self.load_cpu_f32(name);
         }
+        self.load_q8_0_file_backed_tensor(name)
+    }
+
+    pub fn load_q8_0_file_backed_tensor(&self, name: &str) -> Result<CpuTensor> {
+        let desc = self.descriptor(name)?.clone();
+        if desc.tensor_type != GgufTensorType::Q8_0 {
+            return self.load_cpu_f32(name);
+        }
+        let shape = TensorShape::from_gguf_dims(&desc.dimensions)?;
         let expected_elements = shape.element_count()?;
         if expected_elements % 32 != 0 {
             return Err(BackendError::InvalidTensorData(format!(
