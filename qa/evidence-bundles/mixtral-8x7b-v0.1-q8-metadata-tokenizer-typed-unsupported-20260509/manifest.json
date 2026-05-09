@@ -69,6 +69,12 @@
       "after_metadata_load": 23536,
       "after_generation_reject": 25904
     },
+    "ubuntu_validation_rss_kib": {
+      "before": 12080,
+      "after_metadata_load": 22256,
+      "after_generation_reject": 32272
+    },
+    "ubuntu_validation": "Clean Ubuntu checkout at commit 5f270ab reproduced the typed Mixtral MoE unsupported API behavior using a 64 MiB sparse-header GGUF; targeted model_binding/tokenizer/capabilities tests passed, and real Mixtral tokenizer parity passed with MIXTRAL_GGUF pointing at the sparse header.",
     "rss_note": "debug server, sparse-header GGUF metadata/tokenizer load only; no full tensor payload or generation parity attempted"
   },
   "tokenizer_evidence": {
