@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use camelid::{
     gguf::read_metadata,
     inference::LlamaKvCachePlan,
-    model::{LlamaModelConfig, LlamaTensorBinding},
+    model::{LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
 };
 
 #[test]
@@ -76,18 +76,33 @@ fn accepts_mistral_metadata_on_llama_dense_runtime() {
 }
 
 #[test]
-fn rejects_mixtral_moe_metadata_before_dense_tensor_binding() {
+fn binds_mixtral_moe_metadata_and_expert_tensors() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mixtral-moe.gguf");
     write_mixtral_moe_gguf(&path);
 
     let gguf = read_metadata(&path).unwrap();
-    let err = LlamaModelConfig::from_gguf(&gguf).unwrap_err().to_string();
+    let config = LlamaModelConfig::from_gguf(&gguf).unwrap();
+    let binding = LlamaTensorBinding::bind(&gguf, &config).unwrap();
+    let moe = config.moe.as_ref().unwrap();
 
-    assert!(err.contains("Mixtral MoE runtime is not implemented"));
-    assert!(err.contains("expert_count=8"));
-    assert!(err.contains("expert_used_count=2"));
-    assert!(err.contains("ffn_gate_inp.weight"));
+    assert_eq!(moe.family_label, "Mixtral");
+    assert_eq!(moe.expert_count, 8);
+    assert_eq!(moe.expert_used_count, 2);
+    match &binding.layers[0].ffn {
+        LlamaFfnTensors::MoE {
+            router,
+            gate_experts,
+            up_experts,
+            down_experts,
+        } => {
+            assert_eq!(router.name, "blk.0.ffn_gate_inp.weight");
+            assert_eq!(gate_experts.name, "blk.0.ffn_gate_exps.weight");
+            assert_eq!(up_experts.name, "blk.0.ffn_up_exps.weight");
+            assert_eq!(down_experts.name, "blk.0.ffn_down_exps.weight");
+        }
+        LlamaFfnTensors::Dense { .. } => panic!("expected Mixtral MoE FFN tensors"),
+    }
 }
 
 #[test]
@@ -155,7 +170,10 @@ fn binds_required_llama_tensors() {
     assert!(!binding.output_is_tied_embedding);
     assert_eq!(binding.layers.len(), 1);
     assert_eq!(binding.layers[0].attention_q.name, "blk.0.attn_q.weight");
-    assert_eq!(binding.layers[0].ffn_down.name, "blk.0.ffn_down.weight");
+    match &binding.layers[0].ffn {
+        LlamaFfnTensors::Dense { down, .. } => assert_eq!(down.name, "blk.0.ffn_down.weight"),
+        LlamaFfnTensors::MoE { .. } => panic!("expected dense FFN tensors"),
+    }
 }
 
 #[test]

@@ -32,7 +32,7 @@ use crate::{
         LlamaLayerMemoryTimings, LlamaLayerTimings, LlamaLoadedWeights,
         LlamaOutputProjectionDiagnostic, LlamaSampler, SamplingConfig,
     },
-    model::{DenseLlamaDims, LlamaModelConfig, LlamaTensorBinding},
+    model::{DenseLlamaDims, LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
     tensor::{CpuTensor, Q8_0Block, TensorStore},
     tokenizer::Tokenizer,
     BackendError,
@@ -1686,7 +1686,7 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
         })?;
         let file_backed_q8_linear = lazy_q8_linear
             && desc.tensor_type == GgufTensorType::Q8_0
-            && desc.dimensions.len() == 2;
+            && matches!(desc.dimensions.len(), 2 | 3);
         let f32_bytes = if file_backed_q8_linear {
             0
         } else {
@@ -1773,9 +1773,6 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
             &layer.attention_v,
             &layer.attention_output,
             &layer.ffn_norm,
-            &layer.ffn_gate,
-            &layer.ffn_up,
-            &layer.ffn_down,
         ] {
             total = total
                 .checked_add(tensor_estimate(desc, retain_q8_blocks, lazy_q8_linear)?)
@@ -1784,6 +1781,35 @@ fn estimate_cpu_weight_materialization_bytes(binding: &LlamaTensorBinding) -> cr
                         "CPU materialization byte estimate overflow".to_string(),
                     )
                 })?;
+        }
+        match &layer.ffn {
+            LlamaFfnTensors::Dense { gate, up, down } => {
+                for desc in [gate, up, down] {
+                    total = total
+                        .checked_add(tensor_estimate(desc, retain_q8_blocks, lazy_q8_linear)?)
+                        .ok_or_else(|| {
+                            BackendError::InvalidTensorData(
+                                "CPU materialization byte estimate overflow".to_string(),
+                            )
+                        })?;
+                }
+            }
+            LlamaFfnTensors::MoE {
+                router,
+                gate_experts,
+                up_experts,
+                down_experts,
+            } => {
+                for desc in [router, gate_experts, up_experts, down_experts] {
+                    total = total
+                        .checked_add(tensor_estimate(desc, retain_q8_blocks, lazy_q8_linear)?)
+                        .ok_or_else(|| {
+                            BackendError::InvalidTensorData(
+                                "CPU materialization byte estimate overflow".to_string(),
+                            )
+                        })?;
+                }
+            }
         }
     }
     Ok(total)
@@ -4523,9 +4549,11 @@ mod tests {
                 attention_v: desc("blk.0.attn_v.weight"),
                 attention_output: desc("blk.0.attn_output.weight"),
                 ffn_norm: desc("blk.0.ffn_norm.weight"),
-                ffn_gate: desc("blk.0.ffn_gate.weight"),
-                ffn_up: desc("blk.0.ffn_up.weight"),
-                ffn_down: desc("blk.0.ffn_down.weight"),
+                ffn: LlamaFfnTensors::Dense {
+                    gate: desc("blk.0.ffn_gate.weight"),
+                    up: desc("blk.0.ffn_up.weight"),
+                    down: desc("blk.0.ffn_down.weight"),
+                },
             }],
         }
     }
@@ -4664,6 +4692,7 @@ mod tests {
             rms_norm_epsilon: 1e-6,
             vocab_size: Some(3),
             file_type: Some(0),
+            moe: None,
         }
     }
 
@@ -4698,6 +4727,7 @@ mod tests {
                 ffn_gate: select_rows("blk.0.ffn_gate.weight", ffn, hidden, &[0, 1, 2, 3, 0, 1]),
                 ffn_up: select_rows("blk.0.ffn_up.weight", ffn, hidden, &[0, 1, 2, 3, 0, 1]),
                 ffn_down: select_rows("blk.0.ffn_down.weight", hidden, ffn, &[0, 1, 2, 3]),
+                moe_router: None,
             }],
         }
     }
