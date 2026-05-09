@@ -102,11 +102,11 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .unwrap()
         .iter()
         .any(|item| item["id"] == "mixtral_moe"
-            && item["status"] == "active_validation_unsupported"
+            && item["status"] == "active_validation_partial_runtime"
             && item["notes"]
                 .as_str()
                 .unwrap()
-                .contains("typed MoE unsupported")));
+                .contains("bounded exact-row MoE runtime evidence")));
     for id in ["qwen25", "gemma2"] {
         assert!(body["planned_model_families"]
             .as_array()
@@ -401,16 +401,22 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .iter()
         .find(|item| item["id"] == "mixtral_8x7b_instruct_v0_1_q8_0")
         .unwrap();
-    assert_eq!(mixtral["status"], "active_validation_unsupported");
-    assert_eq!(mixtral["support_scope"], "bringup_exact_row_unsupported");
-    assert_eq!(mixtral["generation_runs"], "blocked_typed_unsupported_moe");
+    assert_eq!(mixtral["status"], "active_validation_partial_runtime");
+    assert_eq!(
+        mixtral["support_scope"],
+        "exact_row_bounded_moe_runtime_only"
+    );
+    assert_eq!(
+        mixtral["generation_runs"],
+        "bounded_runtime_smoke_and_5prompt_parity_observed"
+    );
     assert_eq!(
         mixtral["frontend_load_path_verified"],
-        "fail_closed_unsupported_moe"
+        "fail_closed_partial_runtime_only"
     );
     assert_eq!(
         mixtral["latest_checked_result"],
-        "unsupported_moe_typed_guard"
+        "partial_pass_5_of_6_short_prompts_step2_divergence_known"
     );
     assert!(mixtral["evidence"]
         .as_str()
@@ -420,6 +426,10 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         .as_str()
         .unwrap()
         .contains("Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF"));
+    assert!(mixtral["evidence"]
+        .as_str()
+        .unwrap()
+        .contains("Count to three. remains a known near-tie divergence"));
 
     for (id, filename) in [
         ("qwen25_7b_instruct_q8_0", "Qwen2.5-7B-Instruct-Q8_0.gguf"),
