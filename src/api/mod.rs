@@ -3716,6 +3716,65 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_support_statuses_stay_exact_row_allowlisted() {
+        let response = capabilities_response();
+        let supported_row_ids = response
+            .model_compatibility
+            .iter()
+            .filter(|target| target.status.starts_with("supported"))
+            .map(|target| target.id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            supported_row_ids,
+            BTreeSet::from([
+                "llama32_1b_instruct_q8_0",
+                "llama32_3b_instruct_q8_0",
+                "llama3_8b_instruct_q8_0",
+                "tinyllama_1_1b_chat_q8_0",
+            ])
+        );
+
+        let supported_family_ids = response
+            .supported_model_families
+            .iter()
+            .map(|item| item.id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            supported_family_ids,
+            BTreeSet::from(["llama_bpe_decoder_exact_1b_3b_8b_q8_0", "llama_spm_decoder",])
+        );
+
+        for id in [
+            "mistral_7b_instruct_v0_3_q8_0",
+            "mixtral_8x7b_instruct_v0_1_q8_0",
+            "qwen25_7b_instruct_q8_0",
+            "gemma2_9b_it_q8_0",
+        ] {
+            let target = response
+                .model_compatibility
+                .iter()
+                .find(|target| target.id == id)
+                .unwrap_or_else(|| panic!("{id} row should stay advertised"));
+            assert!(
+                !target.status.starts_with("supported"),
+                "{id} must not become supported through family-level inference"
+            );
+            assert!(
+                target.frontend_readiness_gate.contains("fail-closed"),
+                "{id} must keep frontend readiness fail-closed"
+            );
+        }
+
+        assert!(response
+            .support_contract
+            .current_gate
+            .contains("Current exact-row support"));
+        assert!(response.support_contract.current_gate.contains(
+            "no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied"
+        ));
+    }
+
+    #[test]
     fn capabilities_report_next_family_rows_stay_planned_and_fail_closed() {
         let response = capabilities_response();
         let planned_rows = [
