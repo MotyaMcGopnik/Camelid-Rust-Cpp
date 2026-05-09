@@ -5601,6 +5601,12 @@ fn softmax_top_k(logits: &[f32], k: usize) -> Vec<(usize, f32)> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     scored.truncate(k);
+    let selected_sum = scored.iter().map(|(_, value)| *value).sum::<f32>();
+    if selected_sum > 0.0 {
+        for (_, value) in &mut scored {
+            *value /= selected_sum;
+        }
+    }
     scored
 }
 
@@ -13805,6 +13811,17 @@ mod tests {
             sampled_attention_trace_heads(32, 8, 4, GqaHeadMapping::Modulo),
             vec![0, 1, 2, 3, 28, 29, 30, 31]
         );
+    }
+
+    #[test]
+    fn softmax_top_k_renormalizes_selected_experts() {
+        let top = softmax_top_k(&[0.0, 1.0, 2.0], 2);
+        assert_eq!(top[0].0, 2);
+        assert_eq!(top[1].0, 1);
+        let selected_sum = top.iter().map(|(_, weight)| *weight).sum::<f32>();
+        assert!((selected_sum - 1.0).abs() < 1.0e-6, "{top:?}");
+        let expected_first = 2.0_f32.exp() / (2.0_f32.exp() + 1.0_f32.exp());
+        assert!((top[0].1 - expected_first).abs() < 1.0e-6, "{top:?}");
     }
 
     #[test]
