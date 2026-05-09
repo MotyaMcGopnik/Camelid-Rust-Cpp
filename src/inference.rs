@@ -6921,6 +6921,25 @@ thread_local! {
     static Q8_0_FILE_READER_OUTPUT_CHUNK: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
+fn q8_0_file_reader_retained_scratch_bytes() -> usize {
+    const DEFAULT_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES: usize = 64 * 1024 * 1024;
+    parse_byte_count_env("CAMELID_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES")
+        .unwrap_or(DEFAULT_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES)
+}
+
+fn q8_0_file_reader_retained_scratch_entries<T>() -> usize {
+    q8_0_file_reader_retained_scratch_bytes() / mem::size_of::<T>().max(1)
+}
+
+fn cap_q8_0_file_reader_scratch<T>(scratch: &mut Vec<T>, retained_len: usize) {
+    let retained_entries = q8_0_file_reader_retained_scratch_entries::<T>();
+    if scratch.capacity() > retained_entries {
+        *scratch = Vec::with_capacity(retained_len.min(retained_entries));
+    } else if scratch.len() > retained_len {
+        scratch.truncate(retained_len);
+    }
+}
+
 fn with_q8_0_file_reader_row_chunk<T>(
     len: usize,
     f: impl FnOnce(&mut [u8]) -> Result<T>,
@@ -6930,7 +6949,9 @@ fn with_q8_0_file_reader_row_chunk<T>(
         if row_chunk.len() < len {
             row_chunk.resize(len, 0);
         }
-        f(&mut row_chunk[..len])
+        let result = f(&mut row_chunk[..len]);
+        cap_q8_0_file_reader_scratch(&mut row_chunk, len);
+        result
     })
 }
 
@@ -6943,7 +6964,9 @@ fn with_q8_0_file_reader_chunk_scales<T>(
         if scales.len() < len {
             scales.resize(len, 0.0);
         }
-        f(&mut scales[..len])
+        let result = f(&mut scales[..len]);
+        cap_q8_0_file_reader_scratch(&mut scales, len);
+        result
     })
 }
 
@@ -6956,6 +6979,7 @@ fn with_q8_0_file_reader_quantized_inputs<T>(
         // Keep the allocation as reusable scratch capacity, but do not leave the
         // previous activation blocks logically live between file-backed Q8 calls.
         quantized_inputs.clear();
+        cap_q8_0_file_reader_scratch(&mut quantized_inputs, 0);
         result
     })
 }
@@ -6969,8 +6993,19 @@ fn with_q8_0_file_reader_output_chunk<T>(
         if output_chunk.len() < len {
             output_chunk.resize(len, 0.0);
         }
-        f(&mut output_chunk[..len])
+        let result = f(&mut output_chunk[..len]);
+        cap_q8_0_file_reader_scratch(&mut output_chunk, len);
+        result
     })
+}
+
+#[cfg(test)]
+fn q8_0_file_reader_scratch_capacities() -> (usize, usize, usize, usize) {
+    let row_chunk = Q8_0_FILE_READER_ROW_CHUNK.with(|cell| cell.borrow().capacity());
+    let chunk_scales = Q8_0_FILE_READER_CHUNK_SCALES.with(|cell| cell.borrow().capacity());
+    let quantized_inputs = Q8_0_FILE_READER_QUANTIZED_INPUTS.with(|cell| cell.borrow().capacity());
+    let output_chunk = Q8_0_FILE_READER_OUTPUT_CHUNK.with(|cell| cell.borrow().capacity());
+    (row_chunk, chunk_scales, quantized_inputs, output_chunk)
 }
 
 fn should_parallelize_q8_0_file_reader_output(output_width: usize) -> bool {
@@ -9431,6 +9466,7 @@ mod tests {
             "CAMELID_Q8_0_FILE_CACHE_BYTES",
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
             "CAMELID_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES",
+            "CAMELID_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES",
             "CAMELID_PARALLEL_LINEAR",
             "CAMELID_PARALLEL_LINEAR_MIN_OUTPUTS",
             "CAMELID_RECTANGULAR_LINEAR_LAYOUT",
@@ -9858,6 +9894,65 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn q8_0_file_reader_scratch_retention_is_bounded() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES", "128");
+
+        with_q8_0_file_reader_row_chunk(512, |row_chunk| {
+            row_chunk.fill(7);
+            Ok(())
+        })
+        .unwrap();
+        let (row_capacity, _, _, _) = q8_0_file_reader_scratch_capacities();
+        assert!(
+            row_capacity <= 128,
+            "row scratch capacity should be capped after an oversized use, got {row_capacity}"
+        );
+
+        with_q8_0_file_reader_chunk_scales(256, |scales| {
+            scales.fill(3.0);
+            Ok(())
+        })
+        .unwrap();
+        let (_, scale_capacity, _, _) = q8_0_file_reader_scratch_capacities();
+        assert!(
+            scale_capacity * mem::size_of::<f32>() <= 128,
+            "scale scratch capacity should be capped after an oversized use, got {scale_capacity} entries"
+        );
+
+        with_q8_0_file_reader_output_chunk(256, |output_chunk| {
+            output_chunk.fill(5.0);
+            Ok(())
+        })
+        .unwrap();
+        let (_, _, _, output_capacity) = q8_0_file_reader_scratch_capacities();
+        assert!(
+            output_capacity * mem::size_of::<f32>() <= 128,
+            "output scratch capacity should be capped after an oversized use, got {output_capacity} entries"
+        );
+
+        with_q8_0_file_reader_quantized_inputs(|blocks| {
+            blocks.resize(
+                32,
+                Q8_0Block {
+                    scale: 1.0,
+                    quants: [0; Q8_0_BLOCK_VALUES],
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        let (_, _, quantized_capacity, _) = q8_0_file_reader_scratch_capacities();
+        assert!(
+            quantized_capacity * mem::size_of::<Q8_0Block>() <= 128,
+            "quantized-input scratch capacity should be capped after an oversized use, got {quantized_capacity} entries"
+        );
+
+        std::env::remove_var("CAMELID_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES");
     }
 
     #[test]

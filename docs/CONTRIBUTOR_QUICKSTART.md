@@ -11,7 +11,7 @@ This guide is the shortest safe path to getting productive in Camelid locally.
 3. Use this guide to get a local backend/frontend loop running.
 4. Use [`docs/VALIDATION_MATRIX.md`](VALIDATION_MATRIX.md) to choose the smallest meaningful validation lane for your change.
 
-Current public support is exact-row: TinyLlama Q8_0 is the supported gate, Llama 3.2 1B/3B and Llama 3 8B Q8_0 are checked through bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. The current-head 8B 1024/2048 bundle is `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T002636Z-head-9e3c64f2cfab/manifest.json`; do not broaden those claims to model-native/larger context beyond checked packs, production throughput, portability, local experiments, arbitrary templates, or adjacent GGUFs without new evidence bundles and synchronized docs/API/frontend updates.
+Current public support is exact-row: TinyLlama Q8_0 is the supported gate, Llama 3.2 1B/3B are checked through bounded 512/1024/2048-context packs, and Llama 3 8B Q8_0 is checked through the bounded 512-context pack on current `main`. The newest committed 8B 1024/2048 bundle is `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T024342Z-head-b49034007f2e/manifest.json`, but it is historical after later runtime/source/support-surface changes; do not promote those buckets without fresh current-head evidence bundles and synchronized docs/API/frontend updates. Do not broaden any claim to model-native/larger context beyond checked packs, production throughput, portability, local experiments, arbitrary templates, or adjacent GGUFs.
 
 ## Prerequisites
 
