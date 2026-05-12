@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -43,6 +43,8 @@ const CPU_WEIGHT_MATERIALIZATION_LIMIT_ENV: &str = "CAMELID_MAX_CPU_WEIGHT_MATER
 const RETAIN_Q8_BLOCKS_ENV: &str = "CAMELID_RETAIN_Q8_0_BLOCKS";
 const LAZY_Q8_LINEAR_ENV: &str = "CAMELID_LAZY_Q8_0_LINEAR";
 const METADATA_CHAT_TEMPLATE_ENV: &str = "CAMELID_METADATA_CHAT_TEMPLATE";
+const GENERATION_TIMEOUT_ENV: &str = "CAMELID_GENERATION_TIMEOUT_MS";
+const DEFAULT_GENERATION_TIMEOUT_MS: u64 = 15 * 60 * 1000;
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -1490,7 +1492,7 @@ async fn completions(
 
     let model_id = prepared.model_id.clone();
     let prompt_token_count = prepared.token_ids.len();
-    match generate_decoded_tokens(prepared) {
+    match generate_decoded_tokens_blocking(prepared).await {
         Ok(generated) => {
             let GeneratedText {
                 text,
@@ -1536,7 +1538,7 @@ async fn completions(
             )
                 .into_response()
         }
-        Err(response) => *response,
+        Err(response) => response,
     }
 }
 
@@ -1581,7 +1583,7 @@ async fn chat_completions(
 
     let model_id = prepared.model_id.clone();
     let prompt_token_count = prepared.token_ids.len();
-    match generate_decoded_tokens(prepared) {
+    match generate_decoded_tokens_blocking(prepared).await {
         Ok(generated) => (
             StatusCode::OK,
             Json(ChatCompletionResponse {
@@ -1615,7 +1617,7 @@ async fn chat_completions(
             }),
         )
             .into_response(),
-        Err(response) => *response,
+        Err(response) => response,
     }
 }
 
@@ -2422,6 +2424,63 @@ fn parse_logit_bias(
     }
     parsed.sort_by_key(|(token_id, _)| *token_id);
     Ok(parsed)
+}
+
+async fn generate_decoded_tokens_blocking(
+    prepared: PreparedGeneration,
+) -> std::result::Result<GeneratedText, Response> {
+    let timeout = generation_timeout_duration()?;
+    let handle = tokio::task::spawn_blocking(move || {
+        generate_decoded_tokens(prepared).map_err(|response| *response)
+    });
+    match tokio::time::timeout(timeout, handle).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "generation_worker_failed",
+            format!("generation worker failed before completing the request: {err}"),
+            None,
+        )),
+        Err(_) => Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "generation_timeout",
+            format!(
+                "generation exceeded the configured wall-clock timeout of {} ms; reduce max_tokens, use streaming/progress instrumentation, or raise {GENERATION_TIMEOUT_ENV} for a controlled hardening run",
+                timeout.as_millis()
+            ),
+            Some("max_tokens"),
+        )),
+    }
+}
+
+fn generation_timeout_duration() -> std::result::Result<Duration, Response> {
+    match env::var(GENERATION_TIMEOUT_ENV) {
+        Ok(value) if value.trim().is_empty() => {
+            Ok(Duration::from_millis(DEFAULT_GENERATION_TIMEOUT_MS))
+        }
+        Ok(value) => {
+            let millis = value.trim().parse::<u64>().map_err(|err| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid_generation_timeout",
+                    format!("invalid {GENERATION_TIMEOUT_ENV} {value:?}: {err}"),
+                    None,
+                )
+            })?;
+            if millis == 0 {
+                Ok(Duration::from_millis(u64::MAX))
+            } else {
+                Ok(Duration::from_millis(millis))
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok(Duration::from_millis(DEFAULT_GENERATION_TIMEOUT_MS)),
+        Err(err) => Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_generation_timeout",
+            format!("invalid {GENERATION_TIMEOUT_ENV}: {err}"),
+            None,
+        )),
+    }
 }
 
 fn generate_decoded_tokens(
