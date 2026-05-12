@@ -552,6 +552,7 @@ export default function ChatWorkspace({
                         <div className="message-token-metrics" aria-label="Generation speed">
                           <span>In {formatRate(message.tokens_in_per_sec)}</span>
                           <span>Out {formatRate(message.tokens_out_per_sec)}</span>
+                          {message.first_content_ms !== null && message.first_content_ms !== undefined && <span>TTFT {(Number(message.first_content_ms) / 1000).toFixed(2)}s</span>}
                         </div>
                       )}
                     </div>

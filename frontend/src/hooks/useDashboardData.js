@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel, quantLabelFromGgufFileType } from '../lib/capabilities'
 import { getChatGateState } from '../lib/chatGate'
 import { readStreamingChatCompletion } from '../lib/chatCompletionStream'
@@ -352,6 +352,22 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [localConversations, setLocalConversations] = useState(() => normalizeStoredConversations(readJsonStorage(CONVERSATIONS_STORAGE_KEY, []), { clearStaleStreaming: true }))
   const [localMemories, setLocalMemories] = useState(() => readJsonStorage(MEMORIES_STORAGE_KEY, []))
 
+  const localModelsRef = useRef(localModels)
+  const localConversationsRef = useRef(localConversations)
+  const localMemoriesRef = useRef(localMemories)
+
+  useEffect(() => {
+    localModelsRef.current = localModels
+  }, [localModels])
+
+  useEffect(() => {
+    localConversationsRef.current = localConversations
+  }, [localConversations])
+
+  useEffect(() => {
+    localMemoriesRef.current = localMemories
+  }, [localMemories])
+
   const normalizedApiBase = normalizeApiBase(apiBase)
   const updateConversationsState = (updater) => {
     setLocalConversations((current) => normalizeStoredConversations(typeof updater === 'function' ? updater(current) : updater))
@@ -385,6 +401,9 @@ export function useDashboardData({ showNotice, clearNotice }) {
 
   const loadDashboard = async ({ silent = false, localModelsOverride = null } = {}) => {
     try {
+      const currentLocalModels = localModelsOverride || localModelsRef.current
+      const currentLocalConversations = localConversationsRef.current
+      const currentLocalMemories = localMemoriesRef.current
       const [health, modelList, capabilities] = await Promise.all([
         fetchJson(`${normalizedApiBase}/v1/health`),
         fetchJson(`${normalizedApiBase}/v1/models`),
@@ -398,7 +417,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
         modelItems,
         health,
         currentModel,
-        localModels: localModelsOverride || localModels,
+        localModels: currentLocalModels,
         apiBase: normalizedApiBase,
       })
       const nextDashboard = makeDashboard({
@@ -406,8 +425,8 @@ export function useDashboardData({ showNotice, clearNotice }) {
         models: nextModels,
         currentModel,
         capabilities,
-        conversations: localConversations,
-        memories: localMemories,
+        conversations: currentLocalConversations,
+        memories: currentLocalMemories,
         apiBase: normalizedApiBase,
       })
       setDashboard(nextDashboard)
@@ -436,13 +455,13 @@ export function useDashboardData({ showNotice, clearNotice }) {
           modelItems: [],
           health: { ok: false, engine: 'camelid', generation_ready: false, active_model_id: null },
           currentModel: null,
-          localModels: localModelsOverride || localModels,
+          localModels: localModelsOverride || localModelsRef.current,
           apiBase: normalizedApiBase,
         }),
         currentModel: null,
         capabilities: null,
-        conversations: localConversations,
-        memories: localMemories,
+        conversations: localConversationsRef.current,
+        memories: localMemoriesRef.current,
         apiBase: normalizedApiBase,
       })
       setDashboard(fallbackDashboard)
@@ -455,7 +474,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
     const interval = setInterval(() => loadDashboard({ silent: true }), 2500)
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedApiBase, localConversations, localMemories, localModels])
+  }, [normalizedApiBase])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !VALID_TABS.has(tab)) return
@@ -566,6 +585,8 @@ export function useDashboardData({ showNotice, clearNotice }) {
     showNotice('Running Camelid local chat completion…', 'info')
     let activeConversationId = null
     let assistantId = null
+    let pendingAssistantPatch = null
+    let pendingAssistantFrame = null
 
     try {
       const conversation = await ensureConversation()
@@ -618,7 +639,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: selectedModelId, messages: history, temperature: 0, stream: true }),
       })
-      const markAssistantStreamState = (patch) => {
+      const applyAssistantStreamPatch = (patch) => {
         updateConversationsState((current) => current.map((item) => (
           item.id === conversation.id
             ? {
@@ -631,8 +652,30 @@ export function useDashboardData({ showNotice, clearNotice }) {
             : item
         )))
       }
+      const flushAssistantStreamPatch = () => {
+        pendingAssistantFrame = null
+        if (!pendingAssistantPatch) return
+        const patch = pendingAssistantPatch
+        pendingAssistantPatch = null
+        applyAssistantStreamPatch(patch)
+      }
+      const markAssistantStreamState = (patch, { immediate = false } = {}) => {
+        if (immediate) {
+          pendingAssistantPatch = null
+          if (pendingAssistantFrame !== null && typeof window !== 'undefined') {
+            window.cancelAnimationFrame(pendingAssistantFrame)
+            pendingAssistantFrame = null
+          }
+          applyAssistantStreamPatch(patch)
+          return
+        }
+        pendingAssistantPatch = { ...(pendingAssistantPatch || {}), ...patch }
+        if (pendingAssistantFrame === null && typeof window !== 'undefined') {
+          pendingAssistantFrame = window.requestAnimationFrame(flushAssistantStreamPatch)
+        }
+      }
       if (response.ok && !response.headers.get('content-type')?.includes('application/json')) {
-        markAssistantStreamState({ streaming_phase: 'generating' })
+        markAssistantStreamState({ streaming_phase: 'generating' }, { immediate: true })
       }
       const streamed = await readStreamingChatCompletion(response, (_delta, fullContent) => {
         const liveElapsedMs = performance.now() - requestStartedAt
@@ -651,10 +694,11 @@ export function useDashboardData({ showNotice, clearNotice }) {
               streaming_phase: 'generating',
               first_byte_ms: event.firstByteMs ?? null,
               first_event_ms: event.firstEventMs ?? null,
-            })
+            }, { immediate: true })
           }
         },
       })
+      flushAssistantStreamPatch()
       const elapsedMs = performance.now() - requestStartedAt
       const assistantMessage = {
         ...assistantMessageBase,
@@ -688,6 +732,11 @@ export function useDashboardData({ showNotice, clearNotice }) {
       setSelectedConversationId(conversation.id)
       showNotice('Camelid streamed the local reply.', 'success')
     } catch (error) {
+      if (pendingAssistantFrame !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(pendingAssistantFrame)
+        pendingAssistantFrame = null
+      }
+      pendingAssistantPatch = null
       const errorMessage = getGuardrailErrorMessage(error, 'Local inference failed.')
       if (activeConversationId && assistantId) {
         persistConversations((current) => current.map((item) => (

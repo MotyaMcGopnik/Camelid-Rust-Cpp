@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { clampText, formatPreview, formatSidebarDate } from '../lib/formatters'
 
 const tabs = [
@@ -59,7 +59,7 @@ function DeleteIcon() {
   )
 }
 
-export default function AppSidebar({
+function AppSidebar({
   collapsed,
   dragging,
   onResizeStart,
@@ -73,7 +73,7 @@ export default function AppSidebar({
   tab,
   setTab,
   filteredConversations,
-  selectedConversation,
+  selectedConversationId,
   setSelectedConversationId,
   deleteConversation,
   renameConversation,
@@ -134,7 +134,7 @@ export default function AppSidebar({
     setOpenMenuId(null)
     setEditingConversationId(null)
     setEditingTitle('')
-  }, [collapsed, selectedConversation?.id, tab])
+  }, [collapsed, selectedConversationId, tab])
 
   const startRename = (conversation) => {
     setSelectedConversationId(conversation.id)
@@ -294,7 +294,7 @@ export default function AppSidebar({
                           ? `${preview} · ${timeLabel}`
                           : preview
                         const menuOpen = openMenuId === conversation.id
-                        const selected = conversation.id === selectedConversation?.id
+                        const selected = conversation.id === selectedConversationId
                         const editing = editingConversationId === conversation.id
 
                         return (
@@ -409,3 +409,5 @@ export default function AppSidebar({
     </>
   )
 }
+
+export default memo(AppSidebar)
