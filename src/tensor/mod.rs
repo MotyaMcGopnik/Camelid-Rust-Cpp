@@ -359,6 +359,7 @@ pub struct CpuTensor {
     pub source_type: Option<GgufTensorType>,
     pub q8_0_blocks: Option<Vec<Q8_0Block>>,
     pub q8_0_file_backing: Option<Q8_0FileBacking>,
+    pub q8_0_split_file_backing: Option<Vec<Q8_0FileBacking>>,
     pub data: Vec<f32>,
 }
 
@@ -504,6 +505,7 @@ impl Q8_0TensorBlocks {
             source_type: None,
             q8_0_blocks: None,
             q8_0_file_backing: None,
+            q8_0_split_file_backing: None,
             data,
         })
     }
@@ -565,6 +567,7 @@ impl CpuTensor {
             source_type: None,
             q8_0_blocks: None,
             q8_0_file_backing: None,
+            q8_0_split_file_backing: None,
             data,
         })
     }
@@ -609,6 +612,24 @@ impl CpuTensor {
             source_type: Some(GgufTensorType::Q8_0),
             q8_0_blocks: None,
             q8_0_file_backing: Some(backing),
+            q8_0_split_file_backing: None,
+            data: Vec::new(),
+        }
+    }
+
+    pub fn q8_0_split_file_backed_tensor(
+        name: impl Into<String>,
+        shape: TensorShape,
+        backings: Vec<Q8_0FileBacking>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            shape,
+            dtype: RuntimeDType::F32,
+            source_type: Some(GgufTensorType::Q8_0),
+            q8_0_blocks: None,
+            q8_0_file_backing: None,
+            q8_0_split_file_backing: Some(backings),
             data: Vec::new(),
         }
     }
@@ -1938,6 +1959,59 @@ impl TensorStore {
         self.load_q8_0_file_backed_tensor(name)
     }
 
+    pub fn load_q8_0_split_file_backed_tensor(
+        &self,
+        name: impl Into<String>,
+        dims: Vec<usize>,
+        experts: &[GgufTensorDescriptor],
+    ) -> Result<CpuTensor> {
+        let name = name.into();
+        let shape = TensorShape { dims };
+        let expected_elements = shape.element_count()?;
+        if expected_elements % 32 != 0 {
+            return Err(BackendError::InvalidTensorData(format!(
+                "split tensor {name} Q8_0 element count {expected_elements} is not block aligned"
+            )));
+        }
+        let expert_count = experts.len();
+        if expert_count == 0 {
+            return Err(BackendError::InvalidTensorData(
+                "split MoE tensor requires at least one expert".to_string(),
+            ));
+        }
+        let per_expert_elements = expected_elements / expert_count;
+        if per_expert_elements % 32 != 0 {
+            return Err(BackendError::InvalidTensorData(
+                "split MoE expert Q8_0 element count is not block aligned".to_string(),
+            ));
+        }
+        let mut backings = Vec::with_capacity(expert_count);
+        for desc in experts {
+            if desc.tensor_type != GgufTensorType::Q8_0 {
+                return Err(BackendError::UnsupportedTensorType(format!(
+                    "split MoE tensor {} has storage type {:?}; lazy split experts require Q8_0",
+                    desc.name, desc.tensor_type
+                )));
+            }
+            let expert_shape = TensorShape::from_gguf_dims(&desc.dimensions)?;
+            if expert_shape.element_count()? != per_expert_elements {
+                return Err(BackendError::InvalidTensorData(format!(
+                    "split MoE tensor {} has {} elements, expected {per_expert_elements}",
+                    desc.name,
+                    expert_shape.element_count()?
+                )));
+            }
+            backings.push(Q8_0FileBacking::new(
+                self.path.clone(),
+                desc.absolute_offset,
+                per_expert_elements / 32,
+            ));
+        }
+        Ok(CpuTensor::q8_0_split_file_backed_tensor(
+            name, shape, backings,
+        ))
+    }
+
     pub fn load_q8_0_file_backed_tensor(&self, name: &str) -> Result<CpuTensor> {
         let desc = self.descriptor(name)?.clone();
         if desc.tensor_type != GgufTensorType::Q8_0 {
@@ -2010,6 +2084,7 @@ impl TensorStore {
             source_type: Some(desc.tensor_type),
             q8_0_blocks,
             q8_0_file_backing,
+            q8_0_split_file_backing: None,
             data,
         })
     }

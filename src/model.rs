@@ -165,10 +165,25 @@ pub enum LlamaFfnTensors {
     },
     MoE {
         router: GgufTensorDescriptor,
-        gate_experts: GgufTensorDescriptor,
-        up_experts: GgufTensorDescriptor,
-        down_experts: GgufTensorDescriptor,
+        gate_experts: LlamaMoeExpertTensors,
+        up_experts: LlamaMoeExpertTensors,
+        down_experts: LlamaMoeExpertTensors,
     },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum LlamaMoeExpertTensors {
+    Merged(GgufTensorDescriptor),
+    Split(Vec<GgufTensorDescriptor>),
+}
+
+impl LlamaMoeExpertTensors {
+    pub fn descriptors(&self) -> &[GgufTensorDescriptor] {
+        match self {
+            Self::Merged(desc) => std::slice::from_ref(desc),
+            Self::Split(descs) => descs,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -206,23 +221,29 @@ impl LlamaTensorBinding {
                     &format!("blk.{layer_idx}.attn_output.weight"),
                 )?,
                 ffn_norm: required_tensor(gguf, &format!("blk.{layer_idx}.ffn_norm.weight"))?,
-                ffn: if config.moe.is_some() {
+                ffn: if let Some(moe) = config.moe.as_ref() {
                     LlamaFfnTensors::MoE {
                         router: required_tensor(
                             gguf,
                             &format!("blk.{layer_idx}.ffn_gate_inp.weight"),
                         )?,
-                        gate_experts: required_tensor(
+                        gate_experts: bind_moe_expert_tensors(
                             gguf,
-                            &format!("blk.{layer_idx}.ffn_gate_exps.weight"),
+                            layer_idx,
+                            "gate",
+                            moe.expert_count,
                         )?,
-                        up_experts: required_tensor(
+                        up_experts: bind_moe_expert_tensors(
                             gguf,
-                            &format!("blk.{layer_idx}.ffn_up_exps.weight"),
+                            layer_idx,
+                            "up",
+                            moe.expert_count,
                         )?,
-                        down_experts: required_tensor(
+                        down_experts: bind_moe_expert_tensors(
                             gguf,
-                            &format!("blk.{layer_idx}.ffn_down_exps.weight"),
+                            layer_idx,
+                            "down",
+                            moe.expert_count,
                         )?,
                     }
                 } else {
@@ -359,31 +380,25 @@ impl LlamaTensorBinding {
                         moe.expert_count as usize,
                         &format!("layer {idx} ffn router"),
                     )?;
-                    require_descriptor_shape(
+                    validate_moe_expert_tensor_shape(
                         gate_experts,
-                        &[
-                            dims.embedding_length,
-                            dims.feed_forward_length,
-                            moe.expert_count as usize,
-                        ],
+                        dims.embedding_length,
+                        dims.feed_forward_length,
+                        moe.expert_count as usize,
                         &format!("layer {idx} ffn gate experts"),
                     )?;
-                    require_descriptor_shape(
+                    validate_moe_expert_tensor_shape(
                         up_experts,
-                        &[
-                            dims.embedding_length,
-                            dims.feed_forward_length,
-                            moe.expert_count as usize,
-                        ],
+                        dims.embedding_length,
+                        dims.feed_forward_length,
+                        moe.expert_count as usize,
                         &format!("layer {idx} ffn up experts"),
                     )?;
-                    require_descriptor_shape(
+                    validate_moe_expert_tensor_shape(
                         down_experts,
-                        &[
-                            dims.feed_forward_length,
-                            dims.embedding_length,
-                            moe.expert_count as usize,
-                        ],
+                        dims.feed_forward_length,
+                        dims.embedding_length,
+                        moe.expert_count as usize,
                         &format!("layer {idx} ffn down experts"),
                     )?;
                 }
@@ -449,6 +464,57 @@ impl DenseLlamaDims {
             kv_width: attention_head_count_kv * head_dim,
             vocab_size,
         })
+    }
+}
+
+fn bind_moe_expert_tensors(
+    gguf: &GgufFile,
+    layer_idx: u32,
+    role: &str,
+    expert_count: u32,
+) -> Result<LlamaMoeExpertTensors> {
+    let merged_name = format!("blk.{layer_idx}.ffn_{role}_exps.weight");
+    if let Some(desc) = find_tensor(gguf, &merged_name) {
+        return Ok(LlamaMoeExpertTensors::Merged(desc.clone()));
+    }
+
+    let mut split = Vec::with_capacity(expert_count as usize);
+    for expert_idx in 0..expert_count {
+        split.push(required_tensor(
+            gguf,
+            &format!("blk.{layer_idx}.ffn_{role}.{expert_idx}.weight"),
+        )?);
+    }
+    Ok(LlamaMoeExpertTensors::Split(split))
+}
+
+fn validate_moe_expert_tensor_shape(
+    experts: &LlamaMoeExpertTensors,
+    input_width: usize,
+    output_width: usize,
+    expert_count: usize,
+    role: &str,
+) -> Result<()> {
+    match experts {
+        LlamaMoeExpertTensors::Merged(desc) => {
+            require_descriptor_shape(desc, &[input_width, output_width, expert_count], role)
+        }
+        LlamaMoeExpertTensors::Split(descs) => {
+            if descs.len() != expert_count {
+                return Err(BackendError::InvalidModelMetadata(format!(
+                    "{role} expected {expert_count} split expert tensors, got {}",
+                    descs.len()
+                )));
+            }
+            for (expert_idx, desc) in descs.iter().enumerate() {
+                require_descriptor_shape(
+                    desc,
+                    &[input_width, output_width],
+                    &format!("{role} split expert {expert_idx}"),
+                )?;
+            }
+            Ok(())
+        }
     }
 }
 

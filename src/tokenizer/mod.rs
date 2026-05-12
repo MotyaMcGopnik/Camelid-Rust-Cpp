@@ -344,6 +344,10 @@ impl Tokenizer {
             .map(|token| token.text.as_str())
     }
 
+    pub fn token_id(&self, text: &str) -> Option<TokenId> {
+        self.token_to_id.get(text).copied()
+    }
+
     pub fn encode(
         &self,
         text: &str,
@@ -567,6 +571,16 @@ impl Tokenizer {
             return false;
         }
 
+        if self
+            .token_text(self.special.bos)
+            .is_some_and(|bos| token_text == bos)
+            && rest.starts_with("[INST]")
+            && self.token_to_id.contains_key("[INST]")
+            && self.token_to_id.contains_key("[/INST]")
+        {
+            return false;
+        }
+
         if token_text == "[INST]"
             && self.token_to_id.contains_key("[INST]")
             && self.token_to_id.contains_key("[/INST]")
@@ -609,9 +623,15 @@ impl Tokenizer {
                     if let Some(id) = self.token_to_id.get(token_text) {
                         out.push(*id);
                         byte_start += token_len;
+                        let rest = &piece[byte_start..];
+                        let next_is_control =
+                            self.longest_control_token_at(piece, byte_start).is_some();
                         if self.config.add_space_prefix
-                            && byte_start < piece.len()
-                            && self.longest_control_token_at(piece, byte_start).is_none()
+                            && self.should_insert_dummy_after_control(
+                                token_text,
+                                rest,
+                                next_is_control,
+                            )
                         {
                             if let Some(dummy_prefix) = self.token_to_id.get(&SPM_SPACE.to_string())
                             {

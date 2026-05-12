@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use camelid::{
     gguf::read_metadata,
     inference::LlamaKvCachePlan,
-    model::{LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
+    model::{LlamaFfnTensors, LlamaModelConfig, LlamaMoeExpertTensors, LlamaTensorBinding},
 };
 
 #[test]
@@ -97,9 +97,15 @@ fn binds_mixtral_moe_metadata_and_expert_tensors() {
             down_experts,
         } => {
             assert_eq!(router.name, "blk.0.ffn_gate_inp.weight");
-            assert_eq!(gate_experts.name, "blk.0.ffn_gate_exps.weight");
-            assert_eq!(up_experts.name, "blk.0.ffn_up_exps.weight");
-            assert_eq!(down_experts.name, "blk.0.ffn_down_exps.weight");
+            assert!(
+                matches!(gate_experts, LlamaMoeExpertTensors::Merged(desc) if desc.name == "blk.0.ffn_gate_exps.weight")
+            );
+            assert!(
+                matches!(up_experts, LlamaMoeExpertTensors::Merged(desc) if desc.name == "blk.0.ffn_up_exps.weight")
+            );
+            assert!(
+                matches!(down_experts, LlamaMoeExpertTensors::Merged(desc) if desc.name == "blk.0.ffn_down_exps.weight")
+            );
         }
         LlamaFfnTensors::Dense { .. } => panic!("expected Mixtral MoE FFN tensors"),
     }

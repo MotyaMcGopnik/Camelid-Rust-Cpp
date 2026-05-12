@@ -16,7 +16,10 @@ use serde::Serialize;
 
 use crate::{
     gguf::GgufTensorType,
-    model::{DenseLlamaDims, LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
+    model::{
+        DenseLlamaDims, LlamaFfnTensors, LlamaModelConfig, LlamaMoeExpertTensors,
+        LlamaTensorBinding,
+    },
     tensor::{
         dot_product, parse_byte_count_env, q8_0_file_read_stats, record_q8_0_file_read,
         should_parallelize_linear_output, with_q8_file_cache_capacity_override, CpuTensor,
@@ -711,6 +714,24 @@ impl LlamaLoadedWeights {
                 store.load_cpu_f32(name)
             }
         };
+        let load_moe_experts = |experts: &LlamaMoeExpertTensors| match experts {
+            LlamaMoeExpertTensors::Merged(desc) => store.load_q8_0_file_backed_tensor(&desc.name),
+            LlamaMoeExpertTensors::Split(descs) => {
+                let first = descs.first().ok_or_else(|| {
+                    BackendError::InvalidModelMetadata(
+                        "split MoE expert binding has no descriptors".to_string(),
+                    )
+                })?;
+                let mut dims: Vec<usize> =
+                    first.dimensions.iter().map(|dim| *dim as usize).collect();
+                dims.push(descs.len());
+                store.load_q8_0_split_file_backed_tensor(
+                    format!("{}..{} split experts", first.name, descs.len()),
+                    dims,
+                    descs,
+                )
+            }
+        };
         let token_embedding = normalize_token_embedding_shape(
             load_linear(&binding.token_embedding.name)?,
             &binding.token_embedding.name,
@@ -741,9 +762,9 @@ impl LlamaLoadedWeights {
                     up_experts,
                     down_experts,
                 } => (
-                    store.load_q8_0_file_backed_tensor(&gate_experts.name)?,
-                    store.load_q8_0_file_backed_tensor(&up_experts.name)?,
-                    store.load_q8_0_file_backed_tensor(&down_experts.name)?,
+                    load_moe_experts(gate_experts)?,
+                    load_moe_experts(up_experts)?,
+                    load_moe_experts(down_experts)?,
                     Some(store.load_cpu_f32(&router.name)?),
                 ),
             };
@@ -897,7 +918,8 @@ impl LlamaLoadedWeights {
 }
 
 fn tensor_has_q8_0_file_backing(tensor: &CpuTensor) -> bool {
-    tensor.source_type == Some(GgufTensorType::Q8_0) && tensor.q8_0_file_backing.is_some()
+    tensor.source_type == Some(GgufTensorType::Q8_0)
+        && (tensor.q8_0_file_backing.is_some() || tensor.q8_0_split_file_backing.is_some())
 }
 
 fn tensor_q8_0_file_backed_storage_bytes(tensor: &CpuTensor) -> u64 {
@@ -5643,7 +5665,27 @@ fn expert_matrix_view(
         BackendError::RuntimeShapeMismatch("MoE expert offset overflow".to_string())
     })? / Q8_0_BLOCK_VALUES;
     let block_count = expert_elements / Q8_0_BLOCK_VALUES;
-    let mut tensor = if let Some(backing) = &weight.q8_0_file_backing {
+    let mut tensor = if let Some(split_backings) = &weight.q8_0_split_file_backing {
+        let backing = split_backings.get(expert_idx).ok_or_else(|| {
+            BackendError::RuntimeShapeMismatch(format!(
+                "MoE split expert index {expert_idx} missing from {} split backings",
+                split_backings.len()
+            ))
+        })?;
+        if backing.num_blocks != block_count {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "MoE split expert backing expected {block_count} blocks, got {}",
+                backing.num_blocks
+            )));
+        }
+        CpuTensor::q8_0_file_backed_linear(
+            name,
+            TensorShape {
+                dims: vec![output_width, input_width],
+            },
+            backing.clone(),
+        )
+    } else if let Some(backing) = &weight.q8_0_file_backing {
         CpuTensor::q8_0_file_backed_linear(
             name,
             TensorShape {
@@ -6042,7 +6084,11 @@ fn auto_retain_q8_0_blocks_for_fast_local_chat(binding: &LlamaTensorBinding) -> 
                 up_experts,
                 down_experts,
             } => {
-                for desc in [router, gate_experts, up_experts, down_experts] {
+                for desc in std::iter::once(router)
+                    .chain(gate_experts.descriptors())
+                    .chain(up_experts.descriptors())
+                    .chain(down_experts.descriptors())
+                {
                     if add_linear(desc).is_none() {
                         return false;
                     }

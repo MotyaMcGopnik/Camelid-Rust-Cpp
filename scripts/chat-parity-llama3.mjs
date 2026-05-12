@@ -105,9 +105,15 @@ try {
   })
   const llamaText = llamaCompletion.content ?? ''
   const llamaLogprobContent = llamaCompletion.completion_probabilities ?? []
-  const llamaGeneratedTokens = llamaLogprobContent
+  let llamaGeneratedTokens = llamaLogprobContent
     .map(item => Number.isInteger(item?.id) ? item.id : null)
     .filter(token => token !== null)
+  if (llamaGeneratedTokens.length === 0 && llamaText.length > 0) {
+    llamaGeneratedTokens = await tokenizeReferenceText(llamaText, { noBos: true })
+    if (renderMode === 'mistral_instruct' && llamaText.startsWith(' ') && llamaGeneratedTokens[0] === 28705) {
+      llamaGeneratedTokens = llamaGeneratedTokens.slice(1)
+    }
+  }
   const llamaTopLogprobs = llamaLogprobContent.flatMap(item => item?.top_logprobs ?? [])
   const diagnosticTokenIds = uniqueTokenIds([
     ...llamaGeneratedTokens,
@@ -240,13 +246,17 @@ function parseArgs(argv) {
 }
 
 async function tokenizeExpectedPrompt() {
+  return tokenizeReferenceText(expectedPrompt, { noBos: renderMode === 'mistral_instruct' })
+}
+
+async function tokenizeReferenceText(text, { noBos = false } = {}) {
   const llamaTokenizeArgs = [
     '-m', modelPath,
     '--ids',
     '--log-disable',
-    '-p', expectedPrompt,
+    '-p', text,
   ]
-  if (renderMode === 'mistral_instruct') llamaTokenizeArgs.push('--no-bos')
+  if (noBos) llamaTokenizeArgs.push('--no-bos')
   const { stdout } = await run(llamaTokenizeBin, llamaTokenizeArgs)
   return JSON.parse(stdout.trim())
 }
