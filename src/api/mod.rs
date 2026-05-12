@@ -725,7 +725,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only and remains unsupported for broad/API/WebUI/frontend readiness while later generation diverges. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
+            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only and remains unsupported for broad/API/WebUI/frontend readiness while later generation diverges. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -748,7 +748,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "Q8_0",
                 status: "supported_current_gate",
-                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B/3B Q8_0 rows and the exact Llama 3 8B Q8_0 row have checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger-context beyond the checked packs, arbitrary-template, production-throughput, portability, neighboring-row, or broad-family support is implied.",
+                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B/3B Instruct Q8_0 rows and the exact Llama 3 8B Instruct Q8_0 row have checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger-context beyond the checked packs, arbitrary-template, production-throughput, portability, neighboring-row, or broad-family support is implied.",
             },
         ],
         planned_quantization: vec![
@@ -3821,7 +3821,7 @@ mod tests {
     fn capabilities_report_exact_8b_1024_2048_after_source_head_alignment() {
         let response = capabilities_response();
         assert!(response.support_contract.current_gate.contains(
-            "Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs"
+            "Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs"
         ));
         assert!(response
             .support_contract
@@ -3838,7 +3838,7 @@ mod tests {
             .find(|item| item.id == "Q8_0")
             .expect("Q8_0 row should stay advertised");
         assert!(q8.notes.contains(
-            "exact Llama 3.2 1B/3B Q8_0 rows and the exact Llama 3 8B Q8_0 row have checked bounded 512/1024/2048-context packs"
+            "exact Llama 3.2 1B/3B Instruct Q8_0 rows and the exact Llama 3 8B Instruct Q8_0 row have checked bounded 512/1024/2048-context packs"
         ));
         assert!(q8.notes.contains("where row-specific PASS artifacts exist"));
         assert!(!q8.notes.contains("8B 1024/2048 remain red"));
