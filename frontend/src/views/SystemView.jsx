@@ -1,4 +1,4 @@
-import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, formatCapabilityStatus, getCurrentCompatibilityTarget, guardedCapabilityCopy, isGuardedCapabilityStatus, isSupportedCapabilityStatus, summarizeCapabilityItems } from '../lib/capabilities'
+import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
 import { describeModelState } from '../lib/modelState'
 
 function runtimeReadinessLabel(runtime) {
@@ -13,11 +13,18 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
   const apiBase = runtime?.api_base || 'Local API unavailable'
   const modelId = selectedModel?.id || runtime?.active_model_id || '<loaded-model-id>'
   const supportContract = capabilities?.support_contract
-  const currentTarget = getCurrentCompatibilityTarget(capabilities)
   const compatibilityTargets = capabilities?.model_compatibility || []
   const apiFeatures = capabilities?.api_features || []
   const supportedFeatures = apiFeatures.filter((feature) => isSupportedCapabilityStatus(feature.status))
   const unsupportedFeatures = apiFeatures.filter((feature) => isGuardedCapabilityStatus(feature.status))
+  const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
+  const selectedCompatibilityTarget = isExactCompatibilityHint(selectedCompatibilityHint) ? selectedCompatibilityHint.target : null
+  const exactRowQuantEvidence = compatibilityTargets.length
+    ? compatibilityTargets.map((target) => `${target.id}: ${target.quantization} (${formatCapabilityStatus(target.status)})`).join(' · ')
+    : 'No exact compatibility rows advertised.'
+  const exactRowFamilyEvidence = compatibilityTargets.length
+    ? compatibilityTargets.map((target) => `${target.id}: ${target.family} (${formatCapabilityStatus(target.status)})`).join(' · ')
+    : 'No exact compatibility rows advertised.'
 
   return (
     <section className="view-stack system-layout-single view-shell">
@@ -140,30 +147,29 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
           </div>
 
           <div className="api-card">
-            <strong>Validated compatibility target</strong>
-            {currentTarget ? (
+            <strong>Selected exact-row evidence</strong>
+            {selectedCompatibilityTarget ? (
               <>
-                <code>{currentTarget.id}</code>
-                <p>{formatCapabilityStatus(currentTarget.status)} · {currentTarget.quantization} · {formatCapabilityStatus(currentTarget.tested_context)}</p>
-                <p>{displayCapabilityCopy(currentTarget.next_step)}</p>
+                <code>{selectedCompatibilityTarget.id}</code>
+                <p>{formatCapabilityStatus(selectedCompatibilityTarget.status)} · {selectedCompatibilityTarget.family} · {selectedCompatibilityTarget.quantization}</p>
+                <p><b>Readiness gate:</b> {displayCapabilityCopy(selectedCompatibilityTarget.frontend_readiness_gate || 'not advertised')}</p>
+                <p>{displayCapabilityCopy(selectedCompatibilityTarget.evidence || selectedCompatibilityTarget.next_step || 'No row evidence advertised.')}</p>
               </>
             ) : (
-              <p>No compatibility rows advertised yet.</p>
+              <p>No selected model exact row matched, so System will not promote runtime health, families, or quant lists into support.</p>
             )}
           </div>
 
           <div className="api-card">
-            <strong>Quantization honesty</strong>
-            <p><b>Supported:</b> {summarizeCapabilityItems(capabilities?.supported_quantization)}</p>
-            <p><b>Planned:</b> {summarizeCapabilityItems(capabilities?.planned_quantization)}</p>
-            <p>Any quant not listed here stays a typed backend error until COMPATIBILITY.md and /api/capabilities gain evidence.</p>
+            <strong>Exact-row quant evidence</strong>
+            <p>{exactRowQuantEvidence}</p>
+            <p>Quant labels here come only from compatibility rows and do not unlock chat without a matching loaded model.</p>
           </div>
 
           <div className="api-card">
-            <strong>Model family honesty</strong>
-            <p><b>Supported:</b> {summarizeCapabilityItems(capabilities?.supported_model_families)}</p>
-            <p><b>Planned:</b> {summarizeCapabilityItems(capabilities?.planned_model_families)}</p>
-            <p>Family names stay planned until tokenizer, tensor, generation, parity, performance, and frontend-load evidence land for a concrete artifact.</p>
+            <strong>Exact-row family evidence</strong>
+            <p>{exactRowFamilyEvidence}</p>
+            <p>Family labels remain row-scoped evidence boundaries, not broad support for neighboring files.</p>
           </div>
 
           <div className="api-card">

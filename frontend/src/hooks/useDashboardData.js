@@ -510,8 +510,8 @@ export function useDashboardData({ showNotice, clearNotice }) {
     else window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, selectedModelId)
   }, [selectedModelId])
 
-  const conversations = dashboard?.conversations || localConversations
-  const memories = dashboard?.memories || localMemories
+  const conversations = localConversations.length ? localConversations : dashboard?.conversations || []
+  const memories = localMemories.length ? localMemories : dashboard?.memories || []
   const models = dashboard?.models || []
   const runtime = dashboard?.runtime
 
