@@ -3990,6 +3990,73 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_public_strings_do_not_expose_local_operator_paths() {
+        let response = capabilities_response();
+        let value = serde_json::to_value(response).expect("capabilities response should serialize");
+
+        assert_json_strings_avoid_private_paths(&value, "$", &[]);
+    }
+
+    fn assert_json_strings_avoid_private_paths(
+        value: &serde_json::Value,
+        json_path: &str,
+        key_path: &[String],
+    ) {
+        match value {
+            serde_json::Value::String(text) => {
+                assert_public_capability_string(text, json_path, key_path);
+            }
+            serde_json::Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    assert_json_strings_avoid_private_paths(
+                        item,
+                        &format!("{json_path}[{index}]"),
+                        key_path,
+                    );
+                }
+            }
+            serde_json::Value::Object(entries) => {
+                for (key, item) in entries {
+                    let mut child_key_path = key_path.to_vec();
+                    child_key_path.push(key.clone());
+                    assert_json_strings_avoid_private_paths(
+                        item,
+                        &format!("{json_path}.{key}"),
+                        &child_key_path,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_public_capability_string(text: &str, json_path: &str, key_path: &[String]) {
+        const PRIVATE_PATH_MARKERS: &[&str] = &[
+            "/Users/",
+            "/home/",
+            "/private/var/",
+            "/var/folders/",
+            "file://",
+            "ssh://",
+            "ubuntu@",
+        ];
+
+        for marker in PRIVATE_PATH_MARKERS {
+            assert!(
+                !text.contains(marker),
+                "{json_path} must not expose local/operator path marker {marker:?}: {text}"
+            );
+        }
+
+        if key_path.last().is_some_and(|key| key == "evidence") {
+            assert!(
+                !text.contains("target/"),
+                "{json_path} evidence must cite durable public artifacts instead of local target/ paths: {text}"
+            );
+        }
+    }
+
+    #[test]
     fn capabilities_report_next_family_rows_stay_planned_and_fail_closed() {
         let response = capabilities_response();
         let mixtral = response
