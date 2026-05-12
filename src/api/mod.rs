@@ -1082,10 +1082,10 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_2048_pack: "not_started",
                 bounded_context_2048_pack_id: "mixtral-context-2048-smoke-v1",
                 bounded_context_2048_window: 2048,
-                latest_checked_bucket: "mixtral_8x7b_q8_one_token_probe_20260509",
-                latest_checked_result: "partial_one_token_pass_later_generation_diverges",
-                latest_checked_output: "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-support-probe-20260509/summary.json",
-                evidence: "exact row leserg/Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF at commit 93c0492d1891b5147f42b2648d9fccc140910a2f, license apache-2.0, GGUF ETag 77b8ee314ae3e77cefaba7f33841235da3346c34171547fe10e8a85f127973a7, size 49626319776 bytes and sha256 c48f9680d5aa60703ed0fd38e29fc6556b3490f8f6c9919a31c9da7996039f81; sparse-header metadata parses with llama.expert_count=8 and expert_used_count=2 plus rank-3 expert tensors; tokenizer/template prompts match llama.cpp reference pack fixtures/tokenizer/mixtral-8x7b-instruct-v0.1-reference-pack.json; MoE top-k expert routing runs with selected-weight renormalization and lazy/file-backed Q8 experts; bounded one-token runtime evidence exists, but later short-prompt generation still diverges from llama.cpp. No broad Mixtral, frontend/API/WebUI/RSS, long-context, production, neighboring-row, or full-support claim is made.",
+                latest_checked_bucket: "mixtral_8x7b_q8_gate9a_50tok_divergence_20260511",
+                latest_checked_result: "blocked_later_generation_divergence",
+                latest_checked_output: "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/README.md",
+                evidence: "exact row leserg/Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF at commit 93c0492d1891b5147f42b2648d9fccc140910a2f, license apache-2.0, GGUF ETag 77b8ee314ae3e77cefaba7f33841235da3346c34171547fe10e8a85f127973a7, size 49626319776 bytes and sha256 c48f9680d5aa60703ed0fd38e29fc6556b3490f8f6c9919a31c9da7996039f81; sparse-header metadata parses with llama.expert_count=8 and expert_used_count=2 plus rank-3 expert tensors; tokenizer/template prompts match llama.cpp reference pack fixtures/tokenizer/mixtral-8x7b-instruct-v0.1-reference-pack.json; MoE top-k expert routing runs with selected-weight renormalization and lazy/file-backed Q8 experts; bounded one-token runtime evidence exists, but Gate 9A 50-token evidence diverged at generated token index 9 and the continuation probe recorded a backend HTTP hang after the llama.cpp reference completed. No broad Mixtral, frontend/API/WebUI/RSS, long-context, production, neighboring-row, or full-support claim is made.",
                 next_step: "close later-generation parity divergence, then run API/WebUI/RSS and longer-context promotion bundles before any broad Mixtral support claim",
             },
             ModelCompatibilityTarget {
@@ -3968,14 +3968,38 @@ mod tests {
             "prompt_tokens_and_one_token_smoke_only_later_generation_diverges"
         );
         assert_eq!(
+            mixtral.latest_checked_bucket,
+            "mixtral_8x7b_q8_gate9a_50tok_divergence_20260511"
+        );
+        assert_eq!(
             mixtral.latest_checked_result,
-            "partial_one_token_pass_later_generation_diverges"
+            "blocked_later_generation_divergence"
+        );
+        assert_eq!(
+            mixtral.latest_checked_output,
+            "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/README.md"
         );
         assert!(mixtral.frontend_readiness_gate.contains("fail-closed"));
         assert!(mixtral.evidence.contains("llama.expert_count=8"));
         assert!(mixtral
             .evidence
+            .contains("Gate 9A 50-token evidence diverged at generated token index 9"));
+        assert!(mixtral.evidence.contains("backend HTTP hang"));
+        assert!(mixtral.evidence.contains("No broad Mixtral"));
+
+        let mixtral_family = response
+            .planned_model_families
+            .iter()
+            .find(|item| item.id == "mixtral_moe")
+            .expect("Mixtral planned-family lane should stay visible");
+        assert_eq!(mixtral_family.status, "active_validation_partial_runtime");
+        assert!(mixtral_family
+            .notes
+            .contains("bounded one-token exact-row MoE runtime evidence only"));
+        assert!(mixtral_family
+            .notes
             .contains("later short-prompt generation still diverges"));
+        assert!(mixtral_family.notes.contains("support remain unclaimed"));
 
         let planned_rows = ["qwen25_7b_instruct_q8_0", "gemma2_9b_it_q8_0"];
 

@@ -415,8 +415,16 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "fail_closed_partial_runtime_only"
     );
     assert_eq!(
+        mixtral["latest_checked_bucket"],
+        "mixtral_8x7b_q8_gate9a_50tok_divergence_20260511"
+    );
+    assert_eq!(
         mixtral["latest_checked_result"],
-        "partial_one_token_pass_later_generation_diverges"
+        "blocked_later_generation_divergence"
+    );
+    assert_eq!(
+        mixtral["latest_checked_output"],
+        "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/README.md"
     );
     assert!(mixtral["evidence"]
         .as_str()
@@ -425,7 +433,11 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert!(mixtral["evidence"]
         .as_str()
         .unwrap()
-        .contains("later short-prompt generation still diverges"));
+        .contains("Gate 9A 50-token evidence diverged at generated token index 9"));
+    assert!(mixtral["evidence"]
+        .as_str()
+        .unwrap()
+        .contains("backend HTTP hang"));
     assert!(mixtral["evidence"]
         .as_str()
         .unwrap()
