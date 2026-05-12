@@ -99,7 +99,8 @@ function estimateChatTokenCount(messages) {
   ), 0)
 }
 
-const CODE_FIRST_SYSTEM_PROMPT = 'You are Camelid local code mode. When the user asks for code, begin immediately with the runnable code. Do not write an introduction, summary, or explanation before the code. For HTML/browser apps, start exactly with ```html followed by <!doctype html>. Stream useful code first; explanation can come only after the code if needed.'
+const CODE_FIRST_SYSTEM_PROMPT = 'begin immediately with the runnable code. No intro. For HTML start exactly with ```html followed by <!doctype html>.'
+const LOCAL_CHAT_DEMO_MAX_TOKENS = 220
 
 function looksLikeCodePrompt(value) {
   const text = String(value || '').toLowerCase()
@@ -663,7 +664,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       const response = await fetch(`${normalizedApiBase}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: selectedModelId, messages: requestMessages, temperature: 0, stream: true }),
+        body: JSON.stringify({ model: selectedModelId, messages: requestMessages, temperature: 0, max_tokens: LOCAL_CHAT_DEMO_MAX_TOKENS, stream: true }),
       })
       const applyAssistantStreamPatch = (patch) => {
         updateConversationsState((current) => current.map((item) => (
