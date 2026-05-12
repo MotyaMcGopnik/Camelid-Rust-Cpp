@@ -44,7 +44,7 @@ Current public evidence map:
 - `mixtral-8x7b-v0.1-q8-support-probe-20260509/` is the original bounded Mixtral one-token backend MoE runtime anchor; it does not promote broad Mixtral or frontend/API support.
 - `mixtral-8x7b-v0.1-q8-backend-parity-refresh-20260511/`, `mixtral-8x7b-v0.1-q8-api-smoke-20260511/`, `mixtral-8x7b-v0.1-q8-webui-readiness-20260511/`, and `mixtral-8x7b-v0.1-q8-rss-timing-runtime-20260511/` are exact-row promotion-candidate artifacts only; the WebUI bundle explicitly records fail-closed unsupported-contract behavior.
 - `mixtral-8x7b-v0.1-q8-gate9a-50tok-20260511/`, `mixtral-8x7b-v0.1-q8-longgen-continuation-20260511/`, and `mixtral-8x7b-v0.1-q8-backend-hang-guard-20260511/` record the later Mixtral blocker evidence.
-- `mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/` is the current Mixtral support-boundary anchor: active validation partial runtime, unsupported beyond bounded one-token evidence, no broad Mixtral support.
+- `mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/` is the current Mixtral validation-boundary anchor: active validation partial runtime, unsupported beyond bounded one-token evidence, no broad Mixtral support.
 
 Reproducibility helpers:
 - `bash scripts/check-evidence-bundle-checksums.sh` verifies every committed `SHA256SUMS` under this directory, including older bundles that use bundle-local paths and newer bundles that use repo-relative paths.

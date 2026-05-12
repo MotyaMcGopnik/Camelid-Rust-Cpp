@@ -8,8 +8,8 @@ Change:
 - `validated_*_not_promoted` and fail-closed statuses remain guarded/warm.
 
 Claim boundary:
-- This preserves the existing exact-row support contract for TinyLlama, Llama 3.2 1B/3B, Llama 3 8B, and the bounded Mixtral v0.1 exact row.
-- It does not promote Mistral, Qwen, Gemma, neighboring rows, broad model families, longer context, arbitrary templates, production throughput, or portability.
+- This preserves the existing exact-row support contract for TinyLlama, Llama 3.2 1B/3B, and Llama 3 8B while keeping the bounded Mixtral v0.1 exact row fail-closed as unsupported validation evidence only.
+- It does not promote Mixtral, Mistral, Qwen, Gemma, neighboring rows, broad model families, longer context, arbitrary templates, production throughput, or portability.
 
 Relevant guard:
 - `npm --prefix frontend run smoke:model-state`
