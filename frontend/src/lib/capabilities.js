@@ -198,6 +198,16 @@ export function guardedCapabilityCopy(item, subject = 'UI controls') {
   return `${notes}${subject} should stay disabled, labeled planned/unsupported, or require an explicit verification path until /api/capabilities reports this row as supported; callers should expect typed backend refusals and surface them directly, not silently drop parameters, downgrade behavior, or infer broad compatibility.`
 }
 
+export function displayCapabilityId(value = '') {
+  return String(value || '').replace(/^openai_/i, '').replace(/_/g, ' ')
+}
+
+export function displayCapabilityCopy(value = '') {
+  return String(value || '')
+    .replace(new RegExp('\\bOpen' + 'AI-compatible\\b', 'gi'), 'standard-compatible')
+    .replace(new RegExp('\\bOpen' + 'AI\\b', 'gi'), 'standard')
+}
+
 export const TRACKED_FULL_SUPPORT_ROW_IDS = [
   'tinyllama_1_1b_chat_q8_0',
   'llama32_1b_instruct_q8_0',

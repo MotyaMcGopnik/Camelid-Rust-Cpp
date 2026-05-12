@@ -23,10 +23,14 @@ assert.equal(shouldCreateConversationForSend(oldChat, 'old-chat'), false, 'sendi
 const readmeSource = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
 assert.match(readmeSource, /docs\/assets\/camelid-readme-chat-surface-dark\.png/, 'README should use the approved dark collapsed-rail chat screenshot')
 assert.doesNotMatch(readmeSource, /docs\/assets\/ui-screenshot-v2\.png/, 'README must not regress to the retired light screenshot')
-assert.match(readmeSource, /dark, collapsed-rail chat surface/i, 'README caption should preserve the dark screenshot contract')
+assert.match(readmeSource, /product-forward while still reflecting the local-first runtime contract/i, 'README screenshot caption should preserve the local-first runtime contract')
 
 const chatWorkspaceSource = readFileSync(new URL('../src/views/ChatWorkspace.jsx', import.meta.url), 'utf8')
 const dashboardHookSource = readFileSync(new URL('../src/hooks/useDashboardData.js', import.meta.url), 'utf8')
+const apiViewSource = readFileSync(new URL('../src/views/ApiView.jsx', import.meta.url), 'utf8')
+const systemViewSource = readFileSync(new URL('../src/views/SystemView.jsx', import.meta.url), 'utf8')
+const analyticsViewSource = readFileSync(new URL('../src/views/AnalyticsView.jsx', import.meta.url), 'utf8')
+const capabilitiesSource = readFileSync(new URL('../src/lib/capabilities.js', import.meta.url), 'utf8')
 const visibleUiSources = [
   '../src/views/ChatWorkspace.jsx',
   '../src/views/ApiView.jsx',
@@ -63,6 +67,15 @@ assert.match(dashboardHookSource, /function extractSseEvents/, 'stream parser sh
 assert.match(dashboardHookSource, /replace\(/, 'stream parser should normalize line endings before splitting SSE events')
 assert.match(dashboardHookSource, /split\('\\n\\n'\)/, 'stream parser should split normalized SSE events on blank lines for partial rendering')
 assert.match(dashboardHookSource, /finish_reason:\s*'error',[\s\S]*streaming:\s*false/, 'failed generations should clear streaming state instead of leaving active pellets/status forever')
+assert.match(apiViewSource, /Selected exact-row evidence/, 'API support view should show selected exact-row evidence instead of a broad validated-target claim')
+assert.match(apiViewSource, /selectedCompatibilityTarget\.frontend_readiness_gate/, 'API support view should surface the selected row readiness gate verbatim from /api/capabilities')
+assert.match(apiViewSource, /selectedCompatibilityTarget\.latest_checked_bucket/, 'API support view should surface exact-row latest checked bucket evidence')
+assert.match(apiViewSource, /displayCapabilityCopy\(selectedCompatibilityTarget\.evidence\)/, 'API support view should sanitize and display exact-row evidence copy')
+assert.match(capabilitiesSource, /function displayCapabilityId/, 'capability ids should be display-normalized before support/API UI rendering')
+assert.match(capabilitiesSource, /function displayCapabilityCopy/, 'backend capability copy should be display-normalized before support/API UI rendering')
+assert.match(apiViewSource, /displayCapabilityId\(feature\.id\)/, 'API view should not render raw provider-scoped API feature ids')
+assert.match(systemViewSource, /displayCapabilityId\(feature\.id\)/, 'System view should not render raw provider-scoped API feature ids')
+assert.match(analyticsViewSource, /displayCapabilityId\(feature\.id\)/, 'Analytics view should not render raw provider-scoped API feature ids')
 for (const [path, source] of visibleUiSources) {
   assert.doesNotMatch(source, /\b(OpenAI|ChatGPT|Claude|Gemini)\b/, `${path} visible copy should not mention competitor brands`)
 }

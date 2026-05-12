@@ -1,4 +1,4 @@
-import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, formatCapabilityStatus, getCurrentCompatibilityTarget, guardedCapabilityCopy, isGuardedCapabilityStatus, isSupportedCapabilityStatus, summarizeCapabilityItems } from '../lib/capabilities'
+import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isGuardedCapabilityStatus, isSupportedCapabilityStatus, summarizeCapabilityItems } from '../lib/capabilities'
 
 function guardedApiFeatures(features = []) {
   return features.filter((feature) => isGuardedCapabilityStatus(feature.status))
@@ -9,7 +9,6 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
   const modelId = selectedModel?.id || runtime?.active_model_id || '<loaded-model-id>'
   const supportContract = capabilities?.support_contract
   const compatibilityTargets = capabilities?.model_compatibility || []
-  const currentTarget = getCurrentCompatibilityTarget(capabilities)
   const apiFeatures = capabilities?.api_features || []
   const guardedFeatures = guardedApiFeatures(apiFeatures)
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
@@ -119,15 +118,17 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
           </div>
 
           <div className="api-card">
-            <strong>Validated target</strong>
-            {currentTarget ? (
+            <strong>Selected exact-row evidence</strong>
+            {selectedCompatibilityTarget ? (
               <>
-                <code>{currentTarget.id}</code>
-                <p>{formatCapabilityStatus(currentTarget.status)} · {currentTarget.family} · {currentTarget.quantization}</p>
-                <p>{currentTarget.evidence}</p>
+                <code>{selectedCompatibilityTarget.id}</code>
+                <p>{formatCapabilityStatus(selectedCompatibilityTarget.status)} · {selectedCompatibilityTarget.family} · {selectedCompatibilityTarget.quantization}</p>
+                <p><b>Readiness gate:</b> {displayCapabilityCopy(selectedCompatibilityTarget.frontend_readiness_gate)}</p>
+                <p><b>Latest checked:</b> {formatCapabilityStatus(selectedCompatibilityTarget.latest_checked_bucket)} · {formatCapabilityStatus(selectedCompatibilityTarget.latest_checked_result)}</p>
+                <p>{displayCapabilityCopy(selectedCompatibilityTarget.evidence)}</p>
               </>
             ) : (
-              <p>No compatibility rows advertised yet.</p>
+              <p>No selected model exact row matched. This API view will not promote family names, saved paths, or runtime health into a support claim.</p>
             )}
           </div>
 
@@ -137,7 +138,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
               <>
                 <code>{selectedModel.id}</code>
                 <p><b>{compatibilityHintLabel(selectedCompatibilityHint, 'No matching row')}</b></p>
-                <p>{selectedCompatibilitySupported ? compatibilityHintCopy(selectedCompatibilityHint) : `${compatibilityHintCopy(selectedCompatibilityHint)} Do not treat this selected model as chat-supported unless runtime readiness is also green.`}</p>
+                <p>{selectedCompatibilitySupported ? displayCapabilityCopy(compatibilityHintCopy(selectedCompatibilityHint)) : `${displayCapabilityCopy(compatibilityHintCopy(selectedCompatibilityHint))} Do not treat this selected model as chat-supported unless runtime readiness is also green.`}</p>
               </>
             ) : (
               <p>No selected model. Capability rows remain evidence boundaries, not a catalog of everything on disk.</p>
@@ -154,7 +155,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
                     <strong className={capabilityStatusTone(target.status)}>{formatCapabilityStatus(target.status)} · {target.family} · {target.quantization}</strong>
                     <small>Metadata: {formatCapabilityStatus(target.metadata_parses)} · tokenizer: {formatCapabilityStatus(target.tokenizer_works)} · tensors: {formatCapabilityStatus(target.tensors_load)} · generation: {formatCapabilityStatus(target.generation_runs)} · frontend load: {formatCapabilityStatus(target.frontend_load_path_verified)}</small>
                     <small>Template: {formatCapabilityStatus(target.chat_template_shape_pack || 'not_started')} · 512-context: {formatCapabilityStatus(target.bounded_context_512_pack || 'not_started')} · 1024-context: {formatCapabilityStatus(target.bounded_context_1024_pack || 'not_started')} · 2048-context: {formatCapabilityStatus(target.bounded_context_2048_pack || 'not_started')} · perf: {formatCapabilityStatus(target.performance_measured || 'not_started')}</small>
-                    <small>{target.next_step}</small>
+                    <small>{displayCapabilityCopy(target.next_step)}</small>
                   </div>
                 ))}
               </div>
@@ -169,9 +170,9 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
               <div className="api-feature-list">
                 {guardedFeatures.map((feature) => (
                   <div key={feature.id}>
-                    <span>{feature.id}</span>
+                    <span>{displayCapabilityId(feature.id)}</span>
                     <strong className={capabilityStatusTone(feature.status)}>{formatCapabilityStatus(feature.status)}</strong>
-                    <small>{guardedCapabilityCopy(feature, 'API affordances and frontend controls')}</small>
+                    <small>{displayCapabilityCopy(guardedCapabilityCopy(feature, 'API affordances and frontend controls'))}</small>
                   </div>
                 ))}
               </div>

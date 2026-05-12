@@ -1,4 +1,4 @@
-import { capabilityStatusTone, formatCapabilityStatus, getCurrentCompatibilityTarget, guardedCapabilityCopy, isGuardedCapabilityStatus, isSupportedCapabilityStatus, summarizeCapabilityItems } from '../lib/capabilities'
+import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, formatCapabilityStatus, getCurrentCompatibilityTarget, guardedCapabilityCopy, isGuardedCapabilityStatus, isSupportedCapabilityStatus, summarizeCapabilityItems } from '../lib/capabilities'
 import { describeModelState } from '../lib/modelState'
 
 function runtimeReadinessLabel(runtime) {
@@ -145,7 +145,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
               <>
                 <code>{currentTarget.id}</code>
                 <p>{formatCapabilityStatus(currentTarget.status)} · {currentTarget.quantization} · {formatCapabilityStatus(currentTarget.tested_context)}</p>
-                <p>{currentTarget.next_step}</p>
+                <p>{displayCapabilityCopy(currentTarget.next_step)}</p>
               </>
             ) : (
               <p>No compatibility rows advertised yet.</p>
@@ -171,7 +171,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
             {supportedFeatures.length ? (
               <>
                 {supportedFeatures.map((feature) => (
-                  <p key={feature.id}><b>{feature.id}:</b> {feature.notes}</p>
+                  <p key={feature.id}><b>{displayCapabilityId(feature.id)}:</b> {displayCapabilityCopy(feature.notes)}</p>
                 ))}
               </>
             ) : (
@@ -188,7 +188,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
                     <span>{target.family} · {target.quantization}</span>
                     <strong className={capabilityStatusTone(target.status)}>{target.id}: {formatCapabilityStatus(target.status)}</strong>
                     <small>Metadata: {formatCapabilityStatus(target.metadata_parses)} · tokenizer: {formatCapabilityStatus(target.tokenizer_works)} · tensors: {formatCapabilityStatus(target.tensors_load)} · generation: {formatCapabilityStatus(target.generation_runs)}</small>
-                    <small>{target.next_step}</small>
+                    <small>{displayCapabilityCopy(target.next_step)}</small>
                   </div>
                 ))}
               </div>
@@ -203,9 +203,9 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
               <div className="api-feature-list">
                 {unsupportedFeatures.map((feature) => (
                   <div key={feature.id}>
-                    <span>{feature.id}</span>
+                    <span>{displayCapabilityId(feature.id)}</span>
                     <strong className={capabilityStatusTone(feature.status)}>{formatCapabilityStatus(feature.status)}</strong>
-                    <small>{guardedCapabilityCopy(feature, 'System/API controls')}</small>
+                    <small>{displayCapabilityCopy(guardedCapabilityCopy(feature, 'System/API controls'))}</small>
                   </div>
                 ))}
               </div>
