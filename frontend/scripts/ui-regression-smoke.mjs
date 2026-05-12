@@ -7,6 +7,7 @@ import {
   resolveSelectedConversation,
   shouldCreateConversationForSend,
 } from '../src/lib/chatState.js'
+import { normalizeStoredConversations } from '../src/lib/conversationStorage.js'
 
 const oldChat = { id: 'old-chat', title: 'Old chat', messages: [{ role: 'user', content: 'old prompt' }] }
 const newerChat = { id: 'newer-chat', title: 'Newer chat', messages: [{ role: 'user', content: 'newer prompt' }] }
@@ -19,6 +20,14 @@ assert.equal(resolveSelectedConversation(conversations, 'old-chat'), oldChat, 'e
 assert.equal(shouldCreateConversationForSend(null, NEW_CHAT_SENTINEL), true, 'sending from new-chat landing should create a fresh conversation')
 assert.equal(shouldCreateConversationForSend(oldChat, NEW_CHAT_SENTINEL), true, 'the sentinel must win even if a stale selectedConversation prop exists')
 assert.equal(shouldCreateConversationForSend(oldChat, 'old-chat'), false, 'sending from an explicit existing chat should append to that chat')
+
+const revivedInterruptedChat = normalizeStoredConversations([{ id: 'stale-chat', messages: [{ id: 'stale-assistant', role: 'assistant', content: '', streaming: true, streaming_phase: 'streaming' }] }], { clearStaleStreaming: true })[0]
+assert.equal(revivedInterruptedChat.messages[0].streaming, false, 'reloaded interrupted streams should not claim the backend is still generating')
+assert.equal(revivedInterruptedChat.messages[0].streaming_phase, null, 'reloaded interrupted streams should clear live generation phase')
+assert.equal(revivedInterruptedChat.messages[0].finish_reason, 'interrupted', 'reloaded interrupted streams should be marked as interrupted')
+assert.equal(revivedInterruptedChat.messages[0].content, '(generation interrupted)', 'blank reloaded interrupted streams should render safely')
+const liveStreamingChat = normalizeStoredConversations([{ id: 'live-chat', messages: [{ id: 'live-assistant', role: 'assistant', content: 'partial', streaming: true, streaming_phase: 'streaming' }] }])[0]
+assert.equal(liveStreamingChat.messages[0].streaming, true, 'live in-memory stream normalization should preserve active generation state')
 
 const readmeSource = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
 assert.match(readmeSource, /docs\/assets\/camelid-readme-chat-surface-dark\.png/, 'README should use the approved dark collapsed-rail chat screenshot')

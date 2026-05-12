@@ -3,6 +3,7 @@ import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, i
 import { getChatGateState } from '../lib/chatGate'
 import { readStreamingChatCompletion } from '../lib/chatCompletionStream'
 import { NEW_CHAT_SENTINEL, resolveSelectedConversation, shouldCreateConversationForSend } from '../lib/chatState'
+import { normalizeStoredConversations } from '../lib/conversationStorage.js'
 import { isExternalModel, isRunnableModel } from '../lib/modelState'
 
 const TAB_STORAGE_KEY = 'camelid.activeTab'
@@ -13,7 +14,7 @@ const CONVERSATIONS_STORAGE_KEY = 'camelid.conversations'
 const MEMORIES_STORAGE_KEY = 'camelid.memories'
 const API_BASE_STORAGE_KEY = 'camelid.apiBase'
 const VALID_TABS = new Set(['chat', 'library', 'api', 'analytics', 'history', 'memory', 'system'])
-const DEFAULT_API_BASE = import.meta.env.VITE_CAMELID_API_BASE || 'http://127.0.0.1:8181'
+const DEFAULT_API_BASE = import.meta.env?.VITE_CAMELID_API_BASE || 'http://127.0.0.1:8181'
 
 function getInitialTab() {
   if (typeof window === 'undefined') return 'chat'
@@ -125,35 +126,6 @@ function normalizeEngineName(value) {
   const engine = optionalString(value)?.toLowerCase()
   if (!engine || engine === 'backendinference' || engine === 'backend inference') return 'camelid'
   return engine
-}
-
-function cleanLegacyDemoCapCopy(value) {
-  if (typeof value !== 'string') return value
-  return value
-    .replace(/\s*\(demo cap\)/gi, '')
-    .replace(/\s*·\s*raw\s+16-token-cap\s+local\s+run;\s*inspect\s+before\s+trusting\s+polish/gi, ' · raw local run')
-    .replace(/\s*Longer-generation\s+polish\s+still\s+needs\s+separate\s+validation\.?/gi, '')
-    .replace(/\s*Longer\s+generation\s+is\s+not\s+polished\s+yet\.?/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-function normalizeStoredMessage(message) {
-  if (!message || typeof message !== 'object') return message
-  const { demo_token_cap: _demoTokenCap, ...rest } = message
-  return {
-    ...rest,
-    content: cleanLegacyDemoCapCopy(rest.content),
-  }
-}
-
-function normalizeStoredConversations(records) {
-  return (Array.isArray(records) ? records : []).map((conversation) => ({
-    ...conversation,
-    messages: Array.isArray(conversation?.messages)
-      ? conversation.messages.map(normalizeStoredMessage)
-      : [],
-  }))
 }
 
 function normalizeLocalModelStatus(status) {
@@ -377,7 +349,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [registerForm, setRegisterForm] = useState({ id: '', name: '', model_path: '', runtime_model_name: '' })
   const [externalForm, setExternalForm] = useState({ id: '', name: '', source: 'Hosted API', api_base: 'https://api.example/v1', api_key: '', model_name: '' })
   const [localModels, setLocalModels] = useState(() => readJsonStorage(LOCAL_MODELS_STORAGE_KEY, []).map(normalizeLocalModelRecord).filter(Boolean))
-  const [localConversations, setLocalConversations] = useState(() => normalizeStoredConversations(readJsonStorage(CONVERSATIONS_STORAGE_KEY, [])))
+  const [localConversations, setLocalConversations] = useState(() => normalizeStoredConversations(readJsonStorage(CONVERSATIONS_STORAGE_KEY, []), { clearStaleStreaming: true }))
   const [localMemories, setLocalMemories] = useState(() => readJsonStorage(MEMORIES_STORAGE_KEY, []))
 
   const normalizedApiBase = normalizeApiBase(apiBase)
