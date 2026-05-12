@@ -303,11 +303,16 @@ fn hf_shard_index_weight_map_ready(
         .collect::<BTreeSet<_>>();
     let mut missing = BTreeSet::new();
     let mut invalid = Vec::new();
+    let mut invalid_filenames = Vec::new();
     for (tensor_name, shard_name) in weight_map {
         let Some(shard_name) = shard_name.as_str() else {
             invalid.push(tensor_name.as_str());
             continue;
         };
+        if !is_plain_safetensors_shard_filename(shard_name) {
+            invalid_filenames.push(tensor_name.as_str());
+            continue;
+        }
         if !available.contains(shard_name) {
             missing.insert(shard_name);
         }
@@ -319,6 +324,16 @@ fn hf_shard_index_weight_map_ready(
             format!(
                 "model.safetensors.index.json weight_map entries must map tensor names to shard filenames; invalid entries: {}",
                 invalid.join(", ")
+            ),
+        ));
+        return false;
+    }
+    if !invalid_filenames.is_empty() {
+        blockers.push(blocker(
+            "invalid_shard_index_shard_filename",
+            format!(
+                "model.safetensors.index.json weight_map shard values must be local shard filenames, not paths; invalid tensor entries: {}",
+                invalid_filenames.join(", ")
             ),
         ));
         return false;
@@ -335,6 +350,15 @@ fn hf_shard_index_weight_map_ready(
     }
 
     true
+}
+
+fn is_plain_safetensors_shard_filename(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains('/')
+        && !value.contains('\\')
+        && value != "."
+        && value != ".."
+        && has_extension(Path::new(value), "safetensors")
 }
 
 fn safetensors_files(path: &Path) -> Result<Vec<PathBuf>> {
@@ -536,6 +560,35 @@ mod tests {
             &inspection,
             &["unsupported_model_type", "generation_disabled"],
         );
+    }
+
+    #[test]
+    fn shard_index_path_values_have_sanitized_precise_blocker() {
+        let dir = tempfile::tempdir().unwrap();
+        write_llama_config(dir.path());
+        fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
+        fs::write(dir.path().join("model-00001-of-00002.safetensors"), b"").unwrap();
+        fs::write(dir.path().join("model-00002-of-00002.safetensors"), b"").unwrap();
+        fs::write(
+            dir.path().join("model.safetensors.index.json"),
+            r#"{"weight_map":{"model.embed_tokens.weight":"../private/model-00001-of-00002.safetensors","lm_head.weight":"C:\\private\\model-00002-of-00002.safetensors"}}"#,
+        )
+        .unwrap();
+
+        let inspection = inspect_model_source(dir.path()).unwrap();
+
+        assert!(!inspection.readiness.weights_ready);
+        assert_blocker_codes(
+            &inspection,
+            &["invalid_shard_index_shard_filename", "generation_disabled"],
+        );
+        let message = &inspection.readiness.blockers[0].message;
+        assert!(message.contains("model.embed_tokens.weight"));
+        assert!(message.contains("lm_head.weight"));
+        assert!(!message.contains("../private"));
+        assert!(!message.contains("C:"));
+        assert!(!message.contains("model-00001-of-00002.safetensors"));
+        assert!(!message.contains("model-00002-of-00002.safetensors"));
     }
 
     fn write_llama_config(root: &Path) {
