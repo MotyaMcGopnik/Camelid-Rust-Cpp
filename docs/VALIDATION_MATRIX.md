@@ -1,6 +1,6 @@
 # Validation Matrix
 
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 Run the smallest meaningful validation lane for your change. If a change affects support language, readiness behavior, or exact-row claims, update docs and evidence references together.
 
@@ -11,16 +11,16 @@ Every public surface should tell the same four-row story:
 - TinyLlama 1.1B Chat Q8_0 is the supported current gate, with checked 512-context/template/RSS evidence.
 - Llama 3.2 1B and 3B Instruct Q8_0 are exact-row smoke-supported through checked 512/1024/2048 bounded context packs where row-specific PASS artifacts are cited.
 - Llama 3 8B Instruct Q8_0 is exact-row smoke-supported through checked bounded 512/1024/2048-context packs on current `main`; the 1024/2048 buckets are backed by `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T041451Z-head-8e26be0a73c0/manifest.json` and older 1024/2048 bundles remain historical source-head evidence.
-- Current-head language requires a fresh canonical PASS after later runtime/source commits; broad/full support for every non-TinyLlama row still requires model-native/larger context beyond checked packs, arbitrary-template evidence, throughput, portability, and durable normalized current-head bundles.
+- Current-head language requires a fresh canonical PASS after later runtime/source commits before a bounded bucket can be called current-head. The Llama 3 8B 1024/2048 buckets currently have that PASS at `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T041451Z-head-8e26be0a73c0/manifest.json`; broad/full support for every non-TinyLlama row still requires model-native/larger context beyond checked packs, arbitrary-template evidence, throughput, portability, and durable normalized current-head bundles.
 
 Next-family public language is locked to planning/validation, not support:
 
 - Mistral 7B Instruct: “In active validation for `Mistral-7B-Instruct-v0.3.Q8_0.gguf`; not supported yet.”
-- Mixtral 8x7B Instruct: “Planned first MoE exact-row candidate for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; not supported yet.”
+- Mixtral 8x7B Instruct: “Bounded one-token backend runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; broad support is not claimed. MoE top-k routing runs with lazy/file-backed Q8 experts, but later short-prompt generation still diverges.”
 - Qwen 2.5 7B Instruct: “Planned exact-row candidate for `Qwen2.5-7B-Instruct-Q8_0.gguf`; not supported yet.”
 - Gemma 2 9B Instruct: “Planned exact-row candidate for `gemma-2-9b-it-Q8_0.gguf`; not supported yet.”
 
-First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral also needs MoE expert-routing proof or typed unsupported behavior before any runtime claim.
+First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral already has bounded one-token backend MoE runtime evidence, but it still needs later-generation parity before API/WebUI/RSS, long-context, or broader support wording can move.
 
 | Change type | Minimum expected checks | Extra checks when relevant | Notes |
 | --- | --- | --- | --- |
