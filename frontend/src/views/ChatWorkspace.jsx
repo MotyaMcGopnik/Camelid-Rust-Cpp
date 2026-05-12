@@ -237,11 +237,11 @@ const hasOpenCodeFence = (content) => {
   return Boolean(matches && matches.length % 2 === 1)
 }
 
-const PREPARING_STREAMING_LABEL = 'Still generating — preparing local request and connecting to Camelid'
-const FIRST_TOKEN_STREAMING_LABEL = 'Still generating — connected and waiting for the first token'
-const LONG_FIRST_TOKEN_STREAMING_LABEL = 'Still generating — local prefill is taking a while'
-const ACTIVE_STREAMING_LABEL = 'Still generating — streaming tokens as Camelid generates them'
-const OPEN_CODE_STREAMING_LABEL = 'Still generating — streaming code block is still open'
+const PREPARING_STREAMING_LABEL = 'Preparing local response'
+const FIRST_TOKEN_STREAMING_LABEL = 'Waiting for first token'
+const LONG_FIRST_TOKEN_STREAMING_LABEL = 'Local response is taking a while'
+const ACTIVE_STREAMING_LABEL = 'Streaming response'
+const OPEN_CODE_STREAMING_LABEL = 'Streaming code response'
 
 const streamingStatusLabel = (phase, elapsedSeconds, isOpenCode = false) => {
   if (phase === 'preparing') return PREPARING_STREAMING_LABEL
@@ -250,12 +250,17 @@ const streamingStatusLabel = (phase, elapsedSeconds, isOpenCode = false) => {
   return FIRST_TOKEN_STREAMING_LABEL
 }
 
-function StreamingStatus({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact = false, tail = false, phase = 'streaming', minimal = false }) {
+function PacmanLoader({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact = false }) {
   return (
-    <div className={`message-live-status message-live-status-${phase || 'streaming'} ${compact ? 'message-live-status-compact' : ''} ${tail ? 'message-live-status-tail' : ''} ${minimal ? 'message-live-status-minimal' : ''}`} role="status" aria-live="polite" aria-label={label} data-live-status="active" data-live-phase={phase || 'streaming'}>
-      <span className="message-live-dot" aria-hidden="true" />
-      {!minimal && <span>{label}</span>}
-      <span>{elapsedSeconds}s elapsed</span>
+    <div className={`pacman-loader ${compact ? 'pacman-loader-compact' : ''}`} role="status" aria-live="polite" aria-label={`${label}. ${elapsedSeconds} seconds elapsed.`}>
+      <div className="pacman-loader-track" aria-hidden="true">
+        <span className="pacman-loader-mouth" />
+        <span className="pacman-loader-pellet pacman-loader-pellet-1" />
+        <span className="pacman-loader-pellet pacman-loader-pellet-2" />
+        <span className="pacman-loader-pellet pacman-loader-pellet-3" />
+        <span className="pacman-loader-pellet pacman-loader-pellet-4" />
+        <span className="pacman-loader-pellet pacman-loader-pellet-5" />
+      </div>
     </div>
   )
 }
@@ -292,6 +297,12 @@ function AssistantMarkdownInner({ content, streaming = false }) {
 
 const AssistantMarkdown = memo(AssistantMarkdownInner)
 
+const isInterruptedPlaceholderMessage = (message) => {
+  if (message?.role !== 'assistant') return false
+  const content = String(message?.content || '').trim().toLowerCase()
+  return content === '(generation interrupted)' || content === '(generation stopped)'
+}
+
 const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsedSeconds }) {
   const messageContent = cleanLegacyDemoCapCopy(message.content)
   const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
@@ -312,13 +323,12 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
       data-streaming-code-state={isOpenStreamingCode ? 'open' : undefined}
     >
       <div className={`message-bubble message-bubble-gemini ${message.role}`}>
-        {showStreamingStatus && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact phase={streamingPhase} minimal />}
+        {showStreamingStatus && <PacmanLoader elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact />}
         {message.role === 'assistant'
           ? messageContent || !assistantStreaming
             ? <AssistantMarkdown content={messageContent} streaming={assistantStreaming} />
-            : <p className="message-placeholder-copy">Camelid is connected to the local model. The first token has not arrived yet.</p>
+            : null
           : <p>{messageContent}</p>}
-        {showStreamingStatus && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} tail phase={streamingPhase} minimal />}
         {hasTokenMetrics && (
           <div className="message-token-metrics" aria-label="Generation speed">
             {message.first_byte_ms !== null && message.first_byte_ms !== undefined && <span>TTFB {(Number(message.first_byte_ms) / 1000).toFixed(2)}s</span>}
@@ -351,13 +361,20 @@ export default function ChatWorkspace({
   setTab,
 }) {
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
-  const visibleMessages = useMemo(
+  const rawVisibleMessages = useMemo(
     () => (selectedConversation?.messages || []).filter((message) => !isBootstrapMessage(message)),
     [selectedConversation?.messages],
   )
-  const hasStreamingAssistant = visibleMessages.some((message) => message.role === 'assistant' && message.streaming)
-  const hasStreamingAssistantContent = visibleMessages.some((message) => message.role === 'assistant' && message.streaming && String(message.content || '').trim())
+  const hasStreamingAssistant = rawVisibleMessages.some((message) => message.role === 'assistant' && message.streaming)
+  const hasStreamingAssistantContent = rawVisibleMessages.some((message) => message.role === 'assistant' && message.streaming && String(message.content || '').trim())
   const generationActive = Boolean(sending || hasStreamingAssistant)
+  const visibleMessages = useMemo(() => {
+    if (!generationActive) return rawVisibleMessages
+    return rawVisibleMessages.filter((message, index, messages) => {
+      const isTrailingInterruptedPlaceholder = index === messages.length - 1 && isInterruptedPlaceholderMessage(message)
+      return !isTrailingInterruptedPlaceholder
+    })
+  }, [generationActive, rawVisibleMessages])
   const pendingPrompt = (pendingConversation?.content || (sending ? composer.trim() : '')).trim()
   const pendingPromptAlreadyVisible = Boolean(
     pendingPrompt && [...visibleMessages].reverse().some((message) => message.role === 'user' && message.content === pendingPrompt),
@@ -584,8 +601,7 @@ export default function ChatWorkspace({
                   )}
                   <article className="message-row message-row-gemini assistant pending is-streaming" aria-busy="true" data-streaming-state="active">
                     <div className="message-bubble message-bubble-gemini assistant pending">
-                      <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={PREPARING_STREAMING_LABEL} phase="preparing" minimal />
-                      <p className="message-placeholder-copy">Camelid is opening the local stream.</p>
+                      <PacmanLoader elapsedSeconds={generationElapsedSeconds} label={PREPARING_STREAMING_LABEL} />
                     </div>
                   </article>
                 </>
