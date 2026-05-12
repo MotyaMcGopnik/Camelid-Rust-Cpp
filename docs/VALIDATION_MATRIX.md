@@ -16,15 +16,15 @@ Every public surface should tell the same four-row story:
 Next-family public language is locked to planning/validation, not support:
 
 - Mistral 7B Instruct: “In active validation for `Mistral-7B-Instruct-v0.3.Q8_0.gguf`; not supported yet.”
-- Mixtral 8x7B Instruct: “Bounded one-token backend runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; broad support is not claimed. MoE top-k routing runs with lazy/file-backed Q8 experts; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by 50-token Gate 9A divergence and a long-continuation hang.”
+- Mixtral 8x7B Instruct: “Bounded one-token backend runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; broad support is not claimed. MoE top-k routing runs with lazy/file-backed Q8 experts; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by 50-token Gate 9A divergence and a long-continuation hang, so API/WebUI/RSS/frontend readiness remains fail-closed.”
 - Qwen 2.5 7B Instruct: “Planned exact-row candidate for `Qwen2.5-7B-Instruct-Q8_0.gguf`; not supported yet.”
 - Gemma 2 9B Instruct: “Planned exact-row candidate for `gemma-2-9b-it-Q8_0.gguf`; not supported yet.”
 
-First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral already has bounded one-token backend MoE runtime evidence, but it still needs the Gate 9A/long-continuation blocker closed before superseded API/WebUI/RSS artifacts, long-context evidence, or broader support wording can move.
+First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral already has bounded one-token backend MoE runtime evidence, but it still needs the Gate 9A/long-continuation blocker closed before superseded API/WebUI/RSS artifacts, long-context evidence, or broader support wording can move. Keep llama.cpp / ggml credit visible whenever a parity-backed claim is summarized.
 
 | Change type | Minimum expected checks | Extra checks when relevant | Notes |
 | --- | --- | --- | --- |
-| Docs-only | `git diff --check`<br>`bash scripts/check-public-scrub.sh` | n/a | Keep support language synchronized with `README.md`, `COMPATIBILITY.md`, `STATUS.md`, and UI copy when claims change. |
+| Docs-only | `git diff --check`<br>`bash scripts/check-public-scrub.sh`<br>`node scripts/check-public-evidence-claims.mjs` | n/a | Keep support language synchronized with `README.md`, `COMPATIBILITY.md`, `STATUS.md`, and UI copy when claims change. |
 | Frontend-only copy/layout | `cd frontend && npm ci && npm run build` | `npm run smoke` or `npm run smoke:tiny` when chat/model-load/readiness surfaces change | Do not loosen readiness gates or support wording without matching evidence/docs updates. |
 | Backend-only non-inference changes | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test --all-targets --all-features`<br>`cargo doc --no-deps --all-features`<br>`bash scripts/check-public-scrub.sh` | frontend build if API shape or delivery may be affected | Good default lane for parser, API, CLI, and non-runtime refactors. |
 | Inference/tokenizer/runtime changes | Standard backend gate above | targeted parity, readiness, or smoke artifacts for the affected exact row(s) | Do not broaden support from seam evidence alone. |
@@ -39,7 +39,7 @@ Public contributor expectations stop at local reproducible checks plus public ar
 The following may still be maintainer-only workflows rather than baseline contributor requirements:
 
 - promotion-grade reruns on the approved Ubuntu validation lane
-- SSH-backed remote execution
+- approved maintainer remote execution
 - private operator recovery/debug procedures
 
 Public docs may reference those workflows at a high level, but should not depend on unpublished infrastructure details.
