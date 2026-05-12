@@ -71,25 +71,52 @@ async function validateMixtralBlockerReconciliation(root, manifestPaths) {
   const summaries = []
   for (const summaryPath of summaryPaths) summaries.push({ path: summaryPath, json: await readJson(summaryPath) })
 
-  const promotionClaimPaths = [
-    ...manifests
-      .filter(({ json }) => json?.schema === 'camelid.mixtral_exact_row_manifest.v1')
-      .map(({ path }) => path),
-    ...summaries
-      .filter(({ json }) => json?.schema === 'camelid.mixtral_exact_row_promotion_sync.v1' || json?.support_label === 'supported_exact_row_smoke')
-      .map(({ path }) => path),
-  ]
+  const promotionClaimPaths = new Set()
+  for (const { path, json } of manifests) {
+    if (json?.schema !== 'camelid.mixtral_exact_row_manifest.v1') continue
+    promotionClaimPaths.add(evidenceBundlePath(path))
+    for (const dependency of mixtralPromotionDependencyBundles(json, root)) promotionClaimPaths.add(dependency)
+  }
+  for (const { path, json } of summaries) {
+    if (json?.schema !== 'camelid.mixtral_exact_row_promotion_sync.v1' && json?.support_label !== 'supported_exact_row_smoke') continue
+    promotionClaimPaths.add(evidenceBundlePath(path))
+    for (const dependency of mixtralPromotionDependencyBundles(json, root)) promotionClaimPaths.add(dependency)
+  }
   const blockerPaths = summaries
     .filter(({ json }) => mixtralSummaryRecordsBlocker(json))
     .map(({ path }) => path)
-  if (promotionClaimPaths.length === 0 || blockerPaths.length === 0) return
+  if (promotionClaimPaths.size === 0 || blockerPaths.length === 0) return
 
   const reconciliation = manifests.find(({ json }) => json?.schema === 'camelid.mixtral_blocker_reconciliation.v1')
   if (!reconciliation) {
     fail(relative(process.cwd(), root) || '.', 'Mixtral promotion claims conflict with later long-output blocker evidence; add a camelid.mixtral_blocker_reconciliation.v1 manifest before public claim checks can pass')
     return
   }
-  validateMixtralReconciliationManifest(relative(process.cwd(), reconciliation.path), reconciliation.json, promotionClaimPaths, blockerPaths)
+  validateMixtralReconciliationManifest(relative(process.cwd(), reconciliation.path), reconciliation.json, [...promotionClaimPaths], blockerPaths)
+}
+
+function mixtralPromotionDependencyBundles(json, root) {
+  const bundles = []
+  for (const value of arrayStrings(json?.required_prior_gates)) bundles.push(normalizeEvidenceBundleRef(value, root))
+  for (const value of arrayStrings(json?.artifact_bundles)) bundles.push(normalizeEvidenceBundleRef(value, root))
+  if (Array.isArray(json?.promotion_gate_artifacts)) {
+    for (const artifact of json.promotion_gate_artifacts) {
+      if (typeof artifact?.bundle === 'string') bundles.push(normalizeEvidenceBundleRef(artifact.bundle, root))
+    }
+  }
+  return bundles.filter(Boolean)
+}
+
+function arrayStrings(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : []
+}
+
+function normalizeEvidenceBundleRef(value, root) {
+  if (value.startsWith('qa/evidence-bundles/')) return value
+  if (value.startsWith('/')) return relative(process.cwd(), value)
+  const rootRel = relative(process.cwd(), root) || '.'
+  if (value.startsWith(`${rootRel}/`) || value === rootRel) return value
+  return `${rootRel}/${value}`
 }
 
 function mixtralSummaryRecordsBlocker(summary) {

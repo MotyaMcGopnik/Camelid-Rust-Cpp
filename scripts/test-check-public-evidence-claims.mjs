@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process'
 const tempRoot = await mkdtemp(join(tmpdir(), 'camelid-evidence-claims-'))
 const goodRoot = join(tempRoot, 'good')
 const badRoot = join(tempRoot, 'bad')
+const staleMixtralRoot = join(tempRoot, 'stale-mixtral')
 
 await writeBundle(goodRoot, { mutate: false })
 await writeSingleRowContextBundle(goodRoot, { mutate: false })
@@ -23,6 +24,7 @@ await writeEightBContext1024And2048Bundle(badRoot, { mutate: true })
 await writeMistralContext51210242048Bundle(badRoot, { mutate: true })
 await writeLegacyPublicContextBundle(badRoot, { mutate: true })
 await writeMixtralPromotionAndBlockerEvidence(badRoot, { reconciled: false })
+await writeMixtralPromotionAndBlockerEvidence(staleMixtralRoot, { reconciled: true, omitDependencySupersedes: true })
 
 const good = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.mjs', '--root', goodRoot], {
   cwd: process.cwd(),
@@ -46,24 +48,46 @@ assert.match(bad.stderr, /raw_artifact must be a safe relative path/)
 assert.match(bad.stderr, /backend_generated_tokens must stay \[34,2735,35,12,7854\]/)
 assert.match(bad.stderr, /Mixtral promotion claims conflict with later long-output blocker evidence/)
 
-async function writeMixtralPromotionAndBlockerEvidence(root, { reconciled }) {
+const staleMixtral = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.mjs', '--root', staleMixtralRoot], {
+  cwd: process.cwd(),
+  encoding: 'utf8',
+})
+assert.notEqual(staleMixtral.status, 0, 'Mixtral reconciliation must supersede promotion dependency bundles')
+assert.match(staleMixtral.stderr, /supersedes must include .*mixtral-8x7b-v0\.1-q8-api-smoke-test/)
+
+async function writeMixtralPromotionAndBlockerEvidence(root, { reconciled, omitDependencySupersedes = false }) {
   const promotionDir = join(root, 'mixtral-8x7b-v0.1-q8-manifest-checksum-test')
   const syncDir = join(root, 'mixtral-8x7b-v0.1-q8-promotion-sync-test')
   const gate9Dir = join(root, 'mixtral-8x7b-v0.1-q8-gate9a-50tok-test')
+  const backendDir = join(root, 'mixtral-8x7b-v0.1-q8-backend-parity-refresh-test')
+  const apiDir = join(root, 'mixtral-8x7b-v0.1-q8-api-smoke-test')
+  const webuiDir = join(root, 'mixtral-8x7b-v0.1-q8-webui-readiness-test')
+  const rssDir = join(root, 'mixtral-8x7b-v0.1-q8-rss-timing-runtime-test')
   const reconcileDir = join(root, 'mixtral-8x7b-v0.1-q8-blocker-reconciliation-test')
   await mkdir(promotionDir, { recursive: true })
   await mkdir(syncDir, { recursive: true })
   await mkdir(gate9Dir, { recursive: true })
+  await mkdir(backendDir, { recursive: true })
+  await mkdir(apiDir, { recursive: true })
+  await mkdir(webuiDir, { recursive: true })
+  await mkdir(rssDir, { recursive: true })
+  const promotionDependencies = [
+    'mixtral-8x7b-v0.1-q8-backend-parity-refresh-test',
+    'mixtral-8x7b-v0.1-q8-api-smoke-test',
+    'mixtral-8x7b-v0.1-q8-webui-readiness-test',
+    'mixtral-8x7b-v0.1-q8-rss-timing-runtime-test',
+  ]
   const promotionManifest = {
     schema: 'camelid.mixtral_exact_row_manifest.v1',
     model: { filename: 'Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf', sha256: 'c'.repeat(64) },
     scope: 'validated exact row only; no broad Mixtral-family support claim',
-    promotion_gate_artifacts: [],
+    promotion_gate_artifacts: promotionDependencies.map((bundle) => ({ bundle, files: ['summary.json'] })),
   }
   const promotionSync = {
     schema: 'camelid.mixtral_exact_row_promotion_sync.v1',
     support_label: 'supported_exact_row_smoke',
     scope: 'validated exact row only; checked short-prompt envelope only',
+    required_prior_gates: promotionDependencies.map((name) => relative(process.cwd(), join(root, name))),
   }
   const gate9Summary = {
     schema: 'camelid.mixtral_gate9a_long_output.v1',
@@ -76,17 +100,20 @@ async function writeMixtralPromotionAndBlockerEvidence(root, { reconciled }) {
   await writeFile(join(promotionDir, 'manifest.json'), `${JSON.stringify(promotionManifest, null, 2)}\n`)
   await writeFile(join(syncDir, 'summary.json'), `${JSON.stringify(promotionSync, null, 2)}\n`)
   await writeFile(join(gate9Dir, 'summary.json'), `${JSON.stringify(gate9Summary, null, 2)}\n`)
+  for (const dir of [backendDir, apiDir, webuiDir, rssDir]) {
+    await writeFile(join(dir, 'summary.json'), `${JSON.stringify({ bundle: dir.split('/').pop(), all_passed: true }, null, 2)}\n`)
+  }
   if (!reconciled) return
   await mkdir(reconcileDir, { recursive: true })
+  const supersededBundles = omitDependencySupersedes
+    ? ['mixtral-8x7b-v0.1-q8-manifest-checksum-test', 'mixtral-8x7b-v0.1-q8-promotion-sync-test']
+    : [...promotionDependencies, 'mixtral-8x7b-v0.1-q8-manifest-checksum-test', 'mixtral-8x7b-v0.1-q8-promotion-sync-test']
   const reconciliation = {
     schema: 'camelid.mixtral_blocker_reconciliation.v1',
     current_status: 'active_validation_partial_runtime',
     support_label: 'unsupported_bounded_one_token_runtime_only',
     support_boundary: 'Mixtral remains unsupported/blocked beyond bounded one-token runtime evidence; no broad Mixtral support is claimed.',
-    supersedes: [
-      'mixtral-8x7b-v0.1-q8-manifest-checksum-test',
-      'mixtral-8x7b-v0.1-q8-promotion-sync-test',
-    ].map((name) => relative(process.cwd(), join(root, name))),
+    supersedes: supersededBundles.map((name) => relative(process.cwd(), join(root, name))),
     blocker_evidence: [relative(process.cwd(), join(root, 'mixtral-8x7b-v0.1-q8-gate9a-50tok-test'))],
   }
   await writeFile(join(reconcileDir, 'manifest.json'), `${JSON.stringify(reconciliation, null, 2)}\n`)
