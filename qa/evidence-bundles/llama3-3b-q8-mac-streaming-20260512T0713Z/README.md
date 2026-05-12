@@ -1,6 +1,6 @@
 # Llama 3.2 3B Q8_0 Mac streaming smoke — 2026-05-12
 
-Public-safe compact evidence for the exact Llama 3.2 3B Instruct Q8_0 local Mac streaming-responsiveness lane.
+Public-safe compact evidence for the exact Llama 3.2 3B Instruct Q8_0 scrubbed local streaming-responsiveness lane.
 
 Scope:
 - Exact row: `Llama-3.2-3B-Instruct-Q8_0.gguf`.
@@ -26,5 +26,5 @@ Interpretation:
 - This is streaming plumbing and responsiveness evidence only; it does **not** change the underlying `~253.5 s` first-content finding.
 
 Support boundary:
-- This bundle is exact-row local Mac evidence for `Llama-3.2-3B-Instruct-Q8_0.gguf` only.
+- This bundle is exact-row scrubbed local evidence for `Llama-3.2-3B-Instruct-Q8_0.gguf` only.
 - It does not promote production throughput, portability, model-native/larger context, neighboring Llama rows, arbitrary templates, or broad Llama support.

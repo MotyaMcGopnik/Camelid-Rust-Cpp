@@ -2,7 +2,7 @@
 
 Date: 2026-05-12
 
-Tim has paused the Ubuntu validation lane for Camelid promotion-grade runtime evidence. Until Tim explicitly reactivates that lane:
+The Ubuntu validation lane is paused for Camelid promotion-grade runtime evidence. Until an approved validation lane is explicitly reactivated:
 
 - do not SSH into a validation host or substitute another remote validation box;
 - treat promotion-grade runtime reruns as blocked, not as locally reproducible on a Mac by default;
@@ -12,4 +12,4 @@ Tim has paused the Ubuntu validation lane for Camelid promotion-grade runtime ev
 
 This note does not change any existing support row. It only updates the execution posture: historical Ubuntu evidence remains historical evidence for the exact row, source head, context bucket, and prompt pack it names; a paused validation lane is not new evidence and cannot promote neighboring rows, broader families, larger contexts, production throughput, portability, or arbitrary-template behavior.
 
-When Tim explicitly reopens the lane, regenerate affected scaffolds with `--validation-host-status available`, run only on a Tim-authorized validation/runtime lane, and publish only scrubbed manifests/checksums whose exact rows passed their tracks.
+When an approved validation lane is explicitly reopened, regenerate affected scaffolds with `--validation-host-status available`, run only on that approved validation/runtime lane, and publish only scrubbed manifests/checksums whose exact rows passed their tracks.

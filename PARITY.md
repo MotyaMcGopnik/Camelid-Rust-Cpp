@@ -99,7 +99,7 @@ What the 2048 artifact proves:
 
 Why it matters:
 
-- this is the row closest to Tim's product target
+- this is the row closest to the current product target
 - it shows Camelid is not hand-waving about 3B correctness before talking about UX/perf work
 
 ### Llama 3 8B Instruct Q8_0

@@ -59,8 +59,8 @@ Protect the supported lanes and clear the next blocker before widening claims.
 - Preserve the Llama 3.2 1B/3B broader prompt-pack plus bounded 512/1024/2048 context-pack wins while expanding only after model-native/larger-context, stronger performance/portability, and broader chat-template evidence land.
 - Preserve the Llama 3 8B exact-row promotion through the checked 512/1024/2048-context packs on current `main`; older 1024/2048 bundles remain historical source-head evidence only.
 - Keep README, `COMPATIBILITY.md`, `ROADMAP.md`, `STATUS.md`, `/api/capabilities`, and frontend readiness copy aligned.
-- Fold today's Mac frontend streaming-polish wins into the perf plan: dashboard polling no longer churns on local conversation/memory/model updates, and live assistant streaming patches are animation-frame batched while preparing/generating milestones remain immediate. Keep this as UI responsiveness work, not support-promotion evidence.
-- Keep the frontend/perf lane focused on the remaining hot paths: `ChatWorkspace` render frequency during streaming, unnecessary non-chat rerenders while tokens arrive, and true TTFT/decode measurements on Tim's Mac.
+- Fold the 2026-05-12 local frontend streaming-polish wins into the perf plan: dashboard polling no longer churns on local conversation/memory/model updates, and live assistant streaming patches are animation-frame batched while preparing/generating milestones remain immediate. Keep this as UI responsiveness work, not support-promotion evidence.
+- Keep the frontend/perf lane focused on the remaining hot paths: `ChatWorkspace` render frequency during streaming, unnecessary non-chat rerenders while tokens arrive, and true TTFT/decode measurements on a scrubbed local validation lane.
 
 ### Next
 
@@ -210,7 +210,7 @@ Execution order:
 - measure bottlenecks after each correctness milestone
 - optimize only where evidence says it matters
 - keep optimized kernels behind parity guardrails until proven
-- for frontend streaming polish, continue from the 2026-05-12 `useDashboardData` quick wins by instrumenting `ChatWorkspace` render frequency, isolating non-chat rerenders during streaming, and recording real TTFT/decode timing on Tim's Mac before making any broader performance claim
+- for frontend streaming polish, continue from the 2026-05-12 `useDashboardData` quick wins by instrumenting `ChatWorkspace` render frequency, isolating non-chat rerenders during streaming, and recording real TTFT/decode timing on a scrubbed local validation lane before making any broader performance claim
 
 Portability and packaging should remain explicit:
 
