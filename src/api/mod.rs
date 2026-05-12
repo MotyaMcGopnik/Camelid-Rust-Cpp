@@ -45,6 +45,7 @@ const LAZY_Q8_LINEAR_ENV: &str = "CAMELID_LAZY_Q8_0_LINEAR";
 const METADATA_CHAT_TEMPLATE_ENV: &str = "CAMELID_METADATA_CHAT_TEMPLATE";
 const GENERATION_TIMEOUT_ENV: &str = "CAMELID_GENERATION_TIMEOUT_MS";
 const DEFAULT_GENERATION_TIMEOUT_MS: u64 = 15 * 60 * 1000;
+const DEFAULT_PUBLIC_COMPLETION_MAX_TOKENS: u32 = 220;
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -325,6 +326,8 @@ pub struct GenerationSessionRequest {
     pub prompt: Option<String>,
     pub messages: Option<Vec<ChatMessage>>,
     pub max_tokens: Option<u32>,
+    #[serde(skip)]
+    pub default_max_tokens: Option<u32>,
     pub stream: Option<bool>,
     pub temperature: Option<f32>,
     pub top_k: Option<u32>,
@@ -1498,6 +1501,7 @@ async fn completions(
         prompt: req.prompt,
         messages: None,
         max_tokens: req.max_tokens,
+        default_max_tokens: Some(DEFAULT_PUBLIC_COMPLETION_MAX_TOKENS),
         stream: req.stream,
         temperature: req.temperature,
         top_k: req.top_k,
@@ -1589,6 +1593,7 @@ async fn chat_completions(
         prompt: None,
         messages: req.messages,
         max_tokens: req.max_tokens,
+        default_max_tokens: Some(DEFAULT_PUBLIC_COMPLETION_MAX_TOKENS),
         stream: req.stream,
         temperature: req.temperature,
         top_k: req.top_k,
@@ -1879,6 +1884,7 @@ async fn prepare_generation(
     req: GenerationSessionRequest,
 ) -> std::result::Result<PreparedGeneration, Response> {
     let requested_max_tokens = req.max_tokens;
+    let default_max_tokens = req.default_max_tokens;
     validate_choice_and_logprob_fields(&req).map_err(|response| *response)?;
     let sampling = sampling_config_from_request(&req).map_err(|response| *response)?;
     let stop_sequences =
@@ -2045,7 +2051,11 @@ async fn prepare_generation(
     }
 
     let available_max_tokens = (context_length - token_ids.len()) as u32;
-    let max_tokens = requested_max_tokens.unwrap_or(available_max_tokens);
+    let max_tokens = requested_max_tokens.unwrap_or_else(|| {
+        default_max_tokens
+            .map(|default_max_tokens| default_max_tokens.min(available_max_tokens))
+            .unwrap_or(available_max_tokens)
+    });
 
     let weight_load_started = Instant::now();
     let cached_weights = state.cached_weights.read().await.clone();

@@ -1305,6 +1305,62 @@ async fn generation_session_without_max_tokens_uses_remaining_context() {
 }
 
 #[tokio::test]
+async fn public_chat_completion_without_max_tokens_uses_demo_safe_default_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tiny-generation-public-default-max.gguf");
+    write_generation_gguf_with_options(
+        &path,
+        GenerationFixtureOptions {
+            context_length: 512,
+            include_tokenizer: true,
+            truncate_payload: false,
+        },
+    );
+
+    let app = camelid::api::router();
+    let load_body = serde_json::json!({"path": path, "id": "tiny-generation-public-default-max"});
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/models/load")
+                .header("content-type", "application/json")
+                .body(Body::from(load_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"tiny-generation-public-default-max","messages":[{"role":"user","content":"hello"}],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body_bytes)
+    );
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["usage"]["completion_tokens"], 220);
+    assert_eq!(body["choices"][0]["finish_reason"], "length");
+}
+
+#[tokio::test]
 async fn tokenizer_endpoint_returns_current_model_tokenizer_summary() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tokenizer.gguf");
