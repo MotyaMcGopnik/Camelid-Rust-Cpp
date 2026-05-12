@@ -16,11 +16,11 @@ Every public surface should tell the same four-row story:
 Next-family public language is locked to planning/validation, not support:
 
 - Mistral 7B Instruct: “In active validation for `Mistral-7B-Instruct-v0.3.Q8_0.gguf`; not supported yet.”
-- Mixtral 8x7B Instruct: “Bounded one-token backend runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; broad support is not claimed. MoE top-k routing runs with lazy/file-backed Q8 experts, but later short-prompt generation still diverges.”
+- Mixtral 8x7B Instruct: “Bounded one-token backend runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; broad support is not claimed. MoE top-k routing runs with lazy/file-backed Q8 experts; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by 50-token Gate 9A divergence and a long-continuation hang.”
 - Qwen 2.5 7B Instruct: “Planned exact-row candidate for `Qwen2.5-7B-Instruct-Q8_0.gguf`; not supported yet.”
 - Gemma 2 9B Instruct: “Planned exact-row candidate for `gemma-2-9b-it-Q8_0.gguf`; not supported yet.”
 
-First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral already has bounded one-token backend MoE runtime evidence, but it still needs later-generation parity before API/WebUI/RSS, long-context, or broader support wording can move.
+First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral already has bounded one-token backend MoE runtime evidence, but it still needs the Gate 9A/long-continuation blocker closed before superseded API/WebUI/RSS artifacts, long-context evidence, or broader support wording can move.
 
 | Change type | Minimum expected checks | Extra checks when relevant | Notes |
 | --- | --- | --- | --- |
