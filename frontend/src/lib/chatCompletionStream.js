@@ -64,6 +64,7 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
   let content = ''
   let finishReason = null
   let completionTokens = 0
+  let usage = null
   const streamStartedAt = performance.now()
   let firstByteMs = null
   let firstEventMs = null
@@ -91,6 +92,11 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
         chunk = JSON.parse(data)
       } catch {
         continue
+      }
+      if (chunk?.usage && typeof chunk.usage === 'object') {
+        usage = chunk.usage
+        if (Number.isFinite(Number(usage.completion_tokens))) completionTokens = Number(usage.completion_tokens)
+        onStreamEvent?.({ type: 'usage', usage, ...streamMetrics() })
       }
       const choice = chunk?.choices?.[0]
       const role = choice?.delta?.role ?? null
@@ -125,5 +131,5 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
   }
   buffer += decoder.decode()
   if (buffer.trim()) consumeEvent(buffer.replace(/\r\n/g, '\n'))
-  return { content, finishReason, completionTokens, firstContentMs, firstByteMs, firstEventMs, usage: null }
+  return { content, finishReason, completionTokens, firstContentMs, firstByteMs, firstEventMs, usage }
 }

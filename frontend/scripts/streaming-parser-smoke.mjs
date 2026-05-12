@@ -32,7 +32,7 @@ const response = new Response(streamFromChunks([
   'data: {"choices":[{"delta":{"content":"```js\\nconst"}}]}\n\n',
   'data: {"choices":[{"delta":{"content":" answer = 42"}}]}\n',
   '\n',
-  'data: {"choices":[{"finish_reason":"stop"}]}\n\n',
+  'data: {"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":7,"total_tokens":10}}\n\n',
   'data: [DONE]\n\n',
 ]), {
   status: 200,
@@ -53,7 +53,10 @@ assert.equal(streamed.content, '```js\nconst answer = 42', 'stream parser should
 assert.equal(streamed.finishReason, 'stop', 'stream parser should preserve finish_reason from the terminal chunk')
 assert.deepEqual(deltas.map((item) => item.fullContent), ['```js\nconst', '```js\nconst answer = 42'], 'stream deltas should update visible content before backend completion')
 assert.deepEqual(deltas.map((item) => item.completionTokens), [1, 2], 'stream metrics should advance while generation is active')
+assert.equal(streamed.completionTokens, 7, 'stream parser should preserve exact backend completion-token usage from the terminal chunk')
+assert.deepEqual(streamed.usage, { prompt_tokens: 3, completion_tokens: 7, total_tokens: 10 }, 'stream parser should preserve exact backend usage evidence instead of replacing it with estimates')
 assert.ok(streamEvents.includes('bytes'), 'stream parser should expose first-byte progress before content')
 assert.ok(streamEvents.includes('role'), 'stream parser should expose role-only chunks while waiting for first content token')
+assert.ok(streamEvents.includes('usage'), 'stream parser should expose backend usage chunks before finalizing the assistant row')
 
 console.log('Streaming parser smoke passed')
