@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 
 import { compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, isCompatibilitySupportedForModel } from '../lib/capabilities'
 import { clampText, formatDate, formatRate } from '../lib/formatters'
@@ -260,7 +260,7 @@ function StreamingStatus({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compa
   )
 }
 
-function AssistantMarkdown({ content, streaming = false }) {
+function AssistantMarkdownInner({ content, streaming = false }) {
   const normalized = String(content || '').replace(/\r\n/g, '\n')
   const blocks = []
   let cursor = 0
@@ -290,6 +290,48 @@ function AssistantMarkdown({ content, streaming = false }) {
   return <div className="message-markdown">{blocks.length ? blocks : <p>{content}</p>}</div>
 }
 
+const AssistantMarkdown = memo(AssistantMarkdownInner)
+
+const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsedSeconds }) {
+  const messageContent = cleanLegacyDemoCapCopy(message.content)
+  const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
+  const isOpenStreamingCode = assistantStreaming && hasOpenCodeFence(messageContent)
+  const streamingPhase = message.streaming_phase || (messageContent ? 'streaming' : 'generating')
+  const liveStatusLabel = streamingStatusLabel(streamingPhase, generationElapsedSeconds, isOpenStreamingCode)
+  const hasTokenMetrics = message.role === 'assistant' && (
+    message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined
+    || message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined
+  )
+
+  return (
+    <article
+      className={`message-row message-row-gemini ${message.role} ${assistantStreaming ? 'is-streaming' : ''}`}
+      aria-busy={assistantStreaming ? 'true' : undefined}
+      data-streaming-state={assistantStreaming ? 'active' : undefined}
+      data-streaming-code-state={isOpenStreamingCode ? 'open' : undefined}
+    >
+      <div className={`message-bubble message-bubble-gemini ${message.role}`}>
+        {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact phase={streamingPhase} />}
+        {message.role === 'assistant'
+          ? messageContent || !assistantStreaming
+            ? <AssistantMarkdown content={messageContent} streaming={assistantStreaming} />
+            : <p className="message-placeholder-copy">Camelid is connected to the local model. The first token has not arrived yet.</p>
+          : <p>{messageContent}</p>}
+        {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} tail phase={streamingPhase} />}
+        {hasTokenMetrics && (
+          <div className="message-token-metrics" aria-label="Generation speed">
+            {message.first_byte_ms !== null && message.first_byte_ms !== undefined && <span>TTFB {(Number(message.first_byte_ms) / 1000).toFixed(2)}s</span>}
+            {message.first_event_ms !== null && message.first_event_ms !== undefined && <span>First event {(Number(message.first_event_ms) / 1000).toFixed(2)}s</span>}
+            {message.first_content_ms !== null && message.first_content_ms !== undefined && <span>TTFT {(Number(message.first_content_ms) / 1000).toFixed(2)}s</span>}
+            <span>In {formatRate(message.tokens_in_per_sec)}</span>
+            <span>Decode {formatRate(message.tokens_out_per_sec)}</span>
+          </div>
+        )}
+      </div>
+    </article>
+  )
+})
+
 export default function ChatWorkspace({
   selectedConversation,
   selectedModel,
@@ -308,7 +350,10 @@ export default function ChatWorkspace({
   setTab,
 }) {
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
-  const visibleMessages = (selectedConversation?.messages || []).filter((message) => !isBootstrapMessage(message))
+  const visibleMessages = useMemo(
+    () => (selectedConversation?.messages || []).filter((message) => !isBootstrapMessage(message)),
+    [selectedConversation?.messages],
+  )
   const hasStreamingAssistant = visibleMessages.some((message) => message.role === 'assistant' && message.streaming)
   const generationActive = Boolean(sending || hasStreamingAssistant)
   const pendingPrompt = (pendingConversation?.content || (sending ? composer.trim() : '')).trim()
@@ -521,44 +566,9 @@ export default function ChatWorkspace({
 
             <div className="chat-thread chat-thread-gemini">
               {visibleMessages.length === 0 && !awaitingAssistant && <div className="empty-state empty-state-chat">Pick a ready model, then send the first message when you’re ready.</div>}
-              {visibleMessages.map((message) => {
-                const messageContent = cleanLegacyDemoCapCopy(message.content)
-                const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
-                const isOpenStreamingCode = assistantStreaming && hasOpenCodeFence(messageContent)
-                const streamingPhase = message.streaming_phase || (messageContent ? 'streaming' : 'generating')
-                const liveStatusLabel = streamingStatusLabel(streamingPhase, generationElapsedSeconds, isOpenStreamingCode)
-                const hasTokenMetrics = message.role === 'assistant' && (
-                  message.tokens_in_per_sec !== null && message.tokens_in_per_sec !== undefined ||
-                  message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined
-                )
-
-                return (
-                  <article
-                    key={message.id}
-                    className={`message-row message-row-gemini ${message.role} ${assistantStreaming ? 'is-streaming' : ''}`}
-                    aria-busy={assistantStreaming ? 'true' : undefined}
-                    data-streaming-state={assistantStreaming ? 'active' : undefined}
-                    data-streaming-code-state={isOpenStreamingCode ? 'open' : undefined}
-                  >
-                    <div className={`message-bubble message-bubble-gemini ${message.role}`}>
-                      {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} compact phase={streamingPhase} />}
-                      {message.role === 'assistant'
-                        ? messageContent || !assistantStreaming
-                          ? <AssistantMarkdown content={messageContent} streaming={assistantStreaming} />
-                          : <p className="message-placeholder-copy">Camelid is connected to the local model. The first token has not arrived yet.</p>
-                        : <p>{messageContent}</p>}
-                      {assistantStreaming && <StreamingStatus elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} tail phase={streamingPhase} />}
-                      {hasTokenMetrics && (
-                        <div className="message-token-metrics" aria-label="Generation speed">
-                          <span>In {formatRate(message.tokens_in_per_sec)}</span>
-                          <span>Out {formatRate(message.tokens_out_per_sec)}</span>
-                          {message.first_content_ms !== null && message.first_content_ms !== undefined && <span>TTFT {(Number(message.first_content_ms) / 1000).toFixed(2)}s</span>}
-                        </div>
-                      )}
-                    </div>
-                  </article>
-                )
-              })}
+              {visibleMessages.map((message) => (
+                <ChatMessageRow key={message.id} message={message} generationElapsedSeconds={generationElapsedSeconds} />
+              ))}
               {awaitingAssistant && (
                 <>
                   {pendingUserPrompt && (
