@@ -16,7 +16,7 @@ Options:
   --repo-root <path>                 Repository root (default: current directory)
   --out-dir <path>                   Output bundle root (default: target/full-support-<utc>-head-<sha>)
   --utc <stamp>                      UTC stamp for the default output directory
-  --validation-host-status <status>  available | blocked_by_operator_shutdown (default: available)
+  --validation-host-status <status>  available | blocked_by_operator_shutdown (default: blocked_by_operator_shutdown)
   --help, -h                         Print this help without writing files
 `)
   process.exit(0)
@@ -30,11 +30,15 @@ const originMain = git(['rev-parse', 'origin/main'], repoRoot)
 const branch = git(['branch', '--show-current'], repoRoot)
 const outDir = resolve(args.get('out-dir') || join(repoRoot, 'target', `full-support-${utcStamp}-head-${gitHeadShort}`))
 const outDirRelative = relative(repoRoot, outDir) || '.'
-const validationHostStatus = args.get('validation-host-status') || 'available'
+const validationHostStatus = args.get('validation-host-status') || 'blocked_by_operator_shutdown'
+if (!['available', 'blocked_by_operator_shutdown'].includes(validationHostStatus)) {
+  console.error(`unknown --validation-host-status ${JSON.stringify(validationHostStatus)}; expected available or blocked_by_operator_shutdown`)
+  process.exit(2)
+}
 const runtimeValidationAvailable = validationHostStatus === 'available'
 const qaBundleRoot = 'qa/evidence-bundles/four-row-public-20260503T024327Z'
 const perfEnvelopePath = 'qa/evidence-bundles/four-row-perf-portability-public-20260503T025639Z/compact-perf-portability-envelope.json'
-const validationNotePath = 'qa/validation-notes/2026-05-04-validation-lane-reopened.md'
+const validationNotePath = 'qa/validation-notes/2026-05-12-local-only-validation-lane-paused.md'
 const context512EvidencePath = 'qa/evidence-bundles/llama3-8b-context-512-20260504T234625Z-head-58acf592345c/manifest.json'
 const chatTemplateShapesEvidencePath = 'qa/evidence-bundles/llama3-8b-chat-template-shapes-20260505T003821Z-head-d13541ad8d7e/manifest.json'
 const broader50EvidencePath = 'qa/evidence-bundles/llama3-8b-broader-50tok-20260505T005031Z-head-d13541ad8d7e/manifest.json'

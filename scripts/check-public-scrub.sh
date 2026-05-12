@@ -48,4 +48,20 @@ if [[ -n "$branding_matches" ]]; then
   status=1
 fi
 
+stale_validation_lane_pattern='remote validation is available again|remote runtime validation is available again|Current operator update: The approved Ubuntu validation lane is reopened|approved Ubuntu validation lane is reopened for Camelid promotion-grade'
+stale_validation_lane_matches=$(git grep -n -I -E "$stale_validation_lane_pattern" -- \
+  README.md \
+  COMPATIBILITY.md \
+  STATUS.md \
+  ROADMAP.md \
+  FULL_SUPPORT_BLOCKER_MATRIX.md \
+  docs \
+  frontend/README.md \
+  qa/validation-notes \
+  scripts ':!scripts/check-public-scrub.sh' || true)
+if [[ -n "$stale_validation_lane_matches" ]]; then
+  printf 'public scrub guard failed for stale validation-lane availability language: %s\n%s\n' "$stale_validation_lane_pattern" "$stale_validation_lane_matches" >&2
+  status=1
+fi
+
 exit "$status"
