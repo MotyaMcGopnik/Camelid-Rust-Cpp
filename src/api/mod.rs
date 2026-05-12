@@ -945,7 +945,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 latest_checked_bucket: "llama3-context-2048-smoke-v1",
                 latest_checked_result: "pass",
                 latest_checked_output: "CMLD-204",
-                evidence: "the exact tracked Llama 3 8B Instruct Q8_0 GGUF has compact prompt-token/1-token/5-token/50-token parity, a three-prompt 50-token Ubuntu parity run, API/frontend smoke, bounded-memory evidence, checked 512/1024/2048-context packs, one compact chat-template-shapes pack, and retained-block lazy-Q8 hot-path cost probes. The current-head 1024/2048 pass is recorded at qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T041451Z-head-8e26be0a73c0/manifest.json with prompt-token, generated-token, and generated-text parity for CMLD-102 and CMLD-204. Camelid supports exact-row smoke plus the checked bounded packs for this row only; no model-native/larger context or broader/full support is implied",
+                evidence: "the exact tracked Llama 3 8B Instruct Q8_0 GGUF has compact prompt-token/1-token/5-token/50-token parity, a three-prompt 50-token Ubuntu parity run, API/frontend smoke, bounded-memory evidence, checked 512/1024/2048-context packs, one compact chat-template-shapes pack, and retained-block lazy-Q8 hot-path cost probes. The published source/runtime-head 1024/2048 pass is recorded at qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T041451Z-head-8e26be0a73c0/manifest.json with prompt-token, generated-token, and generated-text parity for CMLD-102 and CMLD-204. Camelid supports exact-row smoke plus the checked bounded packs for this row only; no model-native/larger context or broader/full support is implied",
                 next_step: "preserve exact-row smoke plus checked 512/1024/2048 context support while collecting model-native/larger-context proof, broader/full-support, production-throughput, portability, arbitrary-template evidence, and repeated current-head evidence before any wider 8B claim",
             },
             ModelCompatibilityTarget {
@@ -3768,11 +3768,11 @@ mod tests {
         assert!(eight_b
             .evidence
             .contains("checked 512/1024/2048-context packs"));
-        assert!(eight_b.evidence.contains("current-head 1024/2048 pass"));
+        assert!(eight_b.evidence.contains("published source/runtime-head 1024/2048 pass"));
     }
 
     #[test]
-    fn capabilities_report_exact_8b_1024_2048_after_current_head_alignment() {
+    fn capabilities_report_exact_8b_1024_2048_after_source_head_alignment() {
         let response = capabilities_response();
         assert!(response.support_contract.current_gate.contains(
             "Llama 3.2 1B/3B Q8_0 and Llama 3 8B Q8_0 have checked bounded 512/1024/2048 packs"
