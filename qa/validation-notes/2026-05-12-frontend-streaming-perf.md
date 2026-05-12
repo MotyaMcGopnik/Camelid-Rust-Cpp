@@ -16,7 +16,7 @@ Reported local validation from the main-session frontend pass:
 TPM coordination / remaining frontend-perf lanes:
 - Measure render frequency in `ChatWorkspace` during live assistant streaming; the next pass should separate message-row/markdown work from whole-workspace rerenders.
 - Audit unnecessary non-chat rerenders while a chat stream is active, especially app-shell/dashboard consumers that should not repaint on token cadence.
-- Capture true TTFT/decode measurements on Tim's Mac before turning this polish into any broader performance claim.
+- Capture true TTFT/decode measurements on a local Mac lane before turning this polish into any broader performance claim.
 
 Claim boundary:
 - This is a UI hot-path quick win and coordination note only.
