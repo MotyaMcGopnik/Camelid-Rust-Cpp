@@ -26,7 +26,8 @@ for pattern in "${patterns[@]}"; do
     ':!target' \
     ':!frontend/dist' \
     ':!frontend/node_modules' \
-    ':!scripts/check-public-scrub.sh' || true)
+    ':!scripts/check-public-scrub.sh' \
+    ':!scripts/test-audit-evidence-bundle-privacy.mjs' || true)
   if [[ -n "$matches" ]]; then
     printf 'public scrub guard failed for pattern: %s\n%s\n' "$pattern" "$matches" >&2
     status=1

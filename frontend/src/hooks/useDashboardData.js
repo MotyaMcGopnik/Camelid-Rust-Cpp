@@ -450,20 +450,26 @@ export function useDashboardData({ showNotice, clearNotice }) {
       if (!silent) clearNotice()
       setSelectedConversationId((current) => {
         if (current === NEW_CHAT_SENTINEL) return current
-        if (!localConversations.length) return null
-        if (current && localConversations.some((conversation) => conversation.id === current)) return current
-        return localConversations[0]?.id || null
+        if (!currentLocalConversations.length) return null
+        if (current && currentLocalConversations.some((conversation) => conversation.id === current)) return current
+        return currentLocalConversations[0]?.id || null
       })
       setSelectedModelId((current) => {
         if (!nextModels.length) return ''
         const currentModel = current ? nextModels.find((model) => model.id === current) : null
         const activeModel = health?.active_model_id ? nextModels.find((model) => model.id === health.active_model_id) : null
+        const activeModelRunnable = activeModel && isRunnableModel(activeModel)
+        const currentModelRunnable = currentModel && isRunnableModel(currentModel)
         const runnableModel = nextModels.find((model) => isRunnableModel(model)) || null
 
-        if (currentModel && isRunnableModel(currentModel)) return current
-        if (activeModel && currentModel?.id !== activeModel.id) return activeModel.id
+        // The chat API can only use the backend's active model. If a previous browser
+        // selection points at an inactive saved model, snap back to the runtime model
+        // instead of leaving the composer looking ready for the wrong row.
+        if (activeModelRunnable && current !== activeModel.id) return activeModel.id
+        if (currentModelRunnable) return current
+        if (activeModel) return activeModel.id
         if (currentModel) return current
-        return runnableModel?.id || activeModel?.id || nextModels[0]?.id || ''
+        return runnableModel?.id || nextModels[0]?.id || ''
       })
     } catch (error) {
       const fallbackDashboard = makeDashboard({
@@ -607,6 +613,9 @@ export function useDashboardData({ showNotice, clearNotice }) {
     try {
       const conversation = await ensureConversation()
       activeConversationId = conversation.id
+      // Fresh chats start from the __new__ sentinel. Select the real conversation immediately
+      // so the main thread renders the same streaming message object as the sidebar preview.
+      setSelectedConversationId(conversation.id)
       const userMessage = { id: makeId('message'), role: 'user', content: messageContent, model_id: selectedModelId, created_at: nowIso() }
       setPendingChat({ conversationId: conversation.id, content: messageContent, modelId: selectedModelId })
       setComposer('')
