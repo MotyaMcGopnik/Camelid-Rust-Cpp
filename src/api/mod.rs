@@ -759,7 +759,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only and remains unsupported for broad/API/WebUI/frontend readiness while later generation diverges. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
+            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -823,7 +823,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "mixtral_moe",
                 status: "active_validation_partial_runtime",
-                notes: "public readiness: Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token exact-row MoE runtime evidence only. Top-k expert routing runs with lazy/file-backed rank-3 Q8 experts, but later short-prompt generation still diverges from llama.cpp; broad Mixtral, frontend/API/WebUI/RSS, long-context, and production support remain unclaimed.",
+                notes: "public readiness: Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token exact-row MoE runtime evidence only. Top-k expert routing runs with lazy/file-backed rank-3 Q8 experts, but later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang; broad Mixtral, frontend/API/WebUI/RSS, long-context, and production support remain unclaimed.",
             },
             SupportItem {
                 id: "qwen25",
@@ -1094,7 +1094,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 status: "active_validation_partial_runtime",
                 support_scope: "exact_row_bounded_moe_runtime_only",
                 full_support_status: "blocked_later_generation_divergence",
-                full_support_blockers: "later short-prompt generation still diverges from llama.cpp; API/WebUI readiness, long-context evidence, production throughput, portability, and durable broad prompt coverage are missing",
+                full_support_blockers: "Gate 9A 50-token evidence diverges from llama.cpp and a longer-continuation probe hung; API/WebUI readiness, long-context evidence, production throughput, portability, and durable broad prompt coverage are missing",
                 metadata_parses: "validated_sparse_header",
                 tokenizer_works: "validated_against_llama_cpp_reference",
                 tensors_load: "validated_lazy_file_backed_rank3_q8_experts",
@@ -1102,7 +1102,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 parity_audited: "prompt_tokens_and_one_token_smoke_only_later_generation_diverges",
                 performance_measured: "not_promoted",
                 frontend_load_path_verified: "fail_closed_partial_runtime_only",
-                frontend_readiness_gate: "fail-closed for broad readiness: exact row may be described only as bounded one-token backend runtime evidence until later-generation parity and API/WebUI gates close",
+                frontend_readiness_gate: "fail-closed for broad readiness: exact row may be described only as bounded one-token backend runtime evidence until Gate 9A/long-continuation parity and API/WebUI gates close",
                 tested_context: "one_token_probe_only",
                 chat_template_renderer: "mixtral_instruct_v0_1_metadata_template_validated",
                 chat_template_shape_pack: "validated_reference_pack",
@@ -1120,7 +1120,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 latest_checked_result: "blocked_later_generation_divergence",
                 latest_checked_output: "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/README.md",
                 evidence: "exact row leserg/Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF at commit 93c0492d1891b5147f42b2648d9fccc140910a2f, license apache-2.0, GGUF ETag 77b8ee314ae3e77cefaba7f33841235da3346c34171547fe10e8a85f127973a7, size 49626319776 bytes and sha256 c48f9680d5aa60703ed0fd38e29fc6556b3490f8f6c9919a31c9da7996039f81; sparse-header metadata parses with llama.expert_count=8 and expert_used_count=2 plus rank-3 expert tensors; tokenizer/template prompts match llama.cpp reference pack fixtures/tokenizer/mixtral-8x7b-instruct-v0.1-reference-pack.json; MoE top-k expert routing runs with selected-weight renormalization and lazy/file-backed Q8 experts; bounded one-token runtime evidence exists, but Gate 9A 50-token evidence diverged at generated token index 9 and the continuation probe recorded a backend HTTP hang after the llama.cpp reference completed. No broad Mixtral, frontend/API/WebUI/RSS, long-context, production, neighboring-row, or full-support claim is made.",
-                next_step: "close later-generation parity divergence, then run API/WebUI/RSS and longer-context promotion bundles before any broad Mixtral support claim",
+                next_step: "close the Gate 9A 50-token divergence and longer-continuation hang, then run API/WebUI/RSS and longer-context promotion bundles before any broad Mixtral support claim",
             },
             ModelCompatibilityTarget {
                 id: "qwen25_7b_instruct_q8_0",
@@ -4018,6 +4018,10 @@ mod tests {
             .support_contract
             .current_gate
             .contains("Current exact-row support"));
+        assert!(response
+            .support_contract
+            .current_gate
+            .contains("superseded by Gate 9A 50-token divergence and a longer-continuation hang"));
         assert!(response.support_contract.current_gate.contains(
             "no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied"
         ));
@@ -4184,7 +4188,7 @@ mod tests {
             .contains("bounded one-token exact-row MoE runtime evidence only"));
         assert!(mixtral_family
             .notes
-            .contains("later short-prompt generation still diverges"));
+            .contains("Gate 9A 50-token divergence and a longer-continuation hang"));
         assert!(mixtral_family.notes.contains("support remain unclaimed"));
 
         let planned_rows = ["qwen25_7b_instruct_q8_0", "gemma2_9b_it_q8_0"];
