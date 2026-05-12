@@ -3768,7 +3768,9 @@ mod tests {
         assert!(eight_b
             .evidence
             .contains("checked 512/1024/2048-context packs"));
-        assert!(eight_b.evidence.contains("published source/runtime-head 1024/2048 pass"));
+        assert!(eight_b
+            .evidence
+            .contains("published source/runtime-head 1024/2048 pass"));
     }
 
     #[test]

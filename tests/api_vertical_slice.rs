@@ -338,7 +338,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama3["latest_checked_output"], "CMLD-204");
     let llama3_evidence = llama3["evidence"].as_str().unwrap();
     assert!(llama3_evidence.contains("checked 512/1024/2048-context packs"));
-    assert!(llama3_evidence.contains("current-head 1024/2048 pass"));
+    assert!(llama3_evidence.contains("published source/runtime-head 1024/2048 pass"));
     assert!(llama3_evidence.contains("retained-block lazy-Q8 hot-path cost probes"));
     let llama3_next_step = llama3["next_step"].as_str().unwrap();
     assert!(llama3_next_step.contains("checked 512/1024/2048 context support"));
