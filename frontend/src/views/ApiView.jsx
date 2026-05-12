@@ -1,4 +1,4 @@
-import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus, summarizeCapabilityItems } from '../lib/capabilities'
+import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
 
 function guardedApiFeatures(features = []) {
   return features.filter((feature) => isGuardedCapabilityStatus(feature.status))
@@ -137,13 +137,6 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
           </div>
 
           <div className="api-card">
-            <strong>Non-row capability lists</strong>
-            <p><b>Quant lists:</b> {summarizeCapabilityItems([...(capabilities?.supported_quantization || []), ...(capabilities?.planned_quantization || [])], 'Not advertised by this backend.')}</p>
-            <p><b>Family lists:</b> {summarizeCapabilityItems([...(capabilities?.supported_model_families || []), ...(capabilities?.planned_model_families || [])], 'Not advertised by this backend.')}</p>
-            <p>These lists are context for backend refusals and planning only; the API UI treats exact compatibility rows as the support evidence.</p>
-          </div>
-
-          <div className="api-card">
             <strong>Selected exact-row evidence</strong>
             {selectedCompatibilityTarget ? (
               <>
@@ -167,8 +160,14 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
             {selectedModel ? (
               <>
                 <code>{selectedModel.id}</code>
-                <p><b>{compatibilityHintLabel(selectedCompatibilityHint, 'No matching row')}</b></p>
-                <p>{selectedCompatibilitySupported ? displayCapabilityCopy(compatibilityHintCopy(selectedCompatibilityHint)) : `${displayCapabilityCopy(compatibilityHintCopy(selectedCompatibilityHint))} Do not treat this selected model as chat-supported unless runtime readiness is also green.`}</p>
+                {selectedCompatibilityTarget ? (
+                  <>
+                    <p><b>{selectedCompatibilityTarget.id}: {formatCapabilityStatus(selectedCompatibilityTarget.status)}</b></p>
+                    <p>{selectedCompatibilitySupported ? 'This selected model has an exact supported compatibility row; runtime readiness must still match before chat unlocks.' : 'An exact row matched, but it is not supported for chat at this gate.'}</p>
+                  </>
+                ) : (
+                  <p>No exact compatibility row matched this selected model, so the API UI will not display family, quant-list, filename, or saved-path guesses as support evidence.</p>
+                )}
               </>
             ) : (
               <p>No selected model. Capability rows remain evidence boundaries, not a catalog of everything on disk.</p>

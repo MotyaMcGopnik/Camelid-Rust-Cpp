@@ -265,6 +265,16 @@ function PacmanLoader({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL, compact 
   )
 }
 
+function LiveGenerationBadge({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL }) {
+  return (
+    <div className="message-live-generation-badge" role="status" aria-live="polite" data-live-status="active">
+      <span className="message-live-dot" aria-hidden="true" />
+      <span>{label}</span>
+      <span>{elapsedSeconds}s</span>
+    </div>
+  )
+}
+
 function AssistantMarkdownInner({ content, streaming = false }) {
   const normalized = String(content || '').replace(/\r\n/g, '\n')
   const blocks = []
@@ -314,6 +324,7 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
     || message.tokens_out_per_sec !== null && message.tokens_out_per_sec !== undefined
   )
   const showStreamingStatus = assistantStreaming && !messageContent
+  const showLiveGenerationBadge = assistantStreaming && Boolean(messageContent)
 
   return (
     <article
@@ -329,6 +340,7 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
             ? <AssistantMarkdown content={messageContent} streaming={assistantStreaming} />
             : null
           : <p>{messageContent}</p>}
+        {showLiveGenerationBadge && <LiveGenerationBadge elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} />}
         {hasTokenMetrics && (
           <div className="message-token-metrics" aria-label="Generation speed">
             {message.first_byte_ms !== null && message.first_byte_ms !== undefined && <span>TTFB {(Number(message.first_byte_ms) / 1000).toFixed(2)}s</span>}
