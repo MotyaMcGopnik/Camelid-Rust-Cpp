@@ -381,6 +381,10 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [localMemories, setLocalMemories] = useState(() => readJsonStorage(MEMORIES_STORAGE_KEY, []))
 
   const normalizedApiBase = normalizeApiBase(apiBase)
+  const updateConversationsState = (updater) => {
+    setLocalConversations((current) => normalizeStoredConversations(typeof updater === 'function' ? updater(current) : updater))
+  }
+
   const persistConversations = (updater) => {
     setLocalConversations((current) => {
       const next = normalizeStoredConversations(typeof updater === 'function' ? updater(current) : updater)
@@ -625,6 +629,10 @@ export function useDashboardData({ showNotice, clearNotice }) {
         timings_ms: null,
         usage: null,
         streaming: true,
+        streaming_phase: 'preparing',
+        first_byte_ms: null,
+        first_event_ms: null,
+        first_content_ms: null,
       }
       persistConversations((current) => current.map((item) => (
         item.id === conversation.id
@@ -638,28 +646,43 @@ export function useDashboardData({ showNotice, clearNotice }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: selectedModelId, messages: history, temperature: 0, stream: true }),
       })
-      const streamed = await readStreamingChatCompletion(response, (_delta, fullContent) => {
-        const liveElapsedMs = performance.now() - requestStartedAt
-        const liveCompletionTokens = estimateTokenCount(fullContent)
-        persistConversations((current) => current.map((item) => (
+      const markAssistantStreamState = (patch) => {
+        updateConversationsState((current) => current.map((item) => (
           item.id === conversation.id
             ? {
                 ...item,
                 messages: (item.messages || []).map((message) => (
-                  message.id === assistantId
-                    ? {
-                        ...message,
-                        content: fullContent || '…',
-                        tokens_in_per_sec: null,
-                        tokens_out_per_sec: tokensPerSecond(liveCompletionTokens, liveElapsedMs),
-                      }
-                    : message
+                  message.id === assistantId ? { ...message, ...patch } : message
                 )),
                 updated_at: nowIso(),
               }
             : item
         )))
-      }, { estimateTokenCount })
+      }
+      if (response.ok && !response.headers.get('content-type')?.includes('application/json')) {
+        markAssistantStreamState({ streaming_phase: 'generating' })
+      }
+      const streamed = await readStreamingChatCompletion(response, (_delta, fullContent) => {
+        const liveElapsedMs = performance.now() - requestStartedAt
+        const liveCompletionTokens = estimateTokenCount(fullContent)
+        markAssistantStreamState({
+          content: fullContent || '…',
+          streaming_phase: 'streaming',
+          tokens_in_per_sec: null,
+          tokens_out_per_sec: tokensPerSecond(liveCompletionTokens, liveElapsedMs),
+        })
+      }, {
+        estimateTokenCount,
+        onStreamEvent(event) {
+          if (event.type === 'bytes' || event.type === 'role') {
+            markAssistantStreamState({
+              streaming_phase: 'generating',
+              first_byte_ms: event.firstByteMs ?? null,
+              first_event_ms: event.firstEventMs ?? null,
+            })
+          }
+        },
+      })
       const elapsedMs = performance.now() - requestStartedAt
       const assistantMessage = {
         ...assistantMessageBase,
@@ -674,6 +697,10 @@ export function useDashboardData({ showNotice, clearNotice }) {
           total_tokens: promptTokenEstimate + (streamed.completionTokens || estimateTokenCount(streamed.content)),
         },
         streaming: false,
+        streaming_phase: null,
+        first_byte_ms: streamed.firstByteMs ?? null,
+        first_event_ms: streamed.firstEventMs ?? null,
+        first_content_ms: streamed.firstContentMs ?? null,
       }
       persistConversations((current) => current.map((item) => (
         item.id === conversation.id
@@ -702,6 +729,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
                         content: message.content && message.content !== '…' ? message.content : '(generation stopped)',
                         finish_reason: 'error',
                         streaming: false,
+                        streaming_phase: null,
                       }
                     : message
                 )),

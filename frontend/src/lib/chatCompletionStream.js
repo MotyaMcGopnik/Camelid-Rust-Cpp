@@ -34,7 +34,7 @@ export function readChatCompletionJsonPayload(payload, { estimateTokenCount = de
   }
 }
 
-export async function readStreamingChatCompletion(response, onDelta, { estimateTokenCount = defaultEstimateTokenCount } = {}) {
+export async function readStreamingChatCompletion(response, onDelta, { estimateTokenCount = defaultEstimateTokenCount, onStreamEvent = null } = {}) {
   if (!response.ok) {
     let detail = null
     try {
@@ -52,24 +52,40 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
   if (contentType.includes('application/json')) {
     const payload = await response.json()
     const parsed = readChatCompletionJsonPayload(payload, { estimateTokenCount })
+    onStreamEvent?.({ type: 'json_fallback', elapsedMs: 0, firstByteMs: null, firstContentMs: null })
     if (parsed.content) onDelta(parsed.content, parsed.content, { completionTokens: parsed.completionTokens, elapsedMs: 0, firstContentMs: null })
     return parsed
   }
 
   const reader = response.body?.getReader()
-  if (!reader) return { content: '', finishReason: null, completionTokens: 0, firstContentMs: null, usage: null }
+  if (!reader) return { content: '', finishReason: null, completionTokens: 0, firstContentMs: null, firstByteMs: null, firstEventMs: null, usage: null }
   const decoder = new TextDecoder()
   let buffer = ''
   let content = ''
   let finishReason = null
   let completionTokens = 0
   const streamStartedAt = performance.now()
+  let firstByteMs = null
+  let firstEventMs = null
   let firstContentMs = null
+
+  const streamMetrics = () => ({
+    completionTokens,
+    elapsedMs: performance.now() - streamStartedAt,
+    firstByteMs,
+    firstEventMs,
+    firstContentMs,
+  })
 
   const consumeEvent = (eventText) => {
     const dataLines = readSseDataLines(eventText)
+    if (dataLines.length && firstEventMs === null) firstEventMs = performance.now() - streamStartedAt
     for (const data of dataLines) {
-      if (!data || data === '[DONE]') continue
+      if (!data) continue
+      if (data === '[DONE]') {
+        onStreamEvent?.({ type: 'done', ...streamMetrics() })
+        continue
+      }
       let chunk = null
       try {
         chunk = JSON.parse(data)
@@ -77,24 +93,31 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
         continue
       }
       const choice = chunk?.choices?.[0]
+      const role = choice?.delta?.role ?? null
       const delta = choice?.delta?.content ?? choice?.text ?? ''
+      if (role && !delta) onStreamEvent?.({ type: 'role', role, ...streamMetrics() })
       if (delta) {
         completionTokens += 1
         if (firstContentMs === null) firstContentMs = performance.now() - streamStartedAt
         content += delta
-        onDelta(delta, content, {
-          completionTokens,
-          elapsedMs: performance.now() - streamStartedAt,
-          firstContentMs,
-        })
+        const metrics = streamMetrics()
+        onStreamEvent?.({ type: 'content', delta, ...metrics })
+        onDelta(delta, content, metrics)
       }
-      if (choice?.finish_reason) finishReason = choice.finish_reason
+      if (choice?.finish_reason) {
+        finishReason = choice.finish_reason
+        onStreamEvent?.({ type: 'finish', finishReason, ...streamMetrics() })
+      }
     }
   }
 
   for (;;) {
     const { value, done } = await reader.read()
     if (done) break
+    if (firstByteMs === null) {
+      firstByteMs = performance.now() - streamStartedAt
+      onStreamEvent?.({ type: 'bytes', bytes: value.byteLength, ...streamMetrics() })
+    }
     buffer += decoder.decode(value, { stream: true })
     const { events, remainder } = extractSseEvents(buffer)
     events.forEach(consumeEvent)
@@ -102,5 +125,5 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
   }
   buffer += decoder.decode()
   if (buffer.trim()) consumeEvent(buffer.replace(/\r\n/g, '\n'))
-  return { content, finishReason, completionTokens, firstContentMs, usage: null }
+  return { content, finishReason, completionTokens, firstContentMs, firstByteMs, firstEventMs, usage: null }
 }

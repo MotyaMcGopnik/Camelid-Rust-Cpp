@@ -5878,6 +5878,24 @@ textarea.composer-input-gemini {
   line-height: 1;
 }
 
+.message-live-status-preparing {
+  border-color: color-mix(in srgb, #7dd3fc 30%, var(--color-border-soft) 70%);
+  background: color-mix(in srgb, #7dd3fc 10%, var(--color-chip) 90%);
+  color: color-mix(in srgb, var(--color-text-muted) 74%, #bae6fd 26%);
+}
+
+.message-live-status-generating {
+  border-color: color-mix(in srgb, #fb923c 30%, var(--color-border-soft) 70%);
+  background: color-mix(in srgb, #fb923c 11%, var(--color-chip) 89%);
+  color: color-mix(in srgb, var(--color-text-muted) 74%, #fed7aa 26%);
+}
+
+.message-live-status-streaming {
+  border-color: color-mix(in srgb, #86efac 30%, var(--color-border-soft) 70%);
+  background: color-mix(in srgb, #86efac 10%, var(--color-chip) 90%);
+  color: color-mix(in srgb, var(--color-text-muted) 74%, #bbf7d0 26%);
+}
+
 .message-live-status-compact {
   margin-top: 0;
   margin-bottom: 12px;

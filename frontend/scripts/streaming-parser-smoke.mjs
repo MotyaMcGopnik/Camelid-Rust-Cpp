@@ -28,6 +28,7 @@ function streamFromChunks(chunks) {
 }
 
 const response = new Response(streamFromChunks([
+  'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
   'data: {"choices":[{"delta":{"content":"```js\\nconst"}}]}\n\n',
   'data: {"choices":[{"delta":{"content":" answer = 42"}}]}\n',
   '\n',
@@ -39,13 +40,20 @@ const response = new Response(streamFromChunks([
 })
 
 const deltas = []
+const streamEvents = []
 const streamed = await readStreamingChatCompletion(response, (delta, fullContent, metrics) => {
   deltas.push({ delta, fullContent, completionTokens: metrics.completionTokens })
+}, {
+  onStreamEvent(event) {
+    streamEvents.push(event.type)
+  },
 })
 
 assert.equal(streamed.content, '```js\nconst answer = 42', 'stream parser should preserve incomplete fenced code content safely for live rendering')
 assert.equal(streamed.finishReason, 'stop', 'stream parser should preserve finish_reason from the terminal chunk')
 assert.deepEqual(deltas.map((item) => item.fullContent), ['```js\nconst', '```js\nconst answer = 42'], 'stream deltas should update visible content before backend completion')
 assert.deepEqual(deltas.map((item) => item.completionTokens), [1, 2], 'stream metrics should advance while generation is active')
+assert.ok(streamEvents.includes('bytes'), 'stream parser should expose first-byte progress before content')
+assert.ok(streamEvents.includes('role'), 'stream parser should expose role-only chunks while waiting for first content token')
 
 console.log('Streaming parser smoke passed')
