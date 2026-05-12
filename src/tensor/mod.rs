@@ -1980,7 +1980,7 @@ impl TensorStore {
             ));
         }
         let per_expert_elements = expected_elements / expert_count;
-        if per_expert_elements % 32 != 0 {
+        if !per_expert_elements.is_multiple_of(32) {
             return Err(BackendError::InvalidTensorData(
                 "split MoE expert Q8_0 element count is not block aligned".to_string(),
             ));

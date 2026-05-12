@@ -22,7 +22,7 @@ Camelid's current milestone is a synchronized product surface: backend runtime, 
 
 ![Camelid WebUI chat surface](docs/assets/camelid-readme-chat-surface-dark.png)
 
-The WebUI screenshot above is intentionally simple and product-forward while still reflecting the local-first runtime contract. It is not a broad model-family or arbitrary-GGUF support claim.
+The WebUI screenshot above is the intended dark, collapsed-rail chat surface: intentionally simple and product-forward while still reflecting the local-first runtime contract. It is not a broad model-family or arbitrary-GGUF support claim.
 
 ## Current work tracks
 
