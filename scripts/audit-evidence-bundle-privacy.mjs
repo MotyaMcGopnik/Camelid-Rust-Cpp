@@ -22,6 +22,11 @@ const patterns = [
     regex: /\/Users\/[^/\n]+\/[^"]*/g,
   },
   {
+    id: 'mac_mounted_volume_path',
+    description: 'macOS mounted-volume path leaked into durable bundle content',
+    regex: /\/Volumes\/[^/\n]+\/[^"]*/g,
+  },
+  {
     id: 'ipv4_literal',
     description: 'Literal IPv4 address leaked into durable bundle content',
     regex: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
