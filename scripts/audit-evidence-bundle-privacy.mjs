@@ -8,6 +8,7 @@ const outPath = args.get('out') ? resolve(args.get('out')) : null
 const strict = args.has('strict')
 
 const textExtensions = new Set(['.json', '.md', '.txt', '.log', '.tsv'])
+const textFilenames = new Set(['SHA256SUMS'])
 const findings = []
 
 const patterns = [
@@ -114,6 +115,7 @@ async function scanFile(fullPath) {
 }
 
 function hasTextExtension(name) {
+  if (textFilenames.has(name)) return true
   const dot = name.lastIndexOf('.')
   return dot >= 0 && textExtensions.has(name.slice(dot).toLowerCase())
 }

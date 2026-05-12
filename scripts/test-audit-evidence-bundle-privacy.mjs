@@ -37,6 +37,10 @@ await writeFile(
     2,
   )}\n`,
 )
+await writeFile(
+  join(leakRoot, 'llama32-3b-local-smoke', 'SHA256SUMS'),
+  'abcd1234  /Users/timtoole/.openclaw/workspace/projects/Camelid/target/private-artifact.json\n',
+)
 
 const safe = spawnAudit(safeRoot)
 assert.equal(safe.status, 0, safe.stderr || safe.stdout)
@@ -46,9 +50,11 @@ assert.equal(safeReport.finding_count, 0)
 const leaked = spawnAudit(leakRoot)
 assert.notEqual(leaked.status, 0, 'mounted-volume paths in evidence bundles must fail strict privacy audit')
 const leakedReport = JSON.parse(leaked.stdout)
-assert.equal(leakedReport.finding_count, 1)
-assert.equal(leakedReport.bundles[0].findings[0].pattern, 'mac_mounted_volume_path')
-assert.match(leakedReport.bundles[0].findings[0].sample, /Llama-3\.2-3B-Instruct-Q8_0\.gguf/)
+assert.equal(leakedReport.finding_count, 2)
+const leakedPatterns = leakedReport.bundles[0].findings.map((finding) => finding.pattern).sort()
+assert.deepEqual(leakedPatterns, ['mac_home_path', 'mac_mounted_volume_path'])
+assert.ok(leakedReport.bundles[0].findings.some((finding) => finding.file.endsWith('/SHA256SUMS')))
+assert.ok(leakedReport.bundles[0].findings.some((finding) => /Llama-3\.2-3B-Instruct-Q8_0\.gguf/.test(finding.sample)))
 
 function spawnAudit(root) {
   return spawnSync(process.execPath, ['scripts/audit-evidence-bundle-privacy.mjs', '--root', root, '--strict'], {
