@@ -1,4 +1,5 @@
 import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { modelRuntimeIdMatches } from '../lib/modelState'
 
 function guardedApiFeatures(features = []) {
   return features.filter((feature) => isGuardedCapabilityStatus(feature.status))
@@ -23,7 +24,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
   const selectedCompatibilitySupported = selectedCompatibilityTarget ? isSupportedCapabilityStatus(selectedCompatibilityTarget.status) : false
   const generationReady = Boolean(runtime?.generation_ready)
   const loadedNow = Boolean(runtime?.loaded_now)
-  const selectedRuntimeMatches = Boolean(selectedModel && runtime?.active_model_id === selectedModel.id)
+  const selectedRuntimeMatches = modelRuntimeIdMatches(selectedModel, runtime)
   const selectedExactRowReady = Boolean(loadedNow && generationReady && selectedRuntimeMatches && selectedCompatibilitySupported)
   const readinessPillCopy = selectedExactRowReady
     ? 'Selected exact row ready'

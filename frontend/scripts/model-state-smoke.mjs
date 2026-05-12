@@ -36,6 +36,7 @@ import {
   isModelLoadedNow,
   isRunnableInCurrentRuntime,
   isRunnableModel,
+  modelRuntimeIdMatches,
 } from '../src/lib/modelState.js'
 
 import { getChatGateState } from '../src/lib/chatGate.js'
@@ -58,6 +59,10 @@ assert.equal(isRunnableModel(localLoadedReady), true)
 assert.equal(isRunnableInCurrentRuntime(localLoadedReady, { active_model_id: 'tiny-generation', generation_ready: true }), true)
 assert.equal(isRunnableInCurrentRuntime(localLoadedReady, { active_model_id: 'other-model', generation_ready: true }), false, 'a local model is not runnable for chat if a different model is active in Camelid')
 assert.equal(isRunnableInCurrentRuntime(localLoadedReady, { active_model_id: 'tiny-generation', generation_ready: false }), false, 'loaded_now alone is not enough without runtime generation_ready=true')
+const localReadyWithRuntimeName = { ...localLoadedReady, id: 'browser-alias', runtime_model_name: 'backend-runtime-id' }
+assert.equal(modelRuntimeIdMatches(localReadyWithRuntimeName, { active_model_id: 'backend-runtime-id' }), true, 'API/support readiness should accept the backend runtime model id when it differs from the browser alias')
+assert.equal(isRunnableInCurrentRuntime(localReadyWithRuntimeName, { active_model_id: 'backend-runtime-id', generation_ready: true }), true, 'runtime-name matches keep chat/API gating tied to the exact loaded backend row')
+assert.equal(getChatGateState({ model_compatibility: [] }, localReadyWithRuntimeName, { active_model_id: 'backend-runtime-id', loaded_now: true, generation_ready: true }).runtimeReady, true, 'chat gate runtime readiness should use the same runtime id matcher as the API view')
 assert.equal(getModelStatusLabel(localLoadedReady), 'Loaded + generation-ready')
 assert.match(describeModelState(localLoadedReady), /generation_ready=true/)
 
