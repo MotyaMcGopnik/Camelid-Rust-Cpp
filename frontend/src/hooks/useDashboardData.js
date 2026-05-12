@@ -99,13 +99,13 @@ function estimateChatTokenCount(messages) {
   ), 0)
 }
 
-const CODE_FIRST_SYSTEM_PROMPT = 'begin immediately with complete runnable code. No intro. For HTML output ONE self-contained file. Never use external files or script src. Include inline <style> and inline <script> with working click/game logic before </body>. Start exactly with ```html then <!doctype html> and close the fence after </html>.'
+const CODE_FIRST_SYSTEM_PROMPT = 'begin immediately with complete runnable code. No intro. Output one self-contained file unless the user asks otherwise. For Python, start exactly with ```python, include imports, and close the fence after the complete script. For Python games, prefer tkinter from the standard library over pygame, keep it compact, and include a complete runnable event loop. For HTML output ONE self-contained file. Never use external files or script src. Include inline <style> and inline <script> with working click/game logic before </body>. Start exactly with ```html then <!doctype html> and close the fence after </html>.'
 const LOCAL_CHAT_DEMO_MAX_TOKENS = 800
 
 function looksLikeCodePrompt(value) {
   const text = String(value || '').toLowerCase()
   return /\b(code|build|create|implement|write|make)\b/.test(text)
-    && /\b(html|html5|css|javascript|js|react|game|pacman|tetris|app|component|page|website)\b/.test(text)
+    && /\b(html|html5|css|javascript|js|python|py|pygame|game|pacman|pacmac|tetris|app|component|page|website)\b/.test(text)
 }
 
 function applyLocalChatPolicy(messages) {
