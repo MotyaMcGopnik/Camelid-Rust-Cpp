@@ -511,6 +511,15 @@ function singleRowContextSchema(schema) {
       promptId: 'roughly-2048-token-recall',
       generatedText: 'CMLD-204',
     },
+    'camelid.llama32_1b_context_8192_current_head_public_evidence.v1': {
+      rowId: 'llama32_1b_instruct_q8_0',
+      contextWindow: 8192,
+      maxTokens: 5,
+      minPromptTokens: 4097,
+      sourcePromptPack: 'qa/prompt-packs/llama3-context-8192-smoke.json',
+      promptId: 'roughly-8192-token-recall',
+      generatedText: 'CMLD-819',
+    },
     'camelid.llama3_8b_context_1024_public_evidence.v1': {
       rowId: 'llama3_8b_instruct_q8_0',
       contextWindow: 1024,

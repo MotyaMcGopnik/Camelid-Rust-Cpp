@@ -83,6 +83,8 @@ pub struct LoadedModel {
     pub llama_tensors: Option<LlamaTensorBinding>,
     pub unsupported_runtime: Option<UnsupportedRuntimeSummary>,
     pub tokenizer: TokenizerLoadState,
+    #[serde(skip)]
+    pub tokenizer_runtime: Option<Arc<Tokenizer>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -217,6 +219,9 @@ pub struct ModelCompatibilityTarget {
     pub bounded_context_4096_pack: &'static str,
     pub bounded_context_4096_pack_id: &'static str,
     pub bounded_context_4096_window: u32,
+    pub bounded_context_8192_pack: &'static str,
+    pub bounded_context_8192_pack_id: &'static str,
+    pub bounded_context_8192_window: u32,
     pub latest_checked_bucket: &'static str,
     pub latest_checked_result: &'static str,
     pub latest_checked_output: &'static str,
@@ -607,7 +612,7 @@ struct PreparedGeneration {
     model_path: PathBuf,
     token_ids: Vec<u32>,
     max_tokens: u32,
-    tokenizer: Tokenizer,
+    tokenizer: Arc<Tokenizer>,
     session: LlamaInferenceSession,
     sampling: SamplingConfig,
     stop_sequences: Vec<String>,
@@ -734,7 +739,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096 packs, while Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
+            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096/8192 packs, while Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -757,7 +762,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "Q8_0",
                 status: "supported_current_gate",
-                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B Instruct Q8_0 now has checked bounded 512/1024/2048/4096-context packs, while the exact Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 rows have checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger-context beyond the checked packs, arbitrary-template, production-throughput, portability, neighboring-row, or broad-family support is implied.",
+                notes: "TinyLlama remains the current support gate; exact Llama 3.2 1B Instruct Q8_0 now has checked bounded 512/1024/2048/4096/8192-context packs, while the exact Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 rows have checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. These are exact bounded-pack lanes only; no model-native/larger-context beyond the checked packs, arbitrary-template, production-throughput, portability, neighboring-row, or broad-family support is implied.",
             },
         ],
         planned_quantization: vec![
@@ -781,7 +786,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "llama_bpe_decoder_exact_1b_3b_8b_q8_0",
                 status: "supported_exact_row_smoke_lanes",
-                notes: "exact Llama 3.2 1B Instruct Q8_0 has row-specific smoke support with checked bounded 512/1024/2048/4096-context packs; exact Llama 3.2 3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs, including the published source/runtime-head 8B 1024/2048 PASS bundle at 8e26be0a73c0. Broader 50-token, compact chat-template-shapes, and retained-block lazy-Q8 hot-path evidence remain exact-row bounded pack/measurement evidence only, and broad/full support still needs separate proof.",
+                notes: "exact Llama 3.2 1B Instruct Q8_0 has row-specific smoke support with checked bounded 512/1024/2048/4096/8192-context packs; exact Llama 3.2 3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs, including the published source/runtime-head 8B 1024/2048 PASS bundle at 8e26be0a73c0. Broader 50-token, compact chat-template-shapes, and retained-block lazy-Q8 hot-path evidence remain exact-row bounded pack/measurement evidence only, and broad/full support still needs separate proof.",
             },
         ],
         planned_model_families: vec![
@@ -849,6 +854,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_promoted",
                 bounded_context_4096_pack_id: "not_selected",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "direct_chat_smoke",
                 latest_checked_result: "pass",
                 latest_checked_output: "Certainly! Here",
@@ -871,7 +879,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 performance_measured: "bounded_unique_chat_perf_rss_validated",
                 frontend_load_path_verified: "validated",
                 frontend_readiness_gate: "green only when this exact GGUF row plus Q8_0 quant match /api/capabilities and the runtime reports loaded_now=true, generation_ready=true, and matching active_model_id",
-                tested_context: "short_api_webui_smoke_plus_first_512_second_1024_third_2048_and_fourth_4096_context_packs",
+                tested_context: "short_api_webui_smoke_plus_first_512_second_1024_third_2048_fourth_4096_and_fifth_8192_context_packs",
                 chat_template_renderer: "compact",
                 chat_template_shape_pack: "validated_bounded_pack",
                 chat_template_shape_pack_id: "llama3-chat-template-shapes-v1",
@@ -887,11 +895,14 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "validated_fourth_pack",
                 bounded_context_4096_pack_id: "llama3-context-4096-smoke-v1",
                 bounded_context_4096_window: 4096,
-                latest_checked_bucket: "llama3-context-4096-smoke-v1",
+                bounded_context_8192_pack: "validated_fifth_pack",
+                bounded_context_8192_pack_id: "llama3-context-8192-smoke-v1",
+                bounded_context_8192_window: 8192,
+                latest_checked_bucket: "llama3-context-8192-smoke-v1",
                 latest_checked_result: "pass",
-                latest_checked_output: "CMLD-409",
-                evidence: "the exact bartowski Llama-3.2-1B-Instruct-Q8_0 GGUF has exact-row load, completion, chat-completion, frontend-smoke evidence, compact/prompt-pack parity, first bounded 512-context parity, second bounded 1024-context parity, third bounded 2048-context parity after the RoPE frequency-factor fix, fourth bounded 4096-context parity on current head 470388f8165b9fdc34226aeef5a781d2c18d56c8, bounded compact template-shape coverage, and bounded unique-chat perf/RSS evidence; Camelid supports exact-row smoke and the checked 512/1024/2048/4096 context packs for this row only, not model-native/larger context beyond checked packs or broader/full support",
-                next_step: "preserve exact-row smoke plus checked 512/1024/2048/4096 context support while normalizing model-native/larger context beyond checked packs, arbitrary/Jinja template behavior, production throughput, portability, and durable full-support bundle evidence before any broader/full-support claim",
+                latest_checked_output: "CMLD-819",
+                evidence: "the exact bartowski Llama-3.2-1B-Instruct-Q8_0 GGUF has exact-row load, completion, chat-completion, frontend-smoke evidence, compact/prompt-pack parity, first bounded 512-context parity, second bounded 1024-context parity, third bounded 2048-context parity after the RoPE frequency-factor fix, fourth bounded 4096-context parity, and fifth bounded 8192-context parity on current head aaf9207d166999a21f4fde2a3f2ac5631f2fcecb, bounded compact template-shape coverage, and bounded unique-chat perf/RSS evidence; Camelid supports exact-row smoke and the checked 512/1024/2048/4096/8192 context packs for this row only, not model-native/larger context beyond checked packs or broader/full support",
+                next_step: "preserve exact-row smoke plus checked 512/1024/2048/4096/8192 context support while normalizing model-native/larger context beyond checked packs, arbitrary/Jinja template behavior, production throughput, portability, and durable full-support bundle evidence before any broader/full-support claim",
             },
             ModelCompatibilityTarget {
                 id: "llama32_3b_instruct_q8_0",
@@ -925,6 +936,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_promoted",
                 bounded_context_4096_pack_id: "not_selected",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "llama3-context-2048-smoke-v1",
                 latest_checked_result: "pass",
                 latest_checked_output: "CMLD-204",
@@ -963,6 +977,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_promoted",
                 bounded_context_4096_pack_id: "not_selected",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "llama3-context-2048-smoke-v1",
                 latest_checked_result: "pass",
                 latest_checked_output: "CMLD-204",
@@ -1001,6 +1018,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_promoted",
                 bounded_context_4096_pack_id: "not_selected",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "not_selected",
                 latest_checked_result: "not_started",
                 latest_checked_output: "not_applicable",
@@ -1039,6 +1059,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_promoted",
                 bounded_context_4096_pack_id: "not_selected",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "not_selected",
                 latest_checked_result: "not_started",
                 latest_checked_output: "not_applicable",
@@ -1077,6 +1100,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "validated_bounded_pack_not_promoted",
                 bounded_context_4096_pack_id: "mistral-context-4096-max-ladder-v1",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "broader_50tok_5prompt_ubuntu",
                 latest_checked_result: "prompt_generated_text_match_not_promoted",
                 latest_checked_output: "qa/evidence-bundles/mistral-7b-v0.3-q8-broader-50tok-ubuntu-20260509T000633Z-head-d330e97ae992/manifest.json",
@@ -1115,6 +1141,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_started",
                 bounded_context_4096_pack_id: "mixtral-context-4096-smoke-v1",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "mixtral_8x7b_q8_gate9a_50tok_divergence_20260511",
                 latest_checked_result: "blocked_later_generation_divergence",
                 latest_checked_output: "qa/evidence-bundles/mixtral-8x7b-v0.1-q8-blocker-reconciliation-20260512/README.md",
@@ -1153,6 +1182,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_started",
                 bounded_context_4096_pack_id: "qwen25-context-4096-smoke-v1",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "candidate_selected",
                 latest_checked_result: "planning_only",
                 latest_checked_output: "not_applicable",
@@ -1191,6 +1223,9 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "not_started",
                 bounded_context_4096_pack_id: "gemma2-context-4096-smoke-v1",
                 bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
                 latest_checked_bucket: "candidate_selected",
                 latest_checked_result: "planning_only",
                 latest_checked_output: "not_applicable",
@@ -1254,7 +1289,9 @@ async fn load_model(State(state): State<AppState>, Json(req): Json<LoadModelRequ
             let llama_tensors = llama_config
                 .as_ref()
                 .and_then(|config| LlamaTensorBinding::bind(&gguf, config).ok());
-            let tokenizer = tokenizer_state(&gguf);
+            let tokenizer_result = Tokenizer::from_gguf(&gguf);
+            let tokenizer = tokenizer_state_from_result(tokenizer_result.as_ref());
+            let tokenizer_runtime = tokenizer_result.ok().map(Arc::new);
             let loaded = LoadedModel {
                 id,
                 path: req.path,
@@ -1263,6 +1300,7 @@ async fn load_model(State(state): State<AppState>, Json(req): Json<LoadModelRequ
                 llama_tensors,
                 unsupported_runtime,
                 tokenizer,
+                tokenizer_runtime,
             };
             let body = loaded.clone();
             *state.loaded_model.write().await = Some(loaded);
@@ -1960,14 +1998,17 @@ async fn prepare_generation(
 
     let mut timings = GenerationTimings::default();
     let tokenization_started = Instant::now();
-    let tokenizer = Tokenizer::from_gguf(&model.gguf).map_err(|err| {
-        api_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            tokenizer_error_code(&err),
-            err.to_string(),
-            None,
-        )
-    })?;
+    let tokenizer = match model.tokenizer_runtime.clone() {
+        Some(tokenizer) => tokenizer,
+        None => Arc::new(Tokenizer::from_gguf(&model.gguf).map_err(|err| {
+            api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                tokenizer_error_code(&err),
+                err.to_string(),
+                None,
+            )
+        })?),
+    };
     let token_ids = match input {
         PromptInput::Text(prompt) => {
             let rendered_prompt = RenderedPrompt {
@@ -3676,43 +3717,49 @@ fn api_error(
         .into_response()
 }
 
-fn tokenizer_state(gguf: &GgufFile) -> TokenizerLoadState {
-    match Tokenizer::from_gguf(gguf) {
-        Ok(tokenizer) => TokenizerLoadState::Available(TokenizerSummary {
-            model: tokenizer.model.as_summary_model(),
-            token_count: tokenizer.tokens.len(),
-            byte_token_count: tokenizer.byte_token_to_id.len(),
-            special: SpecialTokenSummary {
-                bos: tokenizer.special.bos,
-                eos: tokenizer.special.eos,
-                eot: tokenizer.special.eot,
-                eom: tokenizer.special.eom,
-                unk: tokenizer.special.unk,
-                sep: tokenizer.special.sep,
-                pad: tokenizer.special.pad,
-                mask: tokenizer.special.mask,
-                eog: tokenizer.special.eog.into_iter().collect(),
-            },
-            config: TokenizerConfigSummary {
-                add_bos: tokenizer.config.add_bos,
-                add_eos: tokenizer.config.add_eos,
-                add_sep: tokenizer.config.add_sep,
-                add_space_prefix: tokenizer.config.add_space_prefix,
-                remove_extra_whitespaces: tokenizer.config.remove_extra_whitespaces,
-            },
-            chat_template: tokenizer
-                .chat_template
-                .as_deref()
-                .map(|template| ChatTemplateSummary {
-                    source: "tokenizer.chat_template",
-                    detected_format: detect_chat_template_format(template),
-                    length: template.len(),
-                }),
-        }),
+fn tokenizer_state_from_result(
+    tokenizer: std::result::Result<&Tokenizer, &BackendError>,
+) -> TokenizerLoadState {
+    match tokenizer {
+        Ok(tokenizer) => TokenizerLoadState::Available(tokenizer_summary(tokenizer)),
         Err(err) => TokenizerLoadState::Unavailable {
-            code: tokenizer_error_code(&err),
+            code: tokenizer_error_code(err),
             message: err.to_string(),
         },
+    }
+}
+
+fn tokenizer_summary(tokenizer: &Tokenizer) -> TokenizerSummary {
+    TokenizerSummary {
+        model: tokenizer.model.as_summary_model(),
+        token_count: tokenizer.tokens.len(),
+        byte_token_count: tokenizer.byte_token_to_id.len(),
+        special: SpecialTokenSummary {
+            bos: tokenizer.special.bos,
+            eos: tokenizer.special.eos,
+            eot: tokenizer.special.eot,
+            eom: tokenizer.special.eom,
+            unk: tokenizer.special.unk,
+            sep: tokenizer.special.sep,
+            pad: tokenizer.special.pad,
+            mask: tokenizer.special.mask,
+            eog: tokenizer.special.eog.iter().copied().collect(),
+        },
+        config: TokenizerConfigSummary {
+            add_bos: tokenizer.config.add_bos,
+            add_eos: tokenizer.config.add_eos,
+            add_sep: tokenizer.config.add_sep,
+            add_space_prefix: tokenizer.config.add_space_prefix,
+            remove_extra_whitespaces: tokenizer.config.remove_extra_whitespaces,
+        },
+        chat_template: tokenizer
+            .chat_template
+            .as_deref()
+            .map(|template| ChatTemplateSummary {
+                source: "tokenizer.chat_template",
+                detected_format: detect_chat_template_format(template),
+                length: template.len(),
+            }),
     }
 }
 
@@ -3808,11 +3855,15 @@ mod tests {
             "llama3-context-4096-smoke-v1"
         );
         assert_eq!(one_b.bounded_context_4096_window, 4096);
-        assert_eq!(one_b.latest_checked_bucket, "llama3-context-4096-smoke-v1");
-        assert_eq!(one_b.latest_checked_output, "CMLD-409");
-        assert!(one_b
-            .evidence
-            .contains("fourth bounded 4096-context parity"));
+        assert_eq!(one_b.bounded_context_8192_pack, "validated_fifth_pack");
+        assert_eq!(
+            one_b.bounded_context_8192_pack_id,
+            "llama3-context-8192-smoke-v1"
+        );
+        assert_eq!(one_b.bounded_context_8192_window, 8192);
+        assert_eq!(one_b.latest_checked_bucket, "llama3-context-8192-smoke-v1");
+        assert_eq!(one_b.latest_checked_output, "CMLD-819");
+        assert!(one_b.evidence.contains("fifth bounded 8192-context parity"));
 
         let three_b = response
             .model_compatibility
@@ -3868,10 +3919,9 @@ mod tests {
     #[test]
     fn capabilities_report_exact_8b_1024_2048_after_current_head_alignment() {
         let response = capabilities_response();
-        assert!(response
-            .support_contract
-            .current_gate
-            .contains("Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096 packs"));
+        assert!(response.support_contract.current_gate.contains(
+            "Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096/8192 packs"
+        ));
         assert!(response.support_contract.current_gate.contains(
             "Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs"
         ));
@@ -3890,7 +3940,7 @@ mod tests {
             .find(|item| item.id == "Q8_0")
             .expect("Q8_0 row should stay advertised");
         assert!(q8.notes.contains(
-            "exact Llama 3.2 1B Instruct Q8_0 now has checked bounded 512/1024/2048/4096-context packs"
+            "exact Llama 3.2 1B Instruct Q8_0 now has checked bounded 512/1024/2048/4096/8192-context packs"
         ));
         assert!(q8.notes.contains(
             "the exact Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 rows have checked bounded 512/1024/2048-context packs"
@@ -3904,7 +3954,7 @@ mod tests {
             .find(|item| item.id == "llama_bpe_decoder_exact_1b_3b_8b_q8_0")
             .expect("Llama BPE exact-row family should stay advertised");
         assert!(llama_bpe.notes.contains(
-            "exact Llama 3.2 1B Instruct Q8_0 has row-specific smoke support with checked bounded 512/1024/2048/4096-context packs"
+            "exact Llama 3.2 1B Instruct Q8_0 has row-specific smoke support with checked bounded 512/1024/2048/4096/8192-context packs"
         ));
         assert!(llama_bpe.notes.contains(
             "exact Llama 3.2 3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs"
@@ -4821,7 +4871,7 @@ mod tests {
             model_path: PathBuf::from(model_path),
             token_ids,
             max_tokens: 1,
-            tokenizer: test_tokenizer(),
+            tokenizer: Arc::new(test_tokenizer()),
             session,
             sampling: SamplingConfig::default(),
             stop_sequences: Vec::new(),
