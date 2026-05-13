@@ -179,14 +179,20 @@ fn hf_config_ready(config_path: &Path, blockers: &mut Vec<ModelSourceBlocker>) -
     let Ok(bytes) = fs::read(config_path) else {
         blockers.push(blocker(
             "config_json_unreadable",
-            format!("could not read {}", config_path.display()),
+            format!(
+                "could not read required Hugging Face config file {}",
+                public_path_label(config_path)
+            ),
         ));
         return false;
     };
     let Ok(config) = serde_json::from_slice::<HfConfigProbe>(&bytes) else {
         blockers.push(blocker(
             "invalid_config_json",
-            format!("{} is not valid JSON", config_path.display()),
+            format!(
+                "required Hugging Face config file {} is not valid JSON",
+                public_path_label(config_path)
+            ),
         ));
         return false;
     };
@@ -265,7 +271,10 @@ fn hf_weights_ready(
         let Ok(index) = serde_json::from_slice::<Value>(&bytes) else {
             blockers.push(blocker(
                 "invalid_shard_index_json",
-                format!("{} is not valid JSON", shard_index_path.display()),
+                format!(
+                    "SafeTensors shard index file {} is not valid JSON",
+                    public_path_label(shard_index_path)
+                ),
             ));
             return Ok(false);
         };
@@ -403,6 +412,13 @@ fn source_id(path: &Path) -> String {
         .to_string()
 }
 
+fn public_path_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("model source file")
+        .to_string()
+}
+
 fn blocker(code: &'static str, message: impl Into<String>) -> ModelSourceBlocker {
     ModelSourceBlocker {
         code,
@@ -498,6 +514,13 @@ mod tests {
             &inspection,
             &["invalid_shard_index_json", "generation_disabled"],
         );
+        assert_public_blocker_message_without_local_path(
+            &inspection.readiness.blockers[0].message,
+            dir.path(),
+        );
+        assert!(inspection.readiness.blockers[0]
+            .message
+            .contains("model.safetensors.index.json"));
     }
 
     #[test]
@@ -541,6 +564,28 @@ mod tests {
         assert!(inspection.readiness.blockers[0]
             .message
             .contains("model-00003-of-00003.safetensors"));
+    }
+
+    #[test]
+    fn invalid_config_json_has_sanitized_precise_blocker() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.json"), "not json").unwrap();
+        fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
+        fs::write(dir.path().join("model.safetensors"), b"").unwrap();
+
+        let inspection = inspect_model_source(dir.path()).unwrap();
+
+        assert!(!inspection.readiness.metadata_ready);
+        assert!(inspection.readiness.tokenizer_ready);
+        assert!(inspection.readiness.weights_ready);
+        assert_blocker_codes(&inspection, &["invalid_config_json", "generation_disabled"]);
+        assert_public_blocker_message_without_local_path(
+            &inspection.readiness.blockers[0].message,
+            dir.path(),
+        );
+        assert!(inspection.readiness.blockers[0]
+            .message
+            .contains("config.json"));
     }
 
     #[test]
@@ -659,5 +704,17 @@ mod tests {
             .map(|blocker| blocker.code)
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    fn assert_public_blocker_message_without_local_path(message: &str, root: &Path) {
+        let root = root.display().to_string();
+        assert!(
+            !message.contains(&root),
+            "blocker message leaked local path {root:?}: {message}"
+        );
+        assert!(
+            !message.contains("/var/") && !message.contains("/private/"),
+            "blocker message leaked a private temp path: {message}"
+        );
     }
 }
