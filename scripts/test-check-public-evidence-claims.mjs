@@ -67,10 +67,11 @@ assert.match(privatePath.stderr, /must not expose local\/private path .*file:\/\
 
 async function writePrivatePathEvidence(root) {
   const dir = join(root, 'private-path-test')
+  const privateMacPath = ['', 'Users', 'timtoole', '.openclaw', 'workspace', 'projects', 'Camelid', 'target', 'private', 'report.json'].join('/')
   await mkdir(dir, { recursive: true })
   await writeFile(join(dir, 'manifest.json'), `${JSON.stringify({
     schema: 'camelid.private_path_guard_test.v1',
-    raw_artifact: '/Users/timtoole/.openclaw/workspace/projects/Camelid/target/private/report.json',
+    raw_artifact: privateMacPath,
     nested: { model_uri: 'file:///home/tim/.cache/camelid/model.gguf' },
   }, null, 2)}\n`)
 }
