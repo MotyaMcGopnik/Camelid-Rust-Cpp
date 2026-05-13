@@ -1,6 +1,6 @@
 # Camelid Status
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 `STATUS.md` is Camelid's current release-evidence checkpoint. It records what Camelid can prove today, what moved recently, and what still blocks the next support change. Treat it as a briefing memo, not a diary. Detailed historical run logs, older validation slices, and superseded tactical notes now live in [`STATUS_ARCHIVE_2026-04.md`](STATUS_ARCHIVE_2026-04.md).
 
@@ -103,6 +103,7 @@ Bottom line for reviewers: Camelid has the original TinyLlama verified support g
 - `qa/evidence-bundles/llama3-8b-lazy-q8-hotpath-helper-validated-20260505T0350Z-head-e22307f2f90b/manifest.json` validates the reusable hot-path bundle helper on clean public `main` at `e22307f2f90b` and repeats the exact-row retained-block measurements (`35.78 ms`, `35.73 ms`, `320.24 ms` for the checked tensors). This is helper/measurement evidence only.
 - `qa/validation-notes/2026-05-12-frontend-streaming-perf.md` records the Mac frontend streaming-performance quick wins: stable dashboard polling during token updates, animation-frame batching for live assistant patches, reported green frontend build/smokes, and the remaining frontend/perf lanes (`ChatWorkspace` render frequency, non-chat rerenders, and true TTFT/decode measurements on a local Mac lane). This is UI responsiveness coordination only, not model/runtime support evidence.
 - `qa/validation-notes/2026-05-13-frontend-exact-row-streaming-guards.md` records the current-head frontend integration-smoke boundary for streaming rows, pre-token loaders, completed unclosed code cards, and exact-row API readiness gating. It is frontend/UI reliability evidence only; broad family/quant lists and planned rows remain informational and do not unlock support.
+- `qa/validation-notes/2026-05-13-backend-local-exact-row-guardrail.md` records a local-only backend/API support-surface guardrail at head `b4d2d3a`: capability-contract tests, public evidence-claim checks, public scrub, and `git diff --check` passed without SSH or any validation-host assumption. This is guardrail evidence only; it does not promote Mixtral, broaden Llama support, or replace row-specific runtime/API/WebUI/RSS evidence.
 - `qa/evidence-bundles/llama3-3b-q8-mac-streaming-20260512T0713Z/manifest.json` plus `SHA256SUMS` records exact Llama 3.2 3B Q8_0 local Mac streaming-responsiveness evidence: the pre-patch smoke saw about `253.5 s` to first content, while the patched path emitted a role-only SSE chunk in about `91.8 ms` and kept `/health` responsive during generation. This is perceived-streaming/API-responsiveness evidence only; it does not change the first-content latency finding or widen support.
 - Raw `target/` paths below are drill-down artifacts only; they are not the sole public evidence anchor.
 

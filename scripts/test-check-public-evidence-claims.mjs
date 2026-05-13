@@ -18,6 +18,7 @@ await writeEightBContext1024And2048Bundle(goodRoot, { mutate: false })
 await writeMistralContext51210242048Bundle(goodRoot, { mutate: false })
 await writeLegacyPublicContextBundle(goodRoot, { mutate: false })
 await writeMixtralPromotionAndBlockerEvidence(goodRoot, { reconciled: true })
+await writeBackendLocalGuardrailBundle(goodRoot, { mutate: false })
 await writeBundle(badRoot, { mutate: true })
 await writeSingleRowContextBundle(badRoot, { mutate: true })
 await writeEightBContextBundle(badRoot, { mutate: true })
@@ -25,6 +26,7 @@ await writeEightBContext1024And2048Bundle(badRoot, { mutate: true })
 await writeMistralContext51210242048Bundle(badRoot, { mutate: true })
 await writeLegacyPublicContextBundle(badRoot, { mutate: true })
 await writeMixtralPromotionAndBlockerEvidence(badRoot, { reconciled: false })
+await writeBackendLocalGuardrailBundle(badRoot, { mutate: true })
 await writeMixtralPromotionAndBlockerEvidence(staleMixtralRoot, { reconciled: true, omitDependencySupersedes: true })
 await writePrivatePathEvidence(privatePathRoot)
 
@@ -49,6 +51,9 @@ assert.match(bad.stderr, /row_id must be mistral_7b_instruct_v0_3_q8_0/)
 assert.match(bad.stderr, /raw_artifact must be a safe relative path/)
 assert.match(bad.stderr, /backend_generated_tokens must stay \[34,2735,35,12,7854\]/)
 assert.match(bad.stderr, /Mixtral promotion claims conflict with later long-output blocker evidence/)
+assert.match(bad.stderr, /backend local guardrail no_remote_validation_used must be true/)
+assert.match(bad.stderr, /backend local guardrail command public-scrub must exit 0/)
+assert.match(bad.stderr, /backend local guardrail support_boundary must preserve Mixtral blocked/)
 
 const staleMixtral = spawnSync(process.execPath, ['scripts/check-public-evidence-claims.mjs', '--root', staleMixtralRoot], {
   cwd: process.cwd(),
@@ -74,6 +79,29 @@ async function writePrivatePathEvidence(root) {
     raw_artifact: privateMacPath,
     nested: { model_uri: 'file:///home/tim/.cache/camelid/model.gguf' },
   }, null, 2)}\n`)
+}
+
+async function writeBackendLocalGuardrailBundle(root, { mutate }) {
+  const dir = join(root, 'backend-local-current-head-exact-row-guardrail-test')
+  await mkdir(dir, { recursive: true })
+  const manifest = {
+    schema: 'camelid.backend_local_current_head_exact_row_guardrail.v1',
+    local_only: true,
+    no_remote_validation_used: !mutate,
+    head: 'b4d2d3a54fc773d2e2be65ccc2617501ef835e1a',
+    head_short: 'b4d2d3a54fc7',
+    passed: true,
+    commands: {
+      'cargo-test-capabilities': 0,
+      'public-evidence-claims': 0,
+      'public-scrub': mutate ? 1 : 0,
+      'git-diff-check': 0,
+    },
+    support_boundary: mutate
+      ? 'support promoted broadly'
+      : 'Mixtral remains bounded/partial and blocked after early-token parity; Llama rows remain exact-row bounded only where row-specific evidence exists; no broad/full-support promotion claimed.',
+  }
+  await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
 async function writeMixtralPromotionAndBlockerEvidence(root, { reconciled, omitDependencySupersedes = false }) {

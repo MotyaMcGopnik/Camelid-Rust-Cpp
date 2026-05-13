@@ -60,6 +60,10 @@ async function validateBundle(manifestPath) {
     validateMistral7bContext51210242048(bundleRel, manifest)
   }
 
+  if (schema === 'camelid.backend_local_current_head_exact_row_guardrail.v1') {
+    validateBackendLocalCurrentHeadExactRowGuardrail(bundleRel, manifest)
+  }
+
   const singleRowContext = singleRowContextSchema(schema)
   if (singleRowContext) validateSingleRowContextBundle(bundleRel, manifest, singleRowContext)
 
@@ -160,6 +164,45 @@ function validateMixtralReconciliationManifest(bundleRel, manifest, promotionCla
   for (const path of blockerPaths) {
     const bundlePath = evidenceBundlePath(path)
     if (!blockers.has(bundlePath)) fail(bundleRel, `Mixtral blocker reconciliation blocker_evidence must include ${bundlePath}`)
+  }
+}
+
+function validateBackendLocalCurrentHeadExactRowGuardrail(bundleRel, manifest) {
+  if (manifest.local_only !== true) fail(bundleRel, 'backend local guardrail local_only must be true')
+  const noRemoteValidationUsed = manifest.no_remote_validation_used === true || (manifest.remote_ssh_attempted === false && manifest.remote_validation_host_assumed_available === false)
+  if (!noRemoteValidationUsed) fail(bundleRel, 'backend local guardrail no_remote_validation_used must be true')
+  if (manifest.passed !== true && manifest.exit_code !== 0) fail(bundleRel, 'backend local guardrail passed must be true')
+  const head = String(manifest.head || manifest.git?.head || '')
+  if (!/^[0-9a-f]{40}$/.test(head)) {
+    fail(bundleRel, 'backend local guardrail head must be a full 40-character git sha')
+  }
+  const headShort = String(manifest.head_short || manifest.git?.head_short || '')
+  if (!/^[0-9a-f]{7,12}$/.test(headShort)) {
+    fail(bundleRel, 'backend local guardrail head_short must be a 7-12 character git sha prefix')
+  } else if (head && !head.startsWith(headShort)) {
+    fail(bundleRel, 'backend local guardrail head_short must prefix head')
+  }
+  const requiredCommands = ['cargo-test-capabilities', 'public-evidence-claims', 'public-scrub', 'git-diff-check']
+  if (Array.isArray(manifest.commands)) {
+    const commandNames = new Set(manifest.commands.map((command) => String(command?.name || '').replaceAll('_', '-')))
+    const legacyCommandNames = new Map([
+      ['cargo-test-capabilities', 'cargo-capabilities-all-targets'],
+      ['public-evidence-claims', 'public-evidence-claims'],
+      ['public-scrub', 'public-scrub'],
+      ['git-diff-check', 'git-diff-check'],
+    ])
+    for (const command of requiredCommands) {
+      if (!commandNames.has(legacyCommandNames.get(command))) fail(bundleRel, `backend local guardrail command ${command} must be recorded`)
+    }
+  } else {
+    const commands = manifest.commands && typeof manifest.commands === 'object' ? manifest.commands : null
+    for (const command of requiredCommands) {
+      if (commands?.[command] !== 0) fail(bundleRel, `backend local guardrail command ${command} must exit 0`)
+    }
+  }
+  const boundary = typeof manifest.support_boundary === 'string' ? manifest.support_boundary : JSON.stringify(manifest.support_boundary || {})
+  if (!/Mixtral/i.test(boundary) || !/unsupported|blocked|blocker/i.test(boundary) || !/Llama/i.test(boundary) || !/exact-row bounded/i.test(boundary) || !/no broad/i.test(boundary)) {
+    fail(bundleRel, 'backend local guardrail support_boundary must preserve Mixtral blocked, Llama exact-row bounded, and no broad/full-support promotion truth')
   }
 }
 
