@@ -230,8 +230,8 @@ For **Llama 3 8B Instruct Q8_0** specifically, the durable citation anchors are 
 
 | Feature | Status | Evidence / next action |
 | --- | --- | --- |
-| `/v1/chat/completions` | Supported current gate; exact-row smoke for named Llama Instruct Q8_0 rows | Non-streaming local generation is supported for loaded supported GGUF rows. Exact Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 rows are supported for exact-row smoke only; broader/full-support normalization is still pending. |
-| SSE streaming | Supported current gate | OpenAI-compatible token stream path exists for supported dense models. |
+| `/v1/chat/completions` | Supported current gate; exact-row smoke for named Llama Instruct Q8_0 rows | Non-streaming local generation is supported only for loaded exact supported GGUF rows. Exact Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 rows are supported for exact-row smoke only; broader/full-support normalization is still pending. |
+| SSE streaming | Supported current gate; exact-row smoke for named Llama Instruct Q8_0 rows | OpenAI-compatible token streaming exists only for loaded exact supported dense GGUF rows; streaming transport evidence does not widen model, quant, context, production-throughput, portability, or broad-family support. |
 | `/v1/models`, `/api/models/load`, `/api/models/current` | Supported current gate; exact-row smoke for named Llama Instruct Q8_0 rows | Local GGUF load/list/readiness path used by the frontend; the named Llama Instruct Q8_0 rows are smoke-supported only and still need normalized current-head reruns before any broader/full-support language. |
 | `/api/capabilities` | Supported contract surface | Exposes explicit support contract, supported/planned quants, model families, and API features; row statuses must distinguish TinyLlama current-gate support from Llama exact-row smoke support. |
 | Multi-choice generation | Unsupported | Keep typed unsupported until implemented/tested. |

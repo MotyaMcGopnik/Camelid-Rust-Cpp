@@ -1200,12 +1200,12 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "openai_chat_completions",
                 status: "supported_current_gate",
-                notes: "non-streaming and SSE streaming for loaded supported dense GGUF models",
+                notes: "non-streaming and SSE streaming only for loaded exact supported dense GGUF rows",
             },
             SupportItem {
                 id: "tokenizer_encode_decode",
                 status: "supported_current_gate",
-                notes: "loaded-model tokenizer APIs for supported tokenizer families",
+                notes: "loaded-model tokenizer APIs for exact rows covered by the current support contract; unsupported tokenizers fail typed",
             },
             SupportItem {
                 id: "multi_choice_generation",
@@ -1220,7 +1220,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         ],
         notes: vec![
             "GGUF metadata, tokenizer metadata, tensor loading, Camelid dense config extraction, and tensor binding are available",
-            "public completion endpoints can generate small OpenAI-compatible non-streaming responses and SSE token streams from a loaded Camelid-supported dense GGUF model",
+            "public completion endpoints can generate small OpenAI-compatible non-streaming responses and SSE token streams only from loaded exact Camelid-supported dense GGUF rows",
             "capability fields are intentionally explicit so the frontend and providers do not infer unsupported model families or quantization formats",
         ],
     }
@@ -4038,6 +4038,30 @@ mod tests {
         assert!(response.support_contract.current_gate.contains(
             "no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied"
         ));
+    }
+
+    #[test]
+    fn capabilities_api_features_stay_exact_row_scoped() {
+        let response = capabilities_response();
+        let chat = response
+            .api_features
+            .iter()
+            .find(|feature| feature.id == "openai_chat_completions")
+            .expect("chat completions capability should stay advertised");
+        assert!(
+            chat.notes.contains("exact supported dense GGUF rows"),
+            "chat capability must stay exact-row scoped: {}",
+            chat.notes
+        );
+        assert!(
+            !chat.notes.contains("supported dense GGUF models"),
+            "chat capability must not imply broad dense model support: {}",
+            chat.notes
+        );
+        assert!(response
+            .notes
+            .iter()
+            .any(|note| note.contains("only from loaded exact Camelid-supported dense GGUF rows")));
     }
 
     #[test]
