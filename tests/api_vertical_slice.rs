@@ -82,7 +82,9 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert!(llama_bpe_notes.contains(
         "exact Llama 3.2 1B/3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs"
     ));
-    assert!(llama_bpe_notes.contains("8B 1024/2048 current-head bundle"));
+    assert!(llama_bpe_notes
+        .contains("published source/runtime-head 8B 1024/2048 PASS bundle at 8e26be0a73c0"));
+    assert!(!llama_bpe_notes.contains("8B 1024/2048 current-head bundle"));
     assert!(!llama_bpe_notes.contains("8B 1024/2048 remain red"));
     assert!(llama_bpe_notes.contains("Broader 50-token"));
     assert!(!llama_bpe_notes.contains("conditional"));

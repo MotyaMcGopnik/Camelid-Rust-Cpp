@@ -809,7 +809,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "llama_bpe_decoder_exact_1b_3b_8b_q8_0",
                 status: "supported_exact_row_smoke_lanes",
-                notes: "exact Llama 3.2 1B/3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. Broader 50-token, compact chat-template-shapes, retained-block lazy-Q8 hot-path evidence, and the 8B 1024/2048 current-head bundle remain exact-row bounded pack/measurement evidence only, and broad/full support still needs separate proof.",
+                notes: "exact Llama 3.2 1B/3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs where row-specific PASS artifacts exist. Broader 50-token, compact chat-template-shapes, retained-block lazy-Q8 hot-path evidence, and the published source/runtime-head 8B 1024/2048 PASS bundle at 8e26be0a73c0 remain exact-row bounded pack/measurement evidence only, and broad/full support still needs separate proof.",
             },
         ],
         planned_model_families: vec![
@@ -3895,7 +3895,10 @@ mod tests {
         assert!(llama_bpe.notes.contains(
             "exact Llama 3.2 1B/3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs"
         ));
-        assert!(llama_bpe.notes.contains("8B 1024/2048 current-head bundle"));
+        assert!(llama_bpe
+            .notes
+            .contains("published source/runtime-head 8B 1024/2048 PASS bundle at 8e26be0a73c0"));
+        assert!(!llama_bpe.notes.contains("8B 1024/2048 current-head bundle"));
         assert!(!llama_bpe.notes.contains("8B 1024/2048 remain red"));
 
         let eight_b = response
