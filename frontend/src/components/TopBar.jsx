@@ -24,7 +24,7 @@ const navItems = [
   { id: 'system', label: 'System' },
 ]
 
-function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUpdatedAt, selectedConversationPreview, runtime, capabilities, selectedModelId, setSelectedModelId, models }) {
+function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUpdatedAt, selectedConversationPreview, runtime, capabilities, selectedModelId, setSelectedModelId, models, demoMode = false }) {
   const rawConversationTitle = selectedConversationTitle?.trim()
   const hasCustomConversationTitle = Boolean(rawConversationTitle && rawConversationTitle.toLowerCase() !== 'new conversation')
   const activeModel = models.find((model) => model.id === runtime?.active_model_id)
@@ -51,7 +51,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
 
   if (tab === 'chat') {
     return (
-      <header className="topbar topbar-chat">
+      <header className={`topbar topbar-chat ${demoMode ? 'topbar-demo' : ''}`}>
         <div className="topbar-chat-row">
           <div className="topbar-chat-brand">Camelid</div>
           <div className="topbar-chat-center" title={hasCustomConversationTitle ? rawConversationTitle : untitledConversationLabel}>
@@ -59,38 +59,44 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
           </div>
           <div className="topbar-chat-actions" />
         </div>
-        <div className="mobile-nav" aria-label="Primary navigation">
-          {navItems.map((item) => (
-            <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
-              {item.label}
-            </button>
-          ))}
-        </div>
+        {!demoMode && (
+          <div className="mobile-nav" aria-label="Primary navigation">
+            {navItems.map((item) => (
+              <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
     )
   }
 
   return (
-    <header className="topbar topbar-page">
+    <header className={`topbar topbar-page ${demoMode ? 'topbar-demo' : ''}`}>
       <div className="topbar-page-row">
         <div className="topbar-chat-brand">Camelid</div>
         <div className="topbar-chat-center topbar-page-center" title={heading}>{heading}</div>
         <div className="topbar-chat-actions">
-          <label className="topbar-chat-picker" title={selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what new chats should use next.'}>
-            <select className="topbar-select topbar-select-chat" aria-label="Use for next chat" value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
-              {models.map((model) => {
-                const runnable = getChatGateState(capabilities, model, runtime).chatUnlocked
-                return (
-                  <option key={model.id} value={model.id} disabled={!runnable}>
-                    {model.name}
-                  </option>
-                )
-              })}
-            </select>
-          </label>
+          {demoMode ? (
+            <button type="button" className="ghost-button ghost-button-quiet" onClick={() => setTab('chat')}>Back to chat</button>
+          ) : (
+            <label className="topbar-chat-picker" title={selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what new chats should use next.'}>
+              <select className="topbar-select topbar-select-chat" aria-label="Use for next chat" value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
+                {models.map((model) => {
+                  const runnable = getChatGateState(capabilities, model, runtime).chatUnlocked
+                  return (
+                    <option key={model.id} value={model.id} disabled={!runnable}>
+                      {model.name}
+                    </option>
+                  )
+                })}
+              </select>
+            </label>
+          )}
         </div>
       </div>
-      {tab !== 'library' && (
+      {!demoMode && tab !== 'library' && (
         <div className="topbar-status-strip" aria-label="Model status">
           <div className={`status-pill topbar-status-pill ${runtimeChatReady ? 'ready' : runtime?.loaded_now ? 'warm' : ''}`} title={`${activeModelLabel} · ${runtimeGateDetail}`}>
             <span className="topbar-status-label">Runtime chat gate</span>
@@ -108,13 +114,15 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
           </button>
         </div>
       )}
-      <div className="mobile-nav" aria-label="Primary navigation">
-        {navItems.map((item) => (
-          <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
-            {item.label}
-          </button>
-        ))}
-      </div>
+      {!demoMode && (
+        <div className="mobile-nav" aria-label="Primary navigation">
+          {navItems.map((item) => (
+            <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
     </header>
   )
 }

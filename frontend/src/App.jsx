@@ -19,6 +19,7 @@ const SIDEBAR_MIN_WIDTH = 240
 const SIDEBAR_MAX_WIDTH = 420
 const SIDEBAR_DEFAULT_WIDTH = 284
 const SIDEBAR_COLLAPSED_WIDTH = 48
+const DEMO_UI = import.meta.env?.VITE_CAMELID_DEMO_UI === 'true'
 
 const clampSidebarWidth = (value) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value))
 
@@ -31,6 +32,7 @@ function App() {
     return Number.isFinite(saved) ? clampSidebarWidth(saved) : SIDEBAR_DEFAULT_WIDTH
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (DEMO_UI) return true
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('camelid.sidebarCollapsed') === 'true'
   })
@@ -211,28 +213,30 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${sidebarDragging ? 'sidebar-dragging' : ''}`} style={sidebarShellStyle}>
-      <AppSidebar
-        collapsed={sidebarCollapsed}
-        dragging={sidebarDragging}
-        onResizeStart={handleSidebarResizeStart}
-        onResizeKeyDown={handleSidebarResizeKeyDown}
-        onToggleCollapsed={handleSidebarToggle}
-        width={sidebarWidth}
-        newChatTitle={newChatTitle}
-        setNewChatTitle={setNewChatTitle}
-        createConversation={createConversation}
-        showNewChatLanding={showNewChatLanding}
-        search={search}
-        setSearch={setSearch}
-        tab={tab}
-        setTab={setTab}
-        filteredConversations={filteredConversations}
-        selectedConversationId={selectedConversation?.id || null}
-        setSelectedConversationId={setSelectedConversationId}
-        deleteConversation={requestDeleteConversation}
-        renameConversation={renameConversation}
-      />
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${sidebarDragging ? 'sidebar-dragging' : ''} ${DEMO_UI ? 'demo-ui' : ''}`} style={sidebarShellStyle}>
+      {!DEMO_UI && (
+        <AppSidebar
+          collapsed={sidebarCollapsed}
+          dragging={sidebarDragging}
+          onResizeStart={handleSidebarResizeStart}
+          onResizeKeyDown={handleSidebarResizeKeyDown}
+          onToggleCollapsed={handleSidebarToggle}
+          width={sidebarWidth}
+          newChatTitle={newChatTitle}
+          setNewChatTitle={setNewChatTitle}
+          createConversation={createConversation}
+          showNewChatLanding={showNewChatLanding}
+          search={search}
+          setSearch={setSearch}
+          tab={tab}
+          setTab={setTab}
+          filteredConversations={filteredConversations}
+          selectedConversationId={selectedConversation?.id || null}
+          setSelectedConversationId={setSelectedConversationId}
+          deleteConversation={requestDeleteConversation}
+          renameConversation={renameConversation}
+        />
+      )}
 
       <main className={`main-pane ${tab === 'chat' ? 'main-pane-chat' : ''}`}>
         <TopBar
@@ -246,6 +250,7 @@ function App() {
           selectedModelId={selectedModelId}
           setSelectedModelId={setSelectedModelId}
           models={models}
+          demoMode={DEMO_UI}
         />
 
         <GlobalNotice notice={notice} noticeTone={noticeTone} />
@@ -268,6 +273,7 @@ function App() {
             sending={sending}
             selectedModelRunnable={selectedModelRunnable}
             setTab={setTab}
+            demoMode={DEMO_UI}
           />
         )}
 

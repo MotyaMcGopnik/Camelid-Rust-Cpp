@@ -236,6 +236,19 @@
   padding-left: calc(clamp(24px, 4vw, 40px) + var(--sidebar-overlay-width, 48px));
 }
 
+.app-shell.demo-ui {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell.demo-ui .main-pane,
+.app-shell.demo-ui .main-pane-chat {
+  padding-left: clamp(24px, 4vw, 40px);
+}
+
+.topbar-demo {
+  gap: 0;
+}
+
 .topbar {
   width: 100%;
   display: grid;

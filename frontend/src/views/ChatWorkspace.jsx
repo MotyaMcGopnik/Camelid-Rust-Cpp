@@ -404,6 +404,7 @@ export default function ChatWorkspace({
   sending,
   selectedModelRunnable,
   setTab,
+  demoMode = false,
 }) {
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
   const chatBottomRef = useRef(null)
@@ -589,7 +590,7 @@ export default function ChatWorkspace({
 
   return (
     <section className={`chat-layout chat-layout-gemini view-stack ${isFreshThread ? 'chat-layout-empty' : ''}`}>
-      {selectedConversation && (
+      {!demoMode && selectedConversation && (
         <div className="mobile-conversation-bar" aria-label="Conversation navigation">
           <button className="ghost-button mobile-conversation-trigger" onClick={() => setTab('history')}>
             <span>Conversations</span>
@@ -611,18 +612,20 @@ export default function ChatWorkspace({
                 {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
               </div>
 
-              <div className={`chat-readiness-strip is-${readinessState}`} aria-label="Chat readiness and support boundary">
-                <div className="chat-readiness-card">
-                  <span>Runtime</span>
-                  <strong>{runtimeStatusLabel}</strong>
-                  <small>{runtimeStatusCopy}</small>
+              {!demoMode && (
+                <div className={`chat-readiness-strip is-${readinessState}`} aria-label="Chat readiness and support boundary">
+                  <div className="chat-readiness-card">
+                    <span>Runtime</span>
+                    <strong>{runtimeStatusLabel}</strong>
+                    <small>{runtimeStatusCopy}</small>
+                  </div>
+                  <div className="chat-readiness-card">
+                    <span>Support</span>
+                    <strong>{supportStatusLabel}</strong>
+                    <small>{supportStatusCopy}</small>
+                  </div>
                 </div>
-                <div className="chat-readiness-card">
-                  <span>Support</span>
-                  <strong>{supportStatusLabel}</strong>
-                  <small>{supportStatusCopy}</small>
-                </div>
-              </div>
+              )}
 
               {selectedModelRunnable && (
                 <div className="demo-prompt-panel" aria-label="Polished demo prompts">
@@ -654,11 +657,13 @@ export default function ChatWorkspace({
           </div>
         ) : (
           <>
-            <div className={`chat-session-strip is-${readinessState}`} aria-label="Current Camelid chat status">
-              <span className="chat-session-dot" aria-hidden="true" />
-              <strong>{selectedModelName}</strong>
-              <small>{selectedModelRunnable ? 'Ready when you are' : readinessLabel}</small>
-            </div>
+            {!demoMode && (
+              <div className={`chat-session-strip is-${readinessState}`} aria-label="Current Camelid chat status">
+                <span className="chat-session-dot" aria-hidden="true" />
+                <strong>{selectedModelName}</strong>
+                <small>{selectedModelRunnable ? 'Ready when you are' : readinessLabel}</small>
+              </div>
+            )}
 
             {!selectedModelRunnable && (
               <div className="setup-card setup-card-inline setup-card-gemini">
@@ -709,8 +714,8 @@ export default function ChatWorkspace({
           <div className="composer-gemini-footer">
             <div className="composer-gemini-tools">
               {renderModelPicker()}
-              <span className="composer-meta-pill">{selectedModelMeta}</span>
-              {selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={generationActive}>Save to memory</button>}
+              {!demoMode && <span className="composer-meta-pill">{selectedModelMeta}</span>}
+              {!demoMode && selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={generationActive}>Save to memory</button>}
             </div>
             <div className="composer-gemini-actions">
               {!selectedModelRunnable && hasRunnableChoices && <button className="ghost-button" onClick={() => setTab('library')}>Open Library</button>}
