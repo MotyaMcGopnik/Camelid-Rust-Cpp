@@ -96,8 +96,9 @@ Backend runtime knobs used during performance work:
 - `CAMELID_Q8_0_FILE_READER_OUTPUT_SCRATCH_BYTES` caps reusable f32 output scratch for multi-row lazy-Q8 file-backed matmuls. Default: `67108864` (64 MiB). This is an RSS/read-reuse tuning knob only.
 - `CAMELID_Q8_0_FILE_READER_RETAINED_SCRATCH_BYTES` caps how much per-thread Q8 file-reader scratch capacity is retained after oversized row, scale, quantized-input, and output chunks. Default: `67108864` (64 MiB). This is an RSS headroom knob only; it does not promote 8B 1024/2048 support by itself.
 - `CAMELID_KV_CACHE_GROW_TOKENS` controls KV-cache allocation growth for model-sized contexts. Default: `256` positions when context length is at least 512; tiny diagnostic/test contexts keep exact one-position growth. This reduces repeated realloc/copy churn during decode and is a runtime performance knob only.
-- `CAMELID_METAL_Q8` / `--metal-q8` enables the experimental macOS Metal Q8_0 encoded file-backed row-dot path. It is opt-in, falls back to CPU when unavailable, and is not support evidence by itself.
-- `CAMELID_METAL_Q8_RETAINED` enables an even narrower retained-Q8 Metal experiment. Current local 3B profiling showed this retained path is slower than CPU, so it is intentionally separate from `--metal-q8` and should be used only for kernel experiments.
+- `CAMELID_METAL_Q8` / `--metal-q8` enables the macOS Metal Q8_0 encoded file-backed row-dot path. It falls back to CPU when unavailable and is not support evidence by itself.
+- `CAMELID_METAL_Q8_RETAINED` enables the retained-Q8 all-Metal kernel path for focused kernel experiments. Current local 3B profiling showed all-Metal retained Q8 is slower than CPU/hybrid, so normal macOS serving uses the hybrid retained-Q8 scheduler instead.
+- `CAMELID_HYBRID_Q8_RETAINED` controls the retained-Q8 CPU+Metal split path for single-row decode projections. On macOS it defaults to automatic/on for retained-Q8 local serving; set it to `0`, `false`, `off`, `disabled`, or `cpu` to force CPU-only. It launches a Metal command buffer for a suffix of output rows while CPU threads compute the rest, then merges the output. Tune the GPU slice with `CAMELID_HYBRID_Q8_GPU_PERCENT` (default `5`, capped below 100) or `CAMELID_HYBRID_Q8_GPU_ROWS`.
 
 If a command depends on more than that, document the requirement in the same PR.
 

@@ -871,7 +871,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 status: "supported_exact_row_smoke",
                 support_scope: "exact_row_smoke_only",
                 full_support_status: "blocked_pending_normalized_full_support",
-                full_support_blockers: "model-native/larger context beyond checked packs, arbitrary/Jinja templates, production throughput, portability, and durable repeated current-head bundles remain missing",
+                full_support_blockers: "model-native/larger context beyond checked packs, broader arbitrary templates beyond the supported metadata-Jinja Llama 3.2 1B row template, production throughput, portability, and durable repeated current-head bundles remain missing",
                 metadata_parses: "validated",
                 tokenizer_works: "validated_for_compact_and_prompt_pack",
                 tensors_load: "validated",
@@ -881,7 +881,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 frontend_load_path_verified: "validated",
                 frontend_readiness_gate: "green only when this exact GGUF row plus Q8_0 quant match /api/capabilities and the runtime reports loaded_now=true, generation_ready=true, and matching active_model_id",
                 tested_context: "short_api_webui_smoke_plus_first_512_second_1024_third_2048_fourth_4096_and_fifth_8192_context_packs",
-                chat_template_renderer: "compact",
+                chat_template_renderer: "metadata_jinja_supported_for_exact_row",
                 chat_template_shape_pack: "validated_bounded_pack",
                 chat_template_shape_pack_id: "llama3-chat-template-shapes-v1",
                 bounded_context_512_pack: "validated_bounded_pack",
@@ -902,8 +902,8 @@ fn capabilities_response() -> CapabilitiesResponse {
                 latest_checked_bucket: "llama3-context-8192-smoke-v1",
                 latest_checked_result: "pass",
                 latest_checked_output: "CMLD-819",
-                evidence: "the exact bartowski Llama-3.2-1B-Instruct-Q8_0 GGUF has exact-row load, completion, chat-completion, frontend-smoke evidence, compact/prompt-pack parity, first bounded 512-context parity, second bounded 1024-context parity, third bounded 2048-context parity after the RoPE frequency-factor fix, fourth bounded 4096-context parity, and fifth bounded 8192-context parity on current head aaf9207d166999a21f4fde2a3f2ac5631f2fcecb, bounded compact template-shape coverage, and bounded unique-chat perf/RSS evidence; Camelid supports exact-row smoke and the checked 512/1024/2048/4096/8192 context packs for this row only, not model-native/larger context beyond checked packs or broader/full support",
-                next_step: "preserve exact-row smoke plus checked 512/1024/2048/4096/8192 context support while normalizing model-native/larger context beyond checked packs, arbitrary/Jinja template behavior, production throughput, portability, and durable full-support bundle evidence before any broader/full-support claim",
+                evidence: "the exact bartowski Llama-3.2-1B-Instruct-Q8_0 GGUF has exact-row load, completion, chat-completion, frontend-smoke evidence, compact/prompt-pack parity, first bounded 512-context parity, second bounded 1024-context parity, third bounded 2048-context parity after the RoPE frequency-factor fix, fourth bounded 4096-context parity, and fifth bounded 8192-context parity on current head aaf9207d166999a21f4fde2a3f2ac5631f2fcecb, bounded compact template-shape coverage, metadata-Jinja renderer parity for the row template shapes, and bounded unique-chat perf/RSS evidence; Camelid supports exact-row smoke and the checked 512/1024/2048/4096/8192 context packs for this row only, not model-native/larger context beyond checked packs or broader/full support",
+                next_step: "preserve exact-row smoke plus checked 512/1024/2048/4096/8192 context support while normalizing model-native/larger context beyond checked packs, broader arbitrary-template behavior beyond the supported 1B metadata-Jinja row template, production throughput, portability, and durable full-support bundle evidence before any broader/full-support claim",
             },
             ModelCompatibilityTarget {
                 id: "llama32_3b_instruct_q8_0",
@@ -2039,7 +2039,22 @@ async fn prepare_generation(
             token_ids
         }
         PromptInput::Chat(messages) => {
-            let rendered_prompt = render_chat_prompt_for_tokenization(&messages, &tokenizer);
+            let rendered_prompt = render_chat_prompt_for_tokenization_for_model_result(
+                &messages,
+                &tokenizer,
+                Some(&model.id),
+            )
+            .map_err(|err| {
+                api_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "unsupported_chat_template",
+                    format!(
+                        "chat template rendering failed for loaded model {:?}: {err}",
+                        model.id
+                    ),
+                    Some("messages"),
+                )
+            })?;
             let mut token_ids = tokenizer
                 .encode(
                     &rendered_prompt.text,
@@ -3444,18 +3459,47 @@ fn normalize_mistral_instruct_bos_prefix_tokens(
     }
 }
 
+#[cfg(test)]
 fn render_chat_prompt_for_tokenization(
     messages: &[ChatMessage],
     tokenizer: &Tokenizer,
 ) -> RenderedPrompt {
+    render_chat_prompt_for_tokenization_for_model(messages, tokenizer, None)
+}
+
+fn render_chat_prompt_for_tokenization_for_model_result(
+    messages: &[ChatMessage],
+    tokenizer: &Tokenizer,
+    model_id: Option<&str>,
+) -> std::result::Result<RenderedPrompt, MiniJinjaError> {
     if let Some(template) = tokenizer.chat_template.as_deref() {
-        if metadata_chat_template_enabled() {
-            if let Ok(rendered) =
-                render_metadata_jinja_chat_template_prompt(messages, tokenizer, template)
-            {
-                return rendered;
-            }
+        if metadata_chat_template_enabled()
+            || metadata_jinja_chat_template_supported_for_model(model_id, template)
+        {
+            return render_metadata_jinja_chat_template_prompt(messages, tokenizer, template);
         }
+    }
+
+    Ok(render_chat_prompt_for_tokenization_fallback(
+        messages, tokenizer,
+    ))
+}
+
+#[cfg(test)]
+fn render_chat_prompt_for_tokenization_for_model(
+    messages: &[ChatMessage],
+    tokenizer: &Tokenizer,
+    model_id: Option<&str>,
+) -> RenderedPrompt {
+    render_chat_prompt_for_tokenization_for_model_result(messages, tokenizer, model_id)
+        .unwrap_or_else(|_| render_chat_prompt_for_tokenization_fallback(messages, tokenizer))
+}
+
+fn render_chat_prompt_for_tokenization_fallback(
+    messages: &[ChatMessage],
+    tokenizer: &Tokenizer,
+) -> RenderedPrompt {
+    if let Some(template) = tokenizer.chat_template.as_deref() {
         // llama-server applies the TinyLlama marker template as regular SPM text,
         // so chat prompts should keep normal dummy-prefix handling for marker tokens.
         if is_tinyllama_marker_template(template) {
@@ -3515,6 +3559,28 @@ fn is_mistral_instruct_template(template: &str) -> bool {
     template.contains("[INST]")
         && template.contains("[/INST]")
         && (template.contains("bos_token") || template.contains("</s>"))
+}
+
+fn metadata_jinja_chat_template_supported_for_model(
+    model_id: Option<&str>,
+    template: &str,
+) -> bool {
+    model_id.is_some_and(|model_id| {
+        is_llama32_1b_exact_row_model_id(model_id) && is_llama3_instruct_template(template)
+    })
+}
+
+fn is_llama32_1b_exact_row_model_id(model_id: &str) -> bool {
+    let normalized = model_id
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|ch| match ch {
+            '-' | '.' | ' ' => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+    normalized.contains("llama32_1b_instruct_q8_0")
+        || normalized.contains("llama_3_2_1b_instruct_q8_0")
 }
 
 fn metadata_chat_template_enabled() -> bool {
@@ -4779,6 +4845,165 @@ mod tests {
     }
 
     #[test]
+    fn exact_llama32_1b_row_uses_metadata_jinja_renderer_without_env_opt_in_system_user() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization_for_model(
+            &[
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: "  Be brief.  ".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "  hello  ".to_string(),
+                },
+            ],
+            &tokenizer,
+            Some("llama32_1b_instruct_q8_0"),
+        );
+
+        assert!(!rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nhello<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn exact_llama32_1b_row_uses_metadata_jinja_renderer_without_env_opt_in_user_only() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization_for_model(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "  hello  ".to_string(),
+            }],
+            &tokenizer,
+            Some("Llama-3.2-1B-Instruct-Q8_0"),
+        );
+
+        assert!(!rendered.add_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhello<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn exact_llama32_1b_row_uses_metadata_jinja_renderer_without_env_opt_in_multi_turn() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization_for_model(
+            &[
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: " Answer tersely. ".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: " Alpha? ".to_string(),
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: " alpha ".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: " Beta? ".to_string(),
+                },
+            ],
+            &tokenizer,
+            Some("bartowski/Meta-Llama-3.2-1B-Instruct-Q8_0"),
+        );
+
+        assert!(!rendered.add_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nAnswer tersely.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nAlpha?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nalpha<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nBeta?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn exact_llama32_1b_row_uses_metadata_jinja_renderer_without_env_opt_in_assistant_final() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization_for_model(
+            &[
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "Complete cam".to_string(),
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: " elid ".to_string(),
+                },
+            ],
+            &tokenizer,
+            Some("llama_3.2_1b_instruct_q8_0"),
+        );
+
+        assert!(!rendered.add_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nComplete cam<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nelid<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn non_exact_llama32_row_keeps_compact_renderer_without_env_opt_in() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization_for_model(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "  hello  ".to_string(),
+            }],
+            &tokenizer,
+            Some("llama32_3b_instruct_q8_0"),
+        );
+
+        assert!(rendered.add_special);
+        assert_eq!(
+            rendered.text,
+            "<|start_header_id|>user<|end_header_id|>\n\n  hello  <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn llama32_1b_non_q8_model_id_keeps_compact_renderer_without_env_opt_in() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization_for_model(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "  hello  ".to_string(),
+            }],
+            &tokenizer,
+            Some("Meta-Llama-3.2-1B-Instruct"),
+        );
+
+        assert!(rendered.add_special);
+        assert_eq!(
+            rendered.text,
+            "<|start_header_id|>user<|end_header_id|>\n\n  hello  <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
     fn metadata_jinja_renderer_honors_add_generation_prompt_after_assistant_turn() {
         let _guard = crate::test_support::env_lock();
         std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
@@ -4917,6 +5142,28 @@ mod tests {
         );
         assert_eq!(rendered.text, "user: hello\n");
         std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
+    fn exact_llama32_1b_required_metadata_jinja_renderer_does_not_silently_fallback() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let template = "{{ raise_exception('unsupported exact-row chat-template branch') }}<|start_header_id|><|end_header_id|><|eot_id|>";
+        let tokenizer = llama3_tokenizer_with_template(template);
+
+        let err = render_chat_prompt_for_tokenization_for_model_result(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            &tokenizer,
+            Some("Llama-3.2-1B-Instruct-Q8_0"),
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("unsupported exact-row chat-template branch"));
     }
 
     fn llama3_test_tokenizer() -> Tokenizer {
