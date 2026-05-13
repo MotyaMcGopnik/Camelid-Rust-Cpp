@@ -2,7 +2,9 @@
 
 Date: 2026-05-12
 
-The Ubuntu validation lane is paused for Camelid promotion-grade runtime evidence. Until an approved validation lane is explicitly reactivated:
+Supersession note (2026-05-13): this file remains historical evidence for the 2026-05-12 local-only pause. Current maintainer validation-lane availability is operator-controlled and should come from Tim's latest direction, not from this historical note; public docs and artifacts still must not include private host addresses, key paths, local home paths, or operator-only commands.
+
+The Ubuntu validation lane was paused for Camelid promotion-grade runtime evidence on 2026-05-12. During that pause:
 
 - do not SSH into a validation host or substitute another remote validation box;
 - treat promotion-grade runtime reruns as blocked, not as locally reproducible on a Mac by default;
