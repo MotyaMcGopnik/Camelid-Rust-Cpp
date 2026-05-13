@@ -63,7 +63,7 @@ That creates a real commercial path:
 
 ![Camelid WebUI chat surface](docs/assets/camelid-readme-chat-surface-dark.png)
 
-*Camelid’s local-first UI with honest readiness gating.*
+*Approved dark, collapsed-rail chat surface showing Camelid’s local-first UI and honest readiness gating.*
 
 ## Current support boundary
 
