@@ -1,4 +1,4 @@
-import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, exactRowSupportLanes, findCompatibilityHint, formatCapabilityStatus, frontendSupportContractCopy, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus, rowSupportBoundaryCopy } from '../lib/capabilities'
 import { modelRuntimeIdMatches } from '../lib/modelState'
 
 function guardedApiFeatures(features = []) {
@@ -16,6 +16,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
   const apiBase = runtime?.api_base || ''
   const modelId = selectedModel?.id || runtime?.active_model_id || '<loaded-model-id>'
   const supportContract = capabilities?.support_contract
+  const supportContractCurrentGate = frontendSupportContractCopy(capabilities)
   const compatibilityTargets = capabilities?.model_compatibility || []
   const apiFeatures = capabilities?.api_features || []
   const supportedFeatures = apiFeatures.filter((feature) => isSupportedCapabilityStatus(feature.status))
@@ -23,6 +24,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
   const selectedCompatibilityTarget = isExactCompatibilityHint(selectedCompatibilityHint) ? selectedCompatibilityHint.target : null
   const selectedCompatibilitySupported = selectedCompatibilityTarget ? isSupportedCapabilityStatus(selectedCompatibilityTarget.status) : false
+  const selectedSupportLanes = exactRowSupportLanes(selectedCompatibilityTarget, apiFeatures)
   const generationReady = Boolean(runtime?.generation_ready)
   const loadedNow = Boolean(runtime?.loaded_now)
   const selectedRuntimeMatches = modelRuntimeIdMatches(selectedModel, runtime)
@@ -102,7 +104,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
             <h2>/api/capabilities summary</h2>
             <p className="hero-summary">The UI treats these rows as evidence boundaries, not marketing claims. Planned, partial, blocked, or unsupported rows remain visible but guarded.</p>
           </div>
-          <div className="status-pill">{supportContract?.current_gate || 'Capabilities unavailable'}</div>
+          <div className="status-pill">{supportContractCurrentGate}</div>
         </div>
 
         <div className="api-grid api-grid-polished api-capabilities-grid" aria-label="API capabilities support contract">
@@ -110,7 +112,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
             <strong>Current gate</strong>
             {supportContract ? (
               <>
-                <p><b>{supportContract.current_gate}</b></p>
+                <p><b>{supportContractCurrentGate}</b></p>
                 <p>{supportContract.support_policy}</p>
                 <p>{supportContract.unsupported_policy}</p>
               </>
@@ -149,7 +151,10 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
                 <p><b>Latest checked:</b> {formatCapabilityStatus(selectedCompatibilityTarget.latest_checked_bucket)} · {formatCapabilityStatus(selectedCompatibilityTarget.latest_checked_result)}</p>
                 <p><b>Latest output:</b> {displayCapabilityCopy(selectedCompatibilityTarget.latest_checked_output || 'not advertised')}</p>
                 <p><b>Full-support status:</b> {formatCapabilityStatus(selectedCompatibilityTarget.full_support_status || 'not advertised')}</p>
-                <p><b>Remaining blockers:</b> {displayCapabilityCopy(selectedCompatibilityTarget.full_support_blockers || 'No blockers advertised for this exact row.')}</p>
+                {selectedSupportLanes.map((lane) => (
+                  <p key={lane.key}><b>{lane.key === 'template' ? 'Template/Jinja readiness' : 'Throughput readiness'}:</b> {lane.label}. {displayCapabilityCopy(lane.copy)}</p>
+                ))}
+                <p><b>Remaining support boundary:</b> {displayCapabilityCopy(rowSupportBoundaryCopy(selectedCompatibilityTarget, apiFeatures))}</p>
                 <p>{displayCapabilityCopy(selectedCompatibilityTarget.evidence)}</p>
               </>
             ) : (
@@ -186,6 +191,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
                     <strong className={capabilityStatusTone(target.status)}>{formatCapabilityStatus(target.status)} · {target.family} · {target.quantization}</strong>
                     <small>Metadata: {formatCapabilityStatus(target.metadata_parses)} · tokenizer: {formatCapabilityStatus(target.tokenizer_works)} · tensors: {formatCapabilityStatus(target.tensors_load)} · generation: {formatCapabilityStatus(target.generation_runs)} · frontend load: {formatCapabilityStatus(target.frontend_load_path_verified)}</small>
                     <small>Template: {formatCapabilityStatus(target.chat_template_shape_pack || 'not_started')} · 512-context: {formatCapabilityStatus(target.bounded_context_512_pack || 'not_started')} · 1024-context: {formatCapabilityStatus(target.bounded_context_1024_pack || 'not_started')} · 2048-context: {formatCapabilityStatus(target.bounded_context_2048_pack || 'not_started')} · 4096-context: {formatCapabilityStatus(target.bounded_context_4096_pack || 'not_started')} · 8192-context: {formatCapabilityStatus(target.bounded_context_8192_pack || 'not_started')} · perf: {formatCapabilityStatus(target.performance_measured || 'not_started')}</small>
+                    <small>{exactRowSupportLanes(target, apiFeatures).map((lane) => `${lane.key === 'template' ? 'Template/Jinja' : 'Throughput'}: ${lane.label}`).join(' · ')}</small>
                     <small>{displayCapabilityCopy(target.next_step)}</small>
                   </div>
                 ))}

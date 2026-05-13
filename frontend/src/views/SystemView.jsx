@@ -1,4 +1,4 @@
-import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, findCompatibilityHint, formatCapabilityStatus, frontendSupportContractCopy, guardedCapabilityCopy, isExactCompatibilityHint, isGuardedCapabilityStatus, isSupportedCapabilityStatus } from '../lib/capabilities'
 import { describeModelState } from '../lib/modelState'
 
 function runtimeReadinessLabel(runtime) {
@@ -13,6 +13,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
   const apiBase = runtime?.api_base || 'Local API unavailable'
   const modelId = selectedModel?.id || runtime?.active_model_id || '<loaded-model-id>'
   const supportContract = capabilities?.support_contract
+  const supportContractCurrentGate = frontendSupportContractCopy(capabilities)
   const compatibilityTargets = capabilities?.model_compatibility || []
   const apiFeatures = capabilities?.api_features || []
   const supportedFeatures = apiFeatures.filter((feature) => isSupportedCapabilityStatus(feature.status))
@@ -129,7 +130,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
             <h2>Evidence-based compatibility</h2>
             <p className="hero-summary">This mirrors /api/capabilities so the UI does not imply unvalidated model families, quantization formats, or API features.</p>
           </div>
-          <div className="status-pill">{supportContract?.current_gate || 'Capabilities unavailable'}</div>
+          <div className="status-pill">{supportContractCurrentGate}</div>
         </div>
 
         <div className="api-grid api-grid-polished api-capabilities-grid" aria-label="Capabilities support contract">
@@ -137,7 +138,7 @@ export default function SystemView({ runtime, selectedModel, capabilities }) {
             <strong>Current contract</strong>
             {supportContract ? (
               <>
-                <p><b>Current gate:</b> {supportContract.current_gate}</p>
+                <p><b>Current gate:</b> {supportContractCurrentGate}</p>
                 <p>{supportContract.support_policy}</p>
                 <p>{supportContract.unsupported_policy}</p>
               </>

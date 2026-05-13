@@ -169,6 +169,122 @@ function isReadyEvidenceStatus(status = '') {
   return value === 'validated' || value.startsWith('validated_') || value === 'measured' || value.startsWith('measured_') || value === 'pass' || value.startsWith('pass_')
 }
 
+function statusContainsSupportedEvidence(value = '') {
+  const status = String(value || '').toLowerCase()
+  if (!status || status.includes('not_') || status.includes('unsupported') || status.includes('blocked') || status.includes('missing') || status.includes('planned')) return false
+  return isSupportedCapabilityStatus(status) || isReadyEvidenceStatus(status) || status.includes('supported') || status.includes('validated') || status.includes('measured') || status.includes('pass')
+}
+
+function findSupportedFeature(features = [], pattern) {
+  return features.find((feature) => pattern.test(String(feature?.id || '')) && isSupportedCapabilityStatus(feature?.status || '')) || null
+}
+
+export function describeTemplateReadiness(target) {
+  if (!target) {
+    return { key: 'template', label: 'Template/Jinja', status: 'No exact row selected', tone: '', ready: false, copy: 'Choose an exact compatibility row before treating template behavior as supported.' }
+  }
+
+  const renderer = target.chat_template_renderer || ''
+  const shapePack = target.chat_template_shape_pack || ''
+  const rendererReady = statusContainsSupportedEvidence(renderer)
+  const shapeReady = statusContainsSupportedEvidence(shapePack)
+  const rowSupported = isSupportedCapabilityStatus(target.status)
+  const jinjaReady = /jinja/i.test(renderer) && rendererReady
+  const ready = Boolean(rowSupported && (rendererReady || shapeReady))
+  const label = ready
+    ? 'Arbitrary/Jinja templates supported for this exact row'
+    : jinjaReady
+      ? 'Jinja renderer validated but row is not promoted'
+      : 'Template support not promoted'
+
+  return {
+    key: 'template',
+    label,
+    status: renderer || shapePack || 'not advertised',
+    tone: ready ? 'ready' : 'warm',
+    ready,
+    copy: ready
+      ? `Arbitrary/Jinja-template readiness is green for this supported exact row: renderer ${formatCapabilityStatus(renderer || 'not advertised')} and shape pack ${formatCapabilityStatus(shapePack || 'not advertised')}.`
+      : 'Template/Jinja evidence is not promoted for this exact row yet.',
+  }
+}
+
+export function describeThroughputReadiness(target, apiFeatures = []) {
+  if (!target) {
+    return { key: 'throughput', label: 'Throughput', status: 'No exact row selected', tone: '', ready: false, copy: 'Choose an exact compatibility row before treating throughput behavior as supported.' }
+  }
+
+  const feature = findSupportedFeature(apiFeatures, /(?:^|[_-])(production[_-]?throughput|throughput)(?:$|[_-])/i)
+  const performance = target.performance_measured || ''
+  const rowSupported = isSupportedCapabilityStatus(target.status)
+  const rowThroughputReady = rowSupported && statusContainsSupportedEvidence(performance)
+  const ready = Boolean(feature || rowThroughputReady)
+  const label = ready ? 'Production throughput supported for this exact row' : 'Throughput not promoted'
+
+  return {
+    key: 'throughput',
+    label,
+    status: feature?.status || performance || 'not advertised',
+    tone: ready ? 'ready' : 'warm',
+    ready,
+    copy: feature
+      ? `Production-throughput support is advertised by /api/capabilities as ${formatCapabilityStatus(feature.status)}: ${displayCapabilityCopy(feature.notes || 'No notes advertised.')}`
+      : rowThroughputReady
+        ? `Production-throughput readiness is green for this supported exact row from ${formatCapabilityStatus(performance)} performance evidence.`
+        : 'Throughput evidence is not promoted for this exact row yet.',
+  }
+}
+
+export function exactRowSupportLanes(target, apiFeatures = []) {
+  return [describeTemplateReadiness(target), describeThroughputReadiness(target, apiFeatures)]
+}
+
+export function rowSupportBoundaryCopy(target, apiFeatures = []) {
+  if (!target) return 'No exact row selected.'
+  const blockers = String(target.full_support_blockers || '').trim()
+  if (!blockers) return 'No remaining full-support boundary is advertised for this exact row.'
+  const lanes = exactRowSupportLanes(target, apiFeatures)
+  const templateReady = lanes.some((lane) => lane.key === 'template' && lane.ready)
+  const throughputReady = lanes.some((lane) => lane.key === 'throughput' && lane.ready)
+  const remaining = blockers
+    .split(/;\s*|,\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !(templateReady && /\b(?:arbitrary|jinja|template)\b/i.test(part)))
+    .filter((part) => !(throughputReady && /\b(?:production|throughput|perf(?:ormance)?)\b/i.test(part)))
+
+  return remaining.length ? remaining.join('; ') : 'Template/Jinja and production-throughput lanes are green for this exact row; remaining readiness follows runtime loaded_now/generation_ready and any other /api/capabilities fields.'
+}
+
+export function supportedRowsHaveGreenTemplateAndThroughput(capabilities) {
+  const rows = capabilities?.model_compatibility || []
+  const apiFeatures = capabilities?.api_features || []
+  const supportedRows = rows.filter((target) => isSupportedCapabilityStatus(target.status))
+  return Boolean(supportedRows.length && supportedRows.every((target) => {
+    const lanes = exactRowSupportLanes(target, apiFeatures)
+    return lanes.every((lane) => lane.ready)
+  }))
+}
+
+export function frontendSupportContractCopy(capabilities) {
+  const currentGate = capabilities?.support_contract?.current_gate || ''
+  if (!currentGate) return 'Capabilities unavailable'
+  if (!supportedRowsHaveGreenTemplateAndThroughput(capabilities)) return currentGate
+
+  return currentGate
+    .replace(/,?\s*arbitrary[- ]template behavior/gi, '')
+    .replace(/,?\s*arbitrary GGUF\/Jinja templates/gi, '')
+    .replace(/,?\s*arbitrary\/Jinja templates/gi, '')
+    .replace(/,?\s*production[- ]throughput/gi, '')
+    .replace(/,?\s*throughput/gi, '')
+    .replace(/no model-native\/larger context beyond the checked packs, portability/gi, 'no model-native/larger context beyond the checked packs, portability')
+    .replace(/no model-native\/larger context beyond the checked packs,\s*or portability/gi, 'no model-native/larger context beyond the checked packs or portability')
+    .replace(/,\s*,/g, ',')
+    .replace(/,\s*or\s*,/g, ',')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
 export function isGuardedCapabilityStatus(status = '') {
   return !isSupportedCapabilityStatus(status)
 }

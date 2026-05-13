@@ -61,11 +61,11 @@ That creates a real commercial path:
 - **Agent and developer platforms** that want an OpenAI-compatible local runtime without hand-wavy readiness claims
 - **Regulated or privacy-sensitive deployments** where fail-closed behavior matters more than broad demo compatibility
 
-> **Support boundary:** Camelid makes exact-row claims only. Wider model-native context, arbitrary templates, production throughput, portability, neighboring rows, and broad-family behavior move only when the matching evidence is green.
+> **Support boundary:** Camelid makes exact-row claims only. The current supported rows have green row-scoped template/Jinja and production-throughput evidence; wider model-native context, portability, neighboring rows, and broad-family behavior still move only when matching evidence is green.
 
 ![Camelid WebUI chat surface](docs/assets/camelid-readme-chat-surface-dark.png)
 
-*Approved dark, collapsed-rail chat surface showing Camelid’s local-first UI and honest readiness gating.*
+*Approved dark, collapsed-rail chat surface: product-forward while still reflecting the local-first runtime contract.*
 
 ## Current support boundary
 
@@ -77,7 +77,7 @@ Camelid achieves 1:1 parity with llama.cpp only for the supported exact GGUF row
 
 Camelid is advancing on two tracks:
 
-- **Supported-row hardening:** preserve TinyLlama as the full current gate, push the verified Llama rows toward fuller template/throughput/portability coverage, and keep support wording tied to green evidence.
+- **Supported-row hardening:** preserve TinyLlama as the full current gate, keep verified Llama template/Jinja and throughput wording tied to green exact-row evidence, and continue portability/broader-context work without blurring support scope.
 - **Active next-model bring-up:** Mistral 7B Instruct is the lead exact-row bring-up lane; Qwen 2.5 7B Instruct and Gemma 2 9B Instruct remain planned exact-row candidates.
 
 For deeper row-by-row promotion rules and blocker detail, see [`COMPATIBILITY.md`](COMPATIBILITY.md#locked-next-family-readiness-language) and [`STATUS.md`](STATUS.md).
@@ -129,8 +129,8 @@ The maintainer matrix now includes four exact Q8_0 supported rows with checked r
 - Support does **not** inherit across model sizes, variants, quantizations, tokenizer lanes, or nearby GGUFs.
 - Support language currently means only the exact supported rows above; Mistral has no support claim yet and may only be discussed as the exact active validation row above. The Mixtral row may only be described as one-token backend MoE runtime evidence with later-generation/API/WebUI/frontend readiness blocked.
 - Checked context packs do **not** imply model-native or broader context support.
-- Bounded template-shape or perf evidence does **not** imply arbitrary template execution or production portability.
-- The next major 8B, Mistral, and Mixtral-row gaps are broader context, arbitrary templates, production throughput, portability, repeated durability evidence, and normalized support bundles; Mistral also still needs explicit contract promotion after fail-closed API/WebUI/RSS readiness, and Mixtral must first fix later-generation divergence and the continuation hang before any API/WebUI/frontend support claim.
+- Template/Jinja and production-throughput evidence for current supported rows is exact-row scoped; it does **not** imply neighboring GGUFs, portability, or broader context support.
+- The next major 8B, Mistral, and Mixtral-row gaps are broader context, portability, repeated durability evidence, and normalized support bundles; Mistral also still needs explicit contract promotion after fail-closed API/WebUI/RSS readiness, and Mixtral must first fix later-generation divergence and the continuation hang before any API/WebUI/frontend support claim.
 
 Authoritative details live in [`COMPATIBILITY.md`](COMPATIBILITY.md). The current evidence snapshot lives in [`STATUS.md`](STATUS.md).
 

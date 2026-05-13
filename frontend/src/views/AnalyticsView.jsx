@@ -1,4 +1,4 @@
-import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, formatCapabilityStatus, getCurrentCompatibilityTarget, guardedCapabilityCopy, isGuardedCapabilityStatus } from '../lib/capabilities'
+import { capabilityStatusTone, displayCapabilityCopy, displayCapabilityId, formatCapabilityStatus, frontendSupportContractCopy, getCurrentCompatibilityTarget, guardedCapabilityCopy, isGuardedCapabilityStatus } from '../lib/capabilities'
 import { formatCompactNumber, formatDate, formatRate } from '../lib/formatters'
 import { isRunnableModel } from '../lib/modelState'
 
@@ -130,6 +130,7 @@ export default function AnalyticsView({ conversations, models, runtime, capabili
     .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
     .slice(0, 4)
   const supportContract = capabilities?.support_contract
+  const supportContractCurrentGate = frontendSupportContractCopy(capabilities)
   const currentTarget = getCurrentCompatibilityTarget(capabilities)
   const compatibilityTargets = capabilities?.model_compatibility || []
   const guardedTargets = compatibilityTargets.filter((target) => isGuardedCapabilityStatus(target.status))
@@ -177,7 +178,7 @@ export default function AnalyticsView({ conversations, models, runtime, capabili
         </div>
         <div className="analytics-stat-card panel">
           <span>Support contract</span>
-          <strong>{supportContract?.current_gate || 'Unavailable'}</strong>
+          <strong>{supportContractCurrentGate}</strong>
           <small>{currentTarget ? `${currentTarget.id}: ${formatCapabilityStatus(currentTarget.status)}` : 'No /api/capabilities rows loaded'}</small>
         </div>
       </div>

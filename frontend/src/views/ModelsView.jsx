@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { LLAMA32_3B_ACCEPTANCE_AVAILABILITY, LLAMA32_3B_ACCEPTANCE_GATING_NOTE, LLAMA32_3B_ACCEPTANCE_SUMMARY, LLAMA32_3B_ACCEPTANCE_TARGET } from '../lib/acceptanceTargets'
-import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, findCompatibilityHint, formatCapabilityStatus, getCurrentCompatibilityTarget, getTrackedCompatibilityTargets, isExactCompatibilityHint, isSupportedCapabilityStatus } from '../lib/capabilities'
+import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, exactRowSupportLanes, findCompatibilityHint, formatCapabilityStatus, frontendSupportContractCopy, getCurrentCompatibilityTarget, getTrackedCompatibilityTargets, isExactCompatibilityHint, isSupportedCapabilityStatus, rowSupportBoundaryCopy } from '../lib/capabilities'
 import { getChatGateState } from '../lib/chatGate'
 import { formatBytes, formatCompactNumber } from '../lib/formatters'
 import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, isRunnableModel } from '../lib/modelState'
@@ -234,6 +234,8 @@ export default function ModelsView({
   const runtimeOnline = runtime?.status === 'online'
   const hostedRoutingAvailable = Boolean(capabilities?.hosted_provider_routing || capabilities?.external_api_routing || capabilities?.openai_compatible_routing)
   const catalogInstallAvailable = Boolean(capabilities?.model_catalog_install || capabilities?.model_downloads || capabilities?.hf_catalog_install)
+  const apiFeatures = capabilities?.api_features || []
+  const supportContractCurrentGate = frontendSupportContractCopy(capabilities)
   const currentCompatibilityTarget = getCurrentCompatibilityTarget(capabilities)
   const compatibilityRows = capabilities?.model_compatibility || []
   const trackedCompatibilityRows = getTrackedCompatibilityTargets(capabilities)
@@ -450,7 +452,7 @@ export default function ModelsView({
           <div>
             <span>/api/capabilities</span>
             <strong>{capabilities ? 'Contract live' : 'Not available'}</strong>
-            <small>{capabilities?.support_contract?.current_gate || 'No support contract returned; non-matching rows stay disabled.'}{supportedCompatibilitySummary ? ` Rows: ${supportedCompatibilitySummary}.` : ''}</small>
+            <small>{capabilities?.support_contract ? supportContractCurrentGate : 'No support contract returned; non-matching rows stay disabled.'}{supportedCompatibilitySummary ? ` Rows: ${supportedCompatibilitySummary}.` : ''}</small>
           </div>
           <div>
             <span>Catalog</span>
@@ -466,7 +468,7 @@ export default function ModelsView({
         <div className="models-compatibility-strip" aria-label="Camelid compatibility support contract">
           <div>
             <span>Current supported gate</span>
-            <strong>{capabilities?.support_contract?.current_gate || 'No /api/capabilities contract'}</strong>
+            <strong>{capabilities?.support_contract ? supportContractCurrentGate : 'No /api/capabilities contract'}</strong>
             <small>{supportedCompatibilitySummary ? `Supported rows: ${supportedCompatibilitySummary}. Runtime loaded_now=true and generation_ready=true are still required.` : 'The UI will not infer support beyond loaded/model readiness.'}</small>
           </div>
           <div>
@@ -620,6 +622,9 @@ export default function ModelsView({
               const matchedModel = match.model
               const runtimeReady = Boolean(match.active && matchedModel && isModelGenerationReady(matchedModel))
               const chatUnlocked = Boolean(supported && runtimeReady)
+              const supportLanes = exactRowSupportLanes(target, apiFeatures)
+              const templateLane = supportLanes.find((lane) => lane.key === 'template')
+              const throughputLane = supportLanes.find((lane) => lane.key === 'throughput')
 
               return (
                 <article key={target.id} className="model-card models-model-card">
@@ -635,6 +640,7 @@ export default function ModelsView({
                     <div className="pin-badge">{target.tested_context || 'Context not advertised'}</div>
                     <div className={`pin-badge ${target.frontend_load_path_verified === 'validated' ? 'ready' : 'warm'}`}>frontend: {formatCapabilityStatus(target.frontend_load_path_verified || 'not_promoted')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.chat_template_shape_pack)}`}>template pack: {formatCapabilityStatus(target.chat_template_shape_pack || 'not_started')}</div>
+                    {templateLane && <div className={`pin-badge ${templateLane.tone}`}>Template/Jinja: {templateLane.label}</div>}
                     <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_512_pack)}`}>512-context: {formatCapabilityStatus(target.bounded_context_512_pack || 'not_started')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_1024_pack)}`}>1024-context: {formatCapabilityStatus(target.bounded_context_1024_pack || 'not_started')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_2048_pack)}`}>2048-context: {formatCapabilityStatus(target.bounded_context_2048_pack || 'not_started')}</div>
@@ -647,6 +653,7 @@ export default function ModelsView({
                     )}
                     <div className={`pin-badge ${evidenceTrackTone(target.full_support_status)}`}>full-support: {formatCapabilityStatus(target.full_support_status || 'not_advertised')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.performance_measured)}`}>perf: {formatCapabilityStatus(target.performance_measured || 'not_started')}</div>
+                    {throughputLane && <div className={`pin-badge ${throughputLane.tone}`}>Throughput: {throughputLane.label}</div>}
                     <div className={`pin-badge ${chatUnlocked ? 'ready' : 'warm'}`}>{chatUnlocked ? 'Chat unlockable' : supported ? 'Runtime still needed' : 'Chat blocked by row status'}</div>
                     {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge ready">TinyLlama current gate</div>}
                     {target.id === 'tinyllama_1_1b_chat_q8_0' && <div className="pin-badge ready">TinyLlama API/WebUI smoke passed</div>}
@@ -683,7 +690,10 @@ export default function ModelsView({
 
                   <div className="models-card-copy-stack">
                     <p className="model-summary"><b>Evidence:</b> {target.evidence}</p>
-                    <p className="model-summary"><b>Full-support blockers:</b> {target.full_support_blockers || 'Not advertised by /api/capabilities.'}</p>
+                    {supportLanes.map((lane) => (
+                      <p className="model-summary" key={lane.key}><b>{lane.key === 'template' ? 'Template/Jinja readiness' : 'Throughput readiness'}:</b> {lane.copy}</p>
+                    ))}
+                    <p className="model-summary"><b>Remaining support boundary:</b> {rowSupportBoundaryCopy(target, apiFeatures)}</p>
                     <p className="model-summary"><b>Next step:</b> {target.next_step}</p>
                     <p className="model-summary">
                       {chatUnlocked

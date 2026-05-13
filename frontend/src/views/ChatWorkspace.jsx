@@ -533,7 +533,7 @@ export default function ChatWorkspace({
       ? selectedCompatibilityCopy
       : 'Camelid does not infer broad support from filenames, families, or saved paths.'
   const readinessFinePrint = selectedModelRunnable
-    ? 'Ready for this loaded exact row only. Broader model, quant, context, and throughput claims still follow the published support contract.'
+    ? 'Ready for this loaded exact row. Broader scope details stay in /api/capabilities instead of the chat composer.'
     : 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
   const emptyHeroEyebrow = 'Camelid'
   const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
