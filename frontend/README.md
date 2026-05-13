@@ -18,8 +18,8 @@ The backend data hook is adapted for Camelid's current API surface:
 - keeps API examples readiness-gated: `/api/capabilities` explains evidence boundaries, while `/v1/health` `loaded_now`/`generation_ready` plus `active_model_id` decide whether chat calls should run for the selected local GGUF
 - normalizes loaded-model `general.file_type` values into GGUF quant labels (for example file type `7` → `Q8_0`) before comparing them to `/api/capabilities`, so loaded model cards get useful quant evidence without treating filenames as support claims
 - keeps the shipped exact Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 smoke rows visible as row-specific wins, while still requiring the loaded local GGUF to match its exact supported row before chat unlocks
-- sends non-streaming chat requests to `POST /v1/chat/completions`
-- blocks chat until `/v1/health` reports the selected `active_model_id` with `loaded_now: true` and `generation_ready: true` and `/api/capabilities` has an exact supported model/quant compatibility row; the exact Llama 3.2 1B/3B Instruct Q8_0 plus Llama 3 8B Instruct Q8_0 rows are supported only for their bounded local-chat smoke/parity envelopes
+- sends readiness-gated streaming chat requests to `POST /v1/chat/completions` with `stream: true`, preserves backend usage when provided, treats structured SSE `event: error` payloads as failures instead of empty assistant replies, and keeps the non-streaming JSON parser only as a response-shape fallback
+- blocks chat until `/v1/health` reports the selected `active_model_id` with `loaded_now: true` and `generation_ready: true` and `/api/capabilities` has an exact supported model/quant compatibility row; streaming transport behavior is UI reliability evidence only, not support evidence for any additional model row; the exact Llama 3.2 1B/3B Instruct Q8_0 plus Llama 3 8B Instruct Q8_0 rows are supported only for their bounded local-chat smoke/parity envelopes
 
 Server features Camelid does not expose yet are kept honest: catalog downloads, external-provider setup, planned or blocked quantization lanes, and unsupported or partial API parameters show disabled or typed-guardrail copy instead of pretending to work. The analytics view treats conversation telemetry as usage only, not compatibility evidence. The UI mirrors the compatibility contract documented in `../COMPATIBILITY.md`; filenames, catalog metadata, saved browser paths, and prior usage are not treated as support evidence by themselves.
 
@@ -81,6 +81,15 @@ Build the frontend:
 cd frontend
 npm run build
 ```
+
+For parser-only chat-path changes, run the streaming parser smoke before involving a real backend:
+
+```bash
+cd frontend
+npm run smoke:streaming
+```
+
+This smoke covers partial SSE chunks, backend usage chunks, non-streaming JSON fallback parsing, and structured SSE `event: error` failures after headers. Passing it does not prove model parity, API/WebUI readiness, or support for any new row; it only validates frontend stream parsing behavior.
 
 Smoke-test a running backend + frontend:
 
