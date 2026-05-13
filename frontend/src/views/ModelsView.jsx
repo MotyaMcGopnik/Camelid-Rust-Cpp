@@ -638,6 +638,8 @@ export default function ModelsView({
                     <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_512_pack)}`}>512-context: {formatCapabilityStatus(target.bounded_context_512_pack || 'not_started')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_1024_pack)}`}>1024-context: {formatCapabilityStatus(target.bounded_context_1024_pack || 'not_started')}</div>
                     <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_2048_pack)}`}>2048-context: {formatCapabilityStatus(target.bounded_context_2048_pack || 'not_started')}</div>
+                    <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_4096_pack)}`}>4096-context: {formatCapabilityStatus(target.bounded_context_4096_pack || 'not_started')}</div>
+                    <div className={`pin-badge ${evidenceTrackTone(target.bounded_context_8192_pack)}`}>8192-context: {formatCapabilityStatus(target.bounded_context_8192_pack || 'not_started')}</div>
                     {target.latest_checked_bucket && (
                       <div className={`pin-badge ${target.latest_checked_result === 'pass' ? 'ready' : evidenceTrackTone(target.latest_checked_result)}`}>
                         latest: {formatCapabilityStatus(target.latest_checked_bucket)} → {formatCapabilityStatus(target.latest_checked_result || 'not_started')}{target.latest_checked_output && target.latest_checked_output !== 'not_applicable' ? ` (${target.latest_checked_output})` : ''}
@@ -656,6 +658,8 @@ export default function ModelsView({
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B first 512-context pack passed</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B second 1024-context pack passed</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B third 2048-context pack passed</div>}
+                    {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B fourth 4096-context pack passed</div>}
+                    {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B fifth 8192-context pack passed</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B compact template-shapes pack passed</div>}
                     {target.id === 'llama32_1b_instruct_q8_0' && <div className="pin-badge ready">1B unique-chat perf/RSS passed</div>}
                     {target.id === 'llama32_3b_instruct_q8_0' && <div className="pin-badge ready">3B API/WebUI smoke passed</div>}
