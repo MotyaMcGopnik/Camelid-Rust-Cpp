@@ -65,4 +65,22 @@ if [[ -n "$stale_validation_lane_matches" ]]; then
   status=1
 fi
 
+local_bundle_pattern='qa/evidence-bundles/(backend-local|local-|tpm-local-)'
+local_bundle_matches=$(git grep -n -I -E "$local_bundle_pattern" -- \
+  README.md \
+  COMPATIBILITY.md \
+  STATUS.md \
+  ROADMAP.md \
+  FULL_SUPPORT_BLOCKER_MATRIX.md \
+  docs \
+  frontend/README.md \
+  frontend/src \
+  frontend/scripts \
+  qa/validation-notes \
+  scripts ':!scripts/check-public-scrub.sh' ':!scripts/test-audit-evidence-bundle-privacy.mjs' || true)
+if [[ -n "$local_bundle_matches" ]]; then
+  printf 'public scrub guard failed for local-only evidence bundle citation: %s\n%s\n' "$local_bundle_pattern" "$local_bundle_matches" >&2
+  status=1
+fi
+
 exit "$status"

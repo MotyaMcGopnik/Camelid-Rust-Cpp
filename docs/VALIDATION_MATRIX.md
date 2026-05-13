@@ -1,6 +1,6 @@
 # Validation Matrix
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 Run the smallest meaningful validation lane for your change. If a change affects support language, readiness behavior, or exact-row claims, update docs and evidence references together.
 
@@ -21,6 +21,8 @@ Next-family public language is locked to planning/validation, not support:
 - Gemma 2 9B Instruct: “Planned exact-row candidate for `gemma-2-9b-it-Q8_0.gguf`; not supported yet.”
 
 First promotion for any of those rows requires row-specific source/SHA/license, tokenizer/template references, bounded load/readiness, parity, API/WebUI, RSS/timing, scrubbed manifest, and checksum evidence. Mixtral already has bounded one-token backend MoE runtime evidence, but it still needs the Gate 9A/long-continuation blocker closed before superseded API/WebUI/RSS artifacts, long-context evidence, or broader support wording can move. Keep llama.cpp / ggml credit visible whenever a parity-backed claim is summarized.
+
+Local-only evidence bundles such as `backend-local-*`, `local-*`, or `tpm-local-*` are maintainer diagnostics only. Do not cite them from public docs, API capability strings, frontend copy, or validation notes unless they have first been republished as scrubbed public evidence with checksums and a manifest boundary.
 
 | Change type | Minimum expected checks | Extra checks when relevant | Notes |
 | --- | --- | --- | --- |
