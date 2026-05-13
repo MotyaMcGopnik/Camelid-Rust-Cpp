@@ -18,6 +18,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
   const supportContract = capabilities?.support_contract
   const compatibilityTargets = capabilities?.model_compatibility || []
   const apiFeatures = capabilities?.api_features || []
+  const supportedFeatures = apiFeatures.filter((feature) => isSupportedCapabilityStatus(feature.status))
   const guardedFeatures = guardedApiFeatures(apiFeatures)
   const selectedCompatibilityHint = findCompatibilityHint(capabilities, selectedModel)
   const selectedCompatibilityTarget = isExactCompatibilityHint(selectedCompatibilityHint) ? selectedCompatibilityHint.target : null
@@ -191,6 +192,23 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
               </div>
             ) : (
               <p>No compatibility rows advertised yet.</p>
+            )}
+          </div>
+
+          <div className="api-card wide">
+            <strong>Supported API feature rows</strong>
+            {supportedFeatures.length ? (
+              <div className="api-feature-list">
+                {supportedFeatures.map((feature) => (
+                  <div key={feature.id}>
+                    <span>{displayCapabilityId(feature.id)}</span>
+                    <strong className={capabilityStatusTone(feature.status)}>{formatCapabilityStatus(feature.status)}</strong>
+                    <small>{displayCapabilityCopy(feature.notes || 'Advertised by /api/capabilities. These feature rows do not widen model support; chat still follows the selected exact-row and runtime readiness gate above.')}</small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p>No supported API feature rows advertised.</p>
             )}
           </div>
 

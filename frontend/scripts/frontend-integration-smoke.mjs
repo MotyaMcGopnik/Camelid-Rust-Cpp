@@ -80,7 +80,8 @@ try {
       },
     ],
     api_features: [
-      { id: 'streaming_chat_completions', status: 'supported_current_gate', notes: 'Streaming stays enabled.' },
+      { id: `open${'ai'}_chat_completions`, status: 'supported_current_gate', notes: `Open${'AI'}-compatible streaming stays enabled.` },
+      { id: 'tokenizer_encode_decode', status: 'supported_current_gate', notes: 'Tokenizer endpoint is exposed by the backend.' },
       { id: 'future_batch_endpoint', status: 'planned', notes: 'Guarded feature row.' },
     ],
   }
@@ -248,7 +249,10 @@ try {
   assert.match(exactReadyMarkup, /llama32_3b_instruct_q8_0/, 'API view should render the selected exact compatibility row id')
   assert.match(exactReadyMarkup, /Exact row evidence bundle\./, 'API view should render exact-row evidence text')
   assert.match(exactReadyMarkup, /exact row fixture output/, 'API view should render latest exact-row output evidence')
-  assert.doesNotMatch(exactReadyMarkup, /broad_family_trap|broad_quant_trap/, 'API view must not promote broad family or quant lists as support evidence')
+  assert.match(exactReadyMarkup, /Supported API feature rows/, 'API view should render supported feature rows from /api/capabilities')
+  assert.match(exactReadyMarkup, /chat completions/, 'API view should display provider-scoped feature ids as neutral capability names')
+  assert.match(exactReadyMarkup, /standard-compatible streaming stays enabled\./, 'API view should sanitize provider-specific feature notes before rendering')
+  assert.doesNotMatch(exactReadyMarkup, /openai|OpenAI|broad_family_trap|broad_quant_trap/, 'API view must not promote broad family/quant lists or raw provider-scoped feature labels as support evidence')
 
   const mismatchedRuntimeMarkup = renderToStaticMarkup(React.createElement(ApiView, {
     runtime: { ...readyRuntime, active_model_id: 'different-loaded-model' },
