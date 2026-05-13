@@ -739,7 +739,7 @@ fn capabilities_response() -> CapabilitiesResponse {
         inference: true,
         streaming: true,
         support_contract: SupportContract {
-            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096/8192 packs, while Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
+            current_gate: "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096/8192 packs, while Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mistral-7B-Instruct-v0.3.Q8_0.gguf now has fail-closed current-head API/WebUI/RSS evidence plus checked 512/1024/2048/4096/8192 validation evidence, but remains active_validation_unsupported with WebUI chat blocked by contract. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied.",
             support_policy: "A model, tokenizer, quantization, API feature, or context length is supported only after tests, docs, and real-model evidence exist for that lane.",
             unsupported_policy: "Unsupported combinations should return typed errors instead of silently falling back to best-effort behavior.",
         },
@@ -798,7 +798,7 @@ fn capabilities_response() -> CapabilitiesResponse {
             SupportItem {
                 id: "mistral",
                 status: "active_validation_unsupported",
-                notes: "public readiness: in active validation for Mistral-7B-Instruct-v0.3.Q8_0.gguf only; not supported yet. Exact tokenizer/template references plus 1-token, bounded-context, and broader 50-token parity evidence exist for the selected row, but API/WebUI readiness, RSS/timing, current-head promotion sync, and support-surface proof still block support",
+                notes: "public readiness: in active validation for Mistral-7B-Instruct-v0.3.Q8_0.gguf only; not supported yet. Exact tokenizer/template references plus 1-token, bounded-context, broader 50-token parity, checked 4096/8192 context, and fail-closed current-head API/WebUI/RSS evidence exist for the selected row, but support remains blocked until the unsupported contract is explicitly promoted and synchronized across support surfaces",
             },
             SupportItem {
                 id: "mixtral_moe",
@@ -1075,16 +1075,16 @@ fn capabilities_response() -> CapabilitiesResponse {
                 status: "active_validation_unsupported",
                 support_scope: "bringup_exact_row_unsupported",
                 full_support_status: "blocked_unsupported_bringup",
-                full_support_blockers: "API/WebUI readiness, RSS/timing, current-head promotion sync, scrubbed manifest posture, support-surface proof, and durable promotion bundle evidence remain incomplete; exact tokenizer/template references plus row-specific 1-token/bounded/broader parity evidence alone do not promote support",
+                full_support_blockers: "current evidence is fail-closed API/WebUI/RSS plus tokenizer/template/parity/context validation only; support promotion, synchronized public support surfaces, arbitrary/Jinja template coverage, production throughput, portability, and durable repeated promotion evidence remain incomplete",
                 metadata_parses: "target_selected",
                 tokenizer_works: "reference_pack_validated",
                 tensors_load: "ubuntu_load_serve_observed",
-                generation_runs: "one_token_and_bounded_parity_observed_not_promoted",
+                generation_runs: "one_token_bounded_broader_and_api_webui_smoke_observed_not_promoted",
                 parity_audited: "tokenizer_template_1tok_bounded_and_broader_parity_pass",
-                performance_measured: "not_promoted",
-                frontend_load_path_verified: "fail_closed_planned",
+                performance_measured: "rss_timing_fail_closed_current_head_observed_not_promoted",
+                frontend_load_path_verified: "fail_closed_api_webui_smoke_validated_not_supported",
                 frontend_readiness_gate: "fail-closed until an exact supported row plus runtime readiness exist",
-                tested_context: "one_token_plus_bounded_512_1024_2048_pack_evidence_not_promoted",
+                tested_context: "one_token_plus_bounded_512_1024_2048_and_checked_4096_8192_pack_evidence_not_promoted",
                 chat_template_renderer: "mistral_instruct",
                 chat_template_shape_pack: "reference_pack_validated",
                 chat_template_shape_pack_id: "mistral-instruct-v0.3-chat-template-pack-v1",
@@ -1100,14 +1100,14 @@ fn capabilities_response() -> CapabilitiesResponse {
                 bounded_context_4096_pack: "validated_bounded_pack_not_promoted",
                 bounded_context_4096_pack_id: "mistral-context-4096-max-ladder-v1",
                 bounded_context_4096_window: 4096,
-                bounded_context_8192_pack: "not_promoted",
-                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_pack: "validated_bounded_pack_not_promoted",
+                bounded_context_8192_pack_id: "mistral-context-8192-max-ladder-v1",
                 bounded_context_8192_window: 8192,
-                latest_checked_bucket: "broader_50tok_5prompt_ubuntu",
-                latest_checked_result: "prompt_generated_text_match_not_promoted",
-                latest_checked_output: "qa/evidence-bundles/mistral-7b-v0.3-q8-broader-50tok-ubuntu-20260509T000633Z-head-d330e97ae992/manifest.json",
-                evidence: "first exact-row closure target is Mistral-7B-Instruct-v0.3.Q8_0.gguf; exact tokenizer/template reference pack fixtures/tokenizer/mistral-7b-instruct-v0.3-reference-pack.json, 1-token parity qa/evidence-bundles/mistral-7b-v0.3-q8-1tok-parity-20260508T231906Z-head-5e989e61b6ba, bounded 512/1024/2048 parity qa/evidence-bundles/mistral-7b-v0.3-q8-context-512-1024-2048-ubuntu-20260508T203513Z-head-86ad5390d265, and broader 50-token parity qa/evidence-bundles/mistral-7b-v0.3-q8-broader-50tok-ubuntu-20260509T000633Z-head-d330e97ae992 exist for SHA 404857e776114baada71a08ebd3bba79d721ec7fca99705e7e7b892ae8bc583f, but the row remains unsupported and fail-closed with no Mistral support claim",
-                next_step: "run and publish a current-head promotion bundle that keeps the row fail-closed while proving API/WebUI readiness, RSS/timing, scrubbed manifests/checksums, and support-surface boundaries before any generation, API, or WebUI support claim",
+                latest_checked_bucket: "current_head_api_webui_rss_fail_closed",
+                latest_checked_result: "api_webui_rss_passed_but_contract_unsupported",
+                latest_checked_output: "qa/evidence-bundles/mistral-7b-v0.3-q8-api-webui-rss-current-head-20260513T1935Z-head-9a296ea/manifest.json",
+                evidence: "first exact-row closure target is Mistral-7B-Instruct-v0.3.Q8_0.gguf; exact tokenizer/template reference pack fixtures/tokenizer/mistral-7b-instruct-v0.3-reference-pack.json, 1-token parity qa/evidence-bundles/mistral-7b-v0.3-q8-1tok-parity-20260508T231906Z-head-5e989e61b6ba, bounded 512/1024/2048 parity qa/evidence-bundles/mistral-7b-v0.3-q8-context-512-1024-2048-ubuntu-20260508T203513Z-head-86ad5390d265, broader 50-token parity qa/evidence-bundles/mistral-7b-v0.3-q8-broader-50tok-ubuntu-20260509T000633Z-head-d330e97ae992, checked 4096/8192 context parity qa/evidence-bundles/mistral-7b-v0.3-q8-context-4096-8192-ubuntu-20260509T005229Z-head-9e3c64f2cfab, and fail-closed current-head API/WebUI/RSS evidence qa/evidence-bundles/mistral-7b-v0.3-q8-api-webui-rss-current-head-20260513T1935Z-head-9a296ea exist for SHA 404857e776114baada71a08ebd3bba79d721ec7fca99705e7e7b892ae8bc583f, but the row remains active_validation_unsupported with WebUI chat blocked and no Mistral support claim",
+                next_step: "synchronize the fail-closed API/WebUI/RSS evidence across public support surfaces, then require an explicit row-specific support-promotion change before any generation, API, WebUI, broad-family, or neighboring-row support claim",
             },
             ModelCompatibilityTarget {
                 id: "mixtral_8x7b_instruct_v0_1_q8_0",
@@ -4038,7 +4038,38 @@ mod tests {
         assert_eq!(mistral.status, "active_validation_unsupported");
         assert_eq!(mistral.support_scope, "bringup_exact_row_unsupported");
         assert_eq!(mistral.full_support_status, "blocked_unsupported_bringup");
+        assert_eq!(
+            mistral.frontend_load_path_verified,
+            "fail_closed_api_webui_smoke_validated_not_supported"
+        );
+        assert_eq!(
+            mistral.performance_measured,
+            "rss_timing_fail_closed_current_head_observed_not_promoted"
+        );
+        assert_eq!(
+            mistral.latest_checked_bucket,
+            "current_head_api_webui_rss_fail_closed"
+        );
+        assert_eq!(
+            mistral.latest_checked_result,
+            "api_webui_rss_passed_but_contract_unsupported"
+        );
+        assert!(mistral
+            .latest_checked_output
+            .contains("mistral-7b-v0.3-q8-api-webui-rss-current-head-20260513T1935Z"));
         assert!(mistral.frontend_readiness_gate.contains("fail-closed"));
+        assert_eq!(
+            mistral.bounded_context_8192_pack,
+            "validated_bounded_pack_not_promoted"
+        );
+        assert_eq!(
+            mistral.bounded_context_8192_pack_id,
+            "mistral-context-8192-max-ladder-v1"
+        );
+        assert!(mistral
+            .evidence
+            .contains("fail-closed current-head API/WebUI/RSS evidence"));
+        assert!(mistral.evidence.contains("WebUI chat blocked"));
         assert!(mistral.evidence.contains("no Mistral support claim"));
     }
 
