@@ -85,7 +85,7 @@ pub fn inspect_model_source(path: impl AsRef<Path>) -> Result<ModelSourceInspect
 
     Err(BackendError::InvalidModelMetadata(format!(
         "unsupported model source path {}; expected a .gguf file or local Hugging Face directory",
-        path.display()
+        public_path_label(path)
     )))
 }
 
@@ -686,6 +686,18 @@ mod tests {
         let inspection = inspect_model_source(&path).unwrap();
 
         assert_eq!(inspection.manifest.id, "TinyLlama-1.1B-Chat-v1.0.Q8_0");
+    }
+
+    #[test]
+    fn unsupported_source_file_error_uses_public_label_without_parent_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-model.bin");
+        fs::write(&path, b"").unwrap();
+
+        let err = inspect_model_source(&path).unwrap_err().to_string();
+
+        assert!(err.contains("not-a-model.bin"));
+        assert_public_blocker_message_without_local_path(&err, dir.path());
     }
 
     fn write_llama_config(root: &Path) {
