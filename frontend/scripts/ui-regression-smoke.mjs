@@ -135,6 +135,7 @@ assert.match(apiViewSource, /function summarizeExactRowField/, 'API support view
 assert.match(apiViewSource, /Exact-row quant evidence/, 'API support view should label quant evidence as exact-row scoped')
 assert.match(apiViewSource, /Exact-row family evidence/, 'API support view should label family evidence as exact-row scoped')
 assert.match(apiViewSource, /broad quant lists do not unlock chat/, 'API support view should not promote broad quant lists into chat readiness')
+assert.match(apiViewSource, /row-scoped family\/quant evidence/, 'API endpoint summary should describe family and quant evidence as row-scoped')
 assert.doesNotMatch(apiViewSource, /supported_quantization|planned_quantization|supported_model_families|planned_model_families|summarizeCapabilityItems/, 'API support view should not render non-row capability lists as support evidence')
 assert.match(apiViewSource, /No exact compatibility row matched this selected model/, 'API selected model contract should fail closed instead of displaying family or saved-path guesses')
 assert.match(apiViewSource, /displayCapabilityCopy\(selectedCompatibilityTarget\.evidence\)/, 'API support view should sanitize and display exact-row evidence copy')

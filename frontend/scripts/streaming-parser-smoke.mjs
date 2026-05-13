@@ -81,6 +81,31 @@ assert.ok(streamEvents.includes('bytes'), 'stream parser should expose first-byt
 assert.ok(streamEvents.includes('role'), 'stream parser should expose role-only chunks while waiting for first content token')
 assert.ok(streamEvents.includes('usage'), 'stream parser should expose backend usage chunks before finalizing the assistant row')
 
+const multilinePayload = await readStreamingChatCompletion(new Response(streamFromChunks([
+  'data: {"choices":[{"delta":{"content":"multi"}}],\n',
+  'data: "usage":{"completion_tokens":4}}\n\n',
+  'data: [DONE]\n\n',
+]), {
+  status: 200,
+  headers: { 'content-type': 'text/event-stream' },
+}), () => {})
+assert.equal(multilinePayload.content, 'multi', 'SSE parser should join multi-line data payloads before parsing JSON')
+assert.equal(multilinePayload.completionTokens, 4, 'SSE parser should preserve usage from joined multi-line data payloads')
+
+const batchedPayloadDeltas = []
+const batchedPayload = await readStreamingChatCompletion(new Response(streamFromChunks([
+  'data: {"choices":[{"delta":{"content":"batch"}}]}\n',
+  'data: {"choices":[{"delta":{"content":"ed"}}]}\n\n',
+  'data: [DONE]\n\n',
+]), {
+  status: 200,
+  headers: { 'content-type': 'text/event-stream' },
+}), (_delta, fullContent) => {
+  batchedPayloadDeltas.push(fullContent)
+})
+assert.equal(batchedPayload.content, 'batched', 'SSE parser should keep accepting backend batches with several JSON payloads in one event')
+assert.deepEqual(batchedPayloadDeltas, ['batch', 'batched'], 'batched payloads should still stream each visible update')
+
 const partialBeforeError = []
 const errorEvents = []
 await assert.rejects(

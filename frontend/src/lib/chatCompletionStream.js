@@ -22,6 +22,22 @@ function readSseDataLines(eventText) {
     .map((line) => line.slice(5).trimStart())
 }
 
+function readSsePayloads(eventText, { errorEvent = false } = {}) {
+  const dataLines = readSseDataLines(eventText)
+  if (dataLines.length <= 1) return dataLines
+
+  // SSE allows one logical payload to be split across several `data:` lines.
+  // Prefer the spec-compliant joined payload when it parses, but keep accepting
+  // backend batches that place several complete JSON payloads in one event.
+  const joinedPayload = dataLines.join('\n')
+  try {
+    JSON.parse(joinedPayload)
+    return [joinedPayload]
+  } catch {
+    return errorEvent ? [joinedPayload] : dataLines
+  }
+}
+
 function isSseErrorEvent(eventText) {
   return String(eventText || '')
     .replace(/\r\n/g, '\n')
@@ -98,8 +114,9 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
   const consumeEvent = (eventText) => {
     const dataLines = readSseDataLines(eventText)
     const errorEvent = isSseErrorEvent(eventText)
+    const payloads = readSsePayloads(eventText, { errorEvent })
     if (dataLines.length && firstEventMs === null) firstEventMs = performance.now() - streamStartedAt
-    for (const data of dataLines) {
+    for (const data of payloads) {
       if (!data) continue
       if (data === '[DONE]') {
         onStreamEvent?.({ type: 'done', ...streamMetrics() })
@@ -116,11 +133,6 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
         onStreamEvent?.({ type: 'error', error: chunk?.error || chunk, ...streamMetrics() })
         throw makeStreamPayloadError(chunk)
       }
-      if (chunk?.usage && typeof chunk.usage === 'object') {
-        usage = chunk.usage
-        if (Number.isFinite(Number(usage.completion_tokens))) completionTokens = Number(usage.completion_tokens)
-        onStreamEvent?.({ type: 'usage', usage, ...streamMetrics() })
-      }
       const choice = chunk?.choices?.[0]
       const role = choice?.delta?.role ?? null
       const delta = choice?.delta?.content ?? choice?.text ?? ''
@@ -136,6 +148,11 @@ export async function readStreamingChatCompletion(response, onDelta, { estimateT
       if (choice?.finish_reason) {
         finishReason = choice.finish_reason
         onStreamEvent?.({ type: 'finish', finishReason, ...streamMetrics() })
+      }
+      if (chunk?.usage && typeof chunk.usage === 'object') {
+        usage = chunk.usage
+        if (Number.isFinite(Number(usage.completion_tokens))) completionTokens = Number(usage.completion_tokens)
+        onStreamEvent?.({ type: 'usage', usage, ...streamMetrics() })
       }
     }
   }

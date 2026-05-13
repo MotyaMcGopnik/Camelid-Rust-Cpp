@@ -85,7 +85,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
           <div className="api-card">
             <strong>Capabilities</strong>
             <code>{apiBase ? `${apiBase}/api/capabilities` : 'Unavailable until the local API is running'}</code>
-            <p>Support contract for model families, quants, compatibility rows, API feature support, and typed guardrails.</p>
+            <p>Support contract for exact compatibility rows, row-scoped family/quant evidence, API feature support, and typed guardrails.</p>
           </div>
           <div className="api-card wide api-card-code">
             <strong>Readiness-gated curl</strong>
