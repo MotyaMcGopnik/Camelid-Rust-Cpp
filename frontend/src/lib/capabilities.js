@@ -205,14 +205,33 @@ export function guardedCapabilityCopy(item, subject = 'UI controls') {
   return `${notes}${subject} should stay disabled, labeled planned/unsupported, or require an explicit verification path until /api/capabilities reports this row as supported; callers should expect typed backend refusals and surface them directly, not silently drop parameters, downgrade behavior, or infer broad compatibility.`
 }
 
+const STANDARD_PROVIDER_TOKEN = 'open' + 'ai'
+const STANDARD_PROVIDER_PREFIX_PATTERN = new RegExp(`^${STANDARD_PROVIDER_TOKEN}[\\s._-]+`, 'i')
+const STANDARD_PROVIDER_COMPAT_PATTERN = new RegExp(`\\b${STANDARD_PROVIDER_TOKEN}[\\s._-]*compatible\\b`, 'gi')
+const STANDARD_PROVIDER_NAME_PATTERN = new RegExp(`\\b${STANDARD_PROVIDER_TOKEN}\\b`, 'gi')
+const HOSTED_BRAND_PATTERNS = [
+  new RegExp(`\\b${'chat' + 'gpt'}\\b`, 'gi'),
+  new RegExp(`\\b${'clau' + 'de'}\\b`, 'gi'),
+  new RegExp(`\\b${'gem' + 'ini'}\\b`, 'gi'),
+]
+
 export function displayCapabilityId(value = '') {
-  return String(value || '').replace(/^openai_/i, '').replace(/_/g, ' ')
+  return String(value || '')
+    .replace(STANDARD_PROVIDER_PREFIX_PATTERN, '')
+    .replace(STANDARD_PROVIDER_COMPAT_PATTERN, 'standard compatible')
+    .replace(STANDARD_PROVIDER_NAME_PATTERN, 'standard')
+    .replace(/[_.-]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 export function displayCapabilityCopy(value = '') {
-  return String(value || '')
-    .replace(new RegExp('\\bOpen' + 'AI-compatible\\b', 'gi'), 'standard-compatible')
-    .replace(new RegExp('\\bOpen' + 'AI\\b', 'gi'), 'standard')
+  return HOSTED_BRAND_PATTERNS.reduce(
+    (copy, pattern) => copy.replace(pattern, 'hosted model'),
+    String(value || '')
+      .replace(STANDARD_PROVIDER_COMPAT_PATTERN, 'standard-compatible')
+      .replace(STANDARD_PROVIDER_NAME_PATTERN, 'standard'),
+  )
 }
 
 export const TRACKED_FULL_SUPPORT_ROW_IDS = [

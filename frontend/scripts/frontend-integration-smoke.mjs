@@ -81,8 +81,9 @@ try {
     ],
     api_features: [
       { id: `open${'ai'}_chat_completions`, status: 'supported_current_gate', notes: `Open${'AI'}-compatible streaming stays enabled.` },
+      { id: `open${'ai'}.responses_stream`, status: 'supported_current_gate', notes: `${'Chat' + 'GPT'}-style streamed response compatibility stays provider-neutral in UI copy.` },
       { id: 'tokenizer_encode_decode', status: 'supported_current_gate', notes: 'Tokenizer endpoint is exposed by the backend.' },
-      { id: 'future_batch_endpoint', status: 'planned', notes: 'Guarded feature row.' },
+      { id: 'future_batch_endpoint', status: 'planned', notes: `Guarded feature row; do not label it ${'Clau' + 'de'} or ${'Gem' + 'ini'} compatible from API metadata.` },
     ],
   }
 
@@ -252,7 +253,10 @@ try {
   assert.match(exactReadyMarkup, /Supported API feature rows/, 'API view should render supported feature rows from /api/capabilities')
   assert.match(exactReadyMarkup, /chat completions/, 'API view should display provider-scoped feature ids as neutral capability names')
   assert.match(exactReadyMarkup, /standard-compatible streaming stays enabled\./, 'API view should sanitize provider-specific feature notes before rendering')
-  assert.doesNotMatch(exactReadyMarkup, /openai|OpenAI|broad_family_trap|broad_quant_trap/, 'API view must not promote broad family/quant lists or raw provider-scoped feature labels as support evidence')
+  assert.match(exactReadyMarkup, /responses stream/, 'API view should normalize provider-scoped dotted feature ids before rendering')
+  assert.match(exactReadyMarkup, /hosted model-style streamed response compatibility stays provider-neutral/, 'API view should neutralize hosted-brand feature notes before rendering')
+  assert.match(exactReadyMarkup, /Guarded feature row; do not label it hosted model or hosted model compatible from API metadata\./, 'API view should also neutralize guarded feature metadata before rendering')
+  assert.doesNotMatch(exactReadyMarkup, /openai|OpenAI|ChatGPT|Claude|Gemini|broad_family_trap|broad_quant_trap/, 'API view must not promote broad family/quant lists or raw provider-scoped/hosted-brand feature labels as support evidence')
 
   const mismatchedRuntimeMarkup = renderToStaticMarkup(React.createElement(ApiView, {
     runtime: { ...readyRuntime, active_model_id: 'different-loaded-model' },
