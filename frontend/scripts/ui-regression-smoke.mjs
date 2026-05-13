@@ -83,7 +83,7 @@ assert.match(chatWorkspaceSource, /preRef\.current/, 'streaming code cards shoul
 assert.match(chatWorkspaceSource, /pre\.scrollTop\s*=\s*pre\.scrollHeight/, 'streaming code cards should follow the bottom of growing code')
 assert.match(chatWorkspaceSource, /distanceFromBottom\s*<\s*80/, 'code-card auto-scroll should stop if the user scrolls away from the code tail')
 assert.match(chatWorkspaceSource, /PREPARING_STREAMING_LABEL\s*=\s*'Preparing local response'/, 'pre-token pending rows should keep concise local-stream status copy')
-assert.match(chatWorkspaceSource, /FIRST_TOKEN_STREAMING_LABEL\s*=\s*'Waiting for first token'/, 'pre-token pending rows should keep concise first-token status copy')
+assert.match(chatWorkspaceSource, /FIRST_TOKEN_STREAMING_LABEL\s*=\s*'Backend is generating'/, 'pre-token pending rows should keep concise backend-generation status copy')
 assert.match(chatWorkspaceSource, /LONG_FIRST_TOKEN_STREAMING_LABEL\s*=\s*'Local response is taking a while'/, 'long pre-token waits should keep a concise accessible explanation')
 assert.match(chatWorkspaceSource, /aria-busy=\{assistantStreaming \? 'true' : undefined\}/, 'streaming assistant rows should expose row-level busy state while text is incomplete')
 assert.match(chatWorkspaceSource, /data-streaming-state=\{assistantStreaming \? 'active' : undefined\}/, 'streaming assistant rows should expose an active state marker for regression coverage')
