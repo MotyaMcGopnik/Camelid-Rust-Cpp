@@ -9167,7 +9167,7 @@ mod tests {
         LlamaForwardMemoryTimings::new(
             start,
             LlamaWeightMaterializationStats::default(),
-            Q8_0FileReadStats::default(),
+            q8_0_file_read_stats(),
         )
     }
 

@@ -45,6 +45,7 @@ const LAZY_Q8_LINEAR_ENV: &str = "CAMELID_LAZY_Q8_0_LINEAR";
 const METADATA_CHAT_TEMPLATE_ENV: &str = "CAMELID_METADATA_CHAT_TEMPLATE";
 const GENERATION_TIMEOUT_ENV: &str = "CAMELID_GENERATION_TIMEOUT_MS";
 const DEFAULT_GENERATION_TIMEOUT_MS: u64 = 15 * 60 * 1000;
+const DEFAULT_PUBLIC_CHAT_MAX_TOKENS: u32 = 800;
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -347,6 +348,8 @@ pub struct GenerationSessionRequest {
     pub camelid_logit_token_ids: Option<Vec<u32>>,
     pub camelid_prompt_token_ids: Option<Vec<u32>>,
     pub camelid_dense_diagnostics: Option<bool>,
+    #[serde(default, skip_deserializing)]
+    default_max_tokens_cap: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1517,6 +1520,7 @@ async fn completions(
         camelid_logit_token_ids: req.camelid_logit_token_ids,
         camelid_prompt_token_ids: req.camelid_prompt_token_ids,
         camelid_dense_diagnostics: req.camelid_dense_diagnostics,
+        default_max_tokens_cap: None,
     };
     let stream = req.stream.unwrap_or(false);
     let prepared = match prepare_generation(&state, req).await {
@@ -1575,7 +1579,7 @@ async fn completions(
             )
                 .into_response()
         }
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -1609,6 +1613,7 @@ async fn chat_completions(
         camelid_logit_token_ids: req.camelid_logit_token_ids,
         camelid_prompt_token_ids: None,
         camelid_dense_diagnostics: req.camelid_dense_diagnostics,
+        default_max_tokens_cap: Some(DEFAULT_PUBLIC_CHAT_MAX_TOKENS),
     };
     let stream = req.stream.unwrap_or(false);
     let prepared = match prepare_generation(&state, req).await {
@@ -1655,7 +1660,7 @@ async fn chat_completions(
             }),
         )
             .into_response(),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -2080,7 +2085,11 @@ async fn prepare_generation(
     }
 
     let available_max_tokens = (context_length - token_ids.len()) as u32;
-    let max_tokens = requested_max_tokens.unwrap_or(available_max_tokens);
+    let max_tokens = requested_max_tokens.unwrap_or_else(|| {
+        req.default_max_tokens_cap
+            .map(|cap| cap.min(available_max_tokens))
+            .unwrap_or(available_max_tokens)
+    });
 
     let weight_load_started = Instant::now();
     let cached_weights = state.cached_weights.read().await.clone();
@@ -2497,20 +2506,18 @@ fn parse_logit_bias(
 
 async fn generate_decoded_tokens_blocking(
     prepared: PreparedGeneration,
-) -> std::result::Result<GeneratedText, Response> {
+) -> std::result::Result<GeneratedText, Box<Response>> {
     let timeout = generation_timeout_duration()?;
-    let handle = tokio::task::spawn_blocking(move || {
-        generate_decoded_tokens(prepared).map_err(|response| *response)
-    });
+    let handle = tokio::task::spawn_blocking(move || generate_decoded_tokens(prepared));
     match tokio::time::timeout(timeout, handle).await {
         Ok(Ok(result)) => result,
-        Ok(Err(err)) => Err(api_error(
+        Ok(Err(err)) => Err(Box::new(api_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "generation_worker_failed",
             format!("generation worker failed before completing the request: {err}"),
             None,
-        )),
-        Err(_) => Err(api_error(
+        ))),
+        Err(_) => Err(Box::new(api_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "generation_timeout",
             format!(
@@ -2518,23 +2525,23 @@ async fn generate_decoded_tokens_blocking(
                 timeout.as_millis()
             ),
             Some("max_tokens"),
-        )),
+        ))),
     }
 }
 
-fn generation_timeout_duration() -> std::result::Result<Duration, Response> {
+fn generation_timeout_duration() -> std::result::Result<Duration, Box<Response>> {
     match env::var(GENERATION_TIMEOUT_ENV) {
         Ok(value) if value.trim().is_empty() => {
             Ok(Duration::from_millis(DEFAULT_GENERATION_TIMEOUT_MS))
         }
         Ok(value) => {
             let millis = value.trim().parse::<u64>().map_err(|err| {
-                api_error(
+                Box::new(api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "invalid_generation_timeout",
                     format!("invalid {GENERATION_TIMEOUT_ENV} {value:?}: {err}"),
                     None,
-                )
+                ))
             })?;
             if millis == 0 {
                 Ok(Duration::from_millis(u64::MAX))
@@ -2543,12 +2550,12 @@ fn generation_timeout_duration() -> std::result::Result<Duration, Response> {
             }
         }
         Err(env::VarError::NotPresent) => Ok(Duration::from_millis(DEFAULT_GENERATION_TIMEOUT_MS)),
-        Err(err) => Err(api_error(
+        Err(err) => Err(Box::new(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "invalid_generation_timeout",
             format!("invalid {GENERATION_TIMEOUT_ENV}: {err}"),
             None,
-        )),
+        ))),
     }
 }
 
@@ -3382,7 +3389,7 @@ fn normalize_mistral_instruct_bos_prefix_tokens(
         && rendered_prompt
             .text
             .starts_with(&format!("{bos_text}[INST]"))
-        && token_ids.get(0) == Some(&bos_id)
+        && token_ids.first() == Some(&bos_id)
         && token_ids.get(1) == Some(&space_id)
     {
         token_ids.remove(1);
