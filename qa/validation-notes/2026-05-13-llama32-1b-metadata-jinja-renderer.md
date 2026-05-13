@@ -29,3 +29,36 @@ Known blockers / not promoted:
 
 - No new 4096/8192 model-runtime parity bundle was captured in this slice; the row continues to rely on the existing checked 4096 and 8192 compact-template context bundles cited in `STATUS.md`/`COMPATIBILITY.md`.
 - This slice does not promote arbitrary-template, broad Llama-family, neighboring-row, production-throughput, portability, or full-support claims.
+
+## 2026-05-13 22:53 UTC TPM follow-up on current `main`
+
+Current-head audit: local `main` was `d15581beda28b4e37fc2871a4d2f4287bd75a436`; the working tree already contained unrelated edits in `src/inference.rs`, `src/main.rs`, and `src/metal.rs`, so this slice did not modify them. Cron/process health showed no active Camelid backend/cron runner locally.
+
+Additional validation artifacts are under `target/cron-0719640b-20260513T2253Z-tpm-jinja-1b-current-head/`:
+
+- `cargo-test-metadata-jinja.log`: 12/12 focused metadata-Jinja renderer tests passed on current head, including exact-row system+user, user-only, multi-turn, assistant-final/continuation, non-exact fallback, opt-in generic Jinja loop, no-BOS-template, and `raise_exception`/no-silent-fallback cases.
+- `cargo-test-exact-llama32-1b.log`: 5/5 exact Llama 3.2 1B row renderer tests passed.
+- `cargo-test-capabilities-llama32-boundaries.log` and `cargo-test-api-vertical-capabilities-contract.log`: API capability gates passed for the exact 1B metadata-Jinja renderer surface plus 512/1024/2048/4096/8192 bounded pack fields.
+- `frontend-smoke-model-state-after-fixture-update.log` and `frontend-build-after-fixture-update.log`: frontend model-state smoke and Vite production build passed after updating the smoke fixture to enforce the 1B 4096/8192 boundary and latest `CMLD-819` surface.
+- Canonical Ubuntu host validation was attempted with a clean current-head source archive at `/home/ubuntu/work/camelid-tpm-jinja-d15581b-20260513T2258Z`, but a fresh build failed with `No space left on device`; the attempted tree was removed. As a fallback, the existing near-head Ubuntu Jinja lane `/home/ubuntu/work/camelid-jinja-supported-1b-20260513T2240Z-head-1ae5e9a17aaf` passed the focused metadata-Jinja/exact-row tests from its compiled target cache (`remote-existing-cargo-test-jinja-exact-1ae5.log`). Treat local current-head tests as the authoritative current-head evidence for this follow-up; the Ubuntu fallback is portability signal only, not a fresh current-head runtime promotion.
+
+No new model-runtime 4096/8192 bundle was produced in this follow-up. The 1B row continues to cite the existing bounded compact-template runtime bundles in `STATUS.md`: 4096 at `qa/evidence-bundles/llama32-1b-context-4096-current-head-20260513T163426Z-head-470388f/manifest.json` and 8192 at `qa/evidence-bundles/llama32-1b-context-8192-current-head-20260513T183501Z-head-aaf9207d1669/manifest.json`.
+
+## 2026-05-13 23:02 UTC backend resume on current `main`
+
+Current-head audit: local `main` started at `d15581beda28b4e37fc2871a4d2f4287bd75a436` with pending runtime/frontend-gate edits in `src/inference.rs`, `src/main.rs`, `src/metal.rs`, and `frontend/scripts/model-state-smoke.mjs`. This resume preserved the committed exact-row metadata-Jinja renderer and validated it together with the pending 1B support-gate surface updates.
+
+Validation artifacts are under `target/cron-58d09b5e-20260513T2302Z-backend-resume-head-d15581beda28/`:
+
+- `repo-audit.txt`: recorded branch/head and the pre-validation dirty working tree.
+- `cargo-fmt-check.log`: formatting passed.
+- `cargo-test-metadata-jinja-renderer.log`: 12/12 focused metadata-Jinja tests passed, covering system+user, user-only, multi-turn, assistant-final/continuation, non-exact fallback, opt-in loop templates, no-BOS templates, and explicit unsupported `raise_exception(...)` behavior.
+- `cargo-test-exact-llama32-1b.log`: 5/5 exact Llama 3.2 1B required-renderer tests passed.
+- `cargo-test-api-vertical-capabilities-contract.log`: API capabilities contract passed for the current exact-row bounded-pack/support surface.
+- `cargo-test-metal-q8.log`: macOS Metal Q8_0 focused kernels passed, including the new multi-row encoded Q8_0 kernel parity check.
+- `cargo-clippy-all-targets-all-features.log`: clippy passed with `-D warnings`.
+- `cargo-test-all-targets-all-features.log`: full Rust test suite passed.
+- `frontend-smoke-model-state.log` and `frontend-build.log`: frontend support-surface smoke and production build passed.
+- `ubuntu-readiness.log`: canonical Ubuntu host `54.186.43.33` remains blocked for fresh current-head validation because `/` is 100% full with about 297 MiB available and the default Rust toolchain is 1.75.0. No fresh remote build was attempted in this resume.
+
+This resume still does not promote arbitrary templates, neighboring rows, model-native/larger contexts beyond the checked 512/1024/2048/4096/8192 packs for the exact 1B row, production throughput, portability, or full Llama-family support.

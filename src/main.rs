@@ -713,6 +713,18 @@ fn log_acceleration_state() {
             .ok()
             .as_deref()
             .unwrap_or("off"),
+        hybrid_q8_retained = std::env::var("CAMELID_HYBRID_Q8_RETAINED")
+            .ok()
+            .as_deref()
+            .unwrap_or(if cfg!(target_os = "macos") {
+                "auto"
+            } else {
+                "off"
+            }),
+        hybrid_q8_gpu_percent = std::env::var("CAMELID_HYBRID_Q8_GPU_PERCENT")
+            .ok()
+            .as_deref()
+            .unwrap_or("default(5)"),
         metal_available = metal.available,
         metal_device = metal.device_name.as_deref().unwrap_or("none"),
         metal_note = metal.note.as_deref().unwrap_or(""),

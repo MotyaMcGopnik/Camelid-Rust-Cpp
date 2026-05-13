@@ -6114,6 +6114,72 @@ fn q8_0_metal_retained_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn q8_0_hybrid_retained_enabled() -> bool {
+    match env::var("CAMELID_HYBRID_Q8_RETAINED") {
+        Ok(value) => {
+            let value = value.trim();
+            !(value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled")
+                || value.eq_ignore_ascii_case("cpu"))
+        }
+        // On macOS, retained Q8_0 is Camelid's fast local path. Enable the hybrid
+        // scheduler by default with a small GPU slice; the Metal call falls back to
+        // CPU automatically if Metal is unavailable or rejects the shape.
+        Err(env::VarError::NotPresent) => cfg!(target_os = "macos"),
+        Err(_) => cfg!(target_os = "macos"),
+    }
+}
+
+fn q8_0_metal_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var("CAMELID_TRACE_Q8_METAL")
+            .map(|value| {
+                let value = value.trim();
+                value.eq_ignore_ascii_case("1")
+                    || value.eq_ignore_ascii_case("true")
+                    || value.eq_ignore_ascii_case("on")
+                    || value.eq_ignore_ascii_case("enabled")
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn trace_q8_0_hybrid_retained_success(cpu_rows: usize, gpu_rows: usize, blocks_per_row: usize) {
+    if !q8_0_metal_trace_enabled() {
+        return;
+    }
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if count <= 8 || count.is_multiple_of(100) {
+        eprintln!(
+            "camelid_q8_metal_trace path=hybrid_retained success_count={count} cpu_rows={cpu_rows} gpu_rows={gpu_rows} blocks_per_row={blocks_per_row}"
+        );
+    }
+}
+
+fn q8_0_hybrid_retained_gpu_rows(output_rows: usize) -> usize {
+    if output_rows < 2 {
+        return 0;
+    }
+    if let Ok(value) = env::var("CAMELID_HYBRID_Q8_GPU_ROWS") {
+        if let Ok(rows) = value.trim().parse::<usize>() {
+            return rows.min(output_rows.saturating_sub(1));
+        }
+    }
+    let percent = env::var("CAMELID_HYBRID_Q8_GPU_PERCENT")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(5)
+        .min(90);
+    ((output_rows * percent).div_ceil(100))
+        .max(1)
+        .min(output_rows.saturating_sub(1))
+}
+
 fn auto_retain_q8_0_blocks_for_fast_local_chat(binding: &LlamaTensorBinding) -> bool {
     const DEFAULT_FAST_RETAINED_Q8_0_MAX_BYTES: usize = 6 * 1024 * 1024 * 1024;
 
@@ -6671,33 +6737,52 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             )
                         })?;
                         with_q8_0_file_reader_output_chunk(scratch_len, |output_chunk_scratch| {
-                            output_chunk_scratch
-                                .par_chunks_mut(rows)
-                                .zip(chunk.par_chunks_exact(row_bytes_len))
-                                .zip(scales.par_chunks_exact(blocks_per_row))
-                                .for_each(|((column_outputs, row_bytes), row_scales)| {
-                                    for (row_idx, out_value) in
-                                        column_outputs.iter_mut().enumerate()
-                                    {
-                                        let row_start = row_idx * input_width;
-                                        let row_end = row_start + input_width;
-                                        *out_value = if use_q8_0_block_dot {
-                                            let block_start = row_idx * blocks_per_row;
-                                            let block_end = block_start + blocks_per_row;
-                                            dot_q8_0_encoded_row_quantized_input_with_scales(
-                                                &quantized_input_blocks[block_start..block_end],
-                                                row_bytes,
-                                                row_scales,
-                                            )
-                                        } else {
-                                            dot_q8_0_encoded_row_f32_input_with_scales(
-                                                &input.data[row_start..row_end],
-                                                row_bytes,
-                                                row_scales,
-                                            )
-                                        };
-                                    }
-                                });
+                            let completed_with_metal = if use_q8_0_block_dot && q8_0_metal_enabled()
+                            {
+                                let (input_scales, input_quants) =
+                                    q8_0_block_scales_and_quants(quantized_input_blocks);
+                                metal::try_q8_0_encoded_linear_rows(
+                                    &input_scales,
+                                    &input_quants,
+                                    chunk,
+                                    scales,
+                                    rows,
+                                    rows_this_chunk,
+                                    blocks_per_row,
+                                    output_chunk_scratch,
+                                )
+                            } else {
+                                false
+                            };
+                            if !completed_with_metal {
+                                output_chunk_scratch
+                                    .par_chunks_mut(rows)
+                                    .zip(chunk.par_chunks_exact(row_bytes_len))
+                                    .zip(scales.par_chunks_exact(blocks_per_row))
+                                    .for_each(|((column_outputs, row_bytes), row_scales)| {
+                                        for (row_idx, out_value) in
+                                            column_outputs.iter_mut().enumerate()
+                                        {
+                                            let row_start = row_idx * input_width;
+                                            let row_end = row_start + input_width;
+                                            *out_value = if use_q8_0_block_dot {
+                                                let block_start = row_idx * blocks_per_row;
+                                                let block_end = block_start + blocks_per_row;
+                                                dot_q8_0_encoded_row_quantized_input_with_scales(
+                                                    &quantized_input_blocks[block_start..block_end],
+                                                    row_bytes,
+                                                    row_scales,
+                                                )
+                                            } else {
+                                                dot_q8_0_encoded_row_f32_input_with_scales(
+                                                    &input.data[row_start..row_end],
+                                                    row_bytes,
+                                                    row_scales,
+                                                )
+                                            };
+                                        }
+                                    });
+                            }
                             for (row, output_row) in
                                 output_rows.chunks_mut(output_width).enumerate()
                             {
@@ -7705,6 +7790,60 @@ fn accumulate_transposed_linear_row_q8_0_block_dot_quantized(
     let weight_blocks = weight
         .q8_0_blocks
         .expect("q8_0 block-dot precondition checked");
+    debug_assert_eq!(weight_blocks.len(), output.len() * blocks_per_row);
+    if q8_0_hybrid_retained_enabled() {
+        let gpu_rows = q8_0_hybrid_retained_gpu_rows(output.len());
+        if gpu_rows > 0 && gpu_rows < output.len() {
+            let cpu_rows = output.len() - gpu_rows;
+            let gpu_block_start = cpu_rows * blocks_per_row;
+            let (cpu_output, gpu_output) = output.split_at_mut(cpu_rows);
+            let cpu_weight_blocks = &weight_blocks[..gpu_block_start];
+            let gpu_weight_blocks = &weight_blocks[gpu_block_start..];
+            let (input_scales, input_quants) = q8_0_block_scales_and_quants(quantized_input);
+            let gpu_weight_bytes = q8_0_blocks_as_bytes(gpu_weight_blocks);
+            if metal::try_q8_0_block_linear_row_with_cpu(
+                &input_scales,
+                &input_quants,
+                gpu_weight_bytes,
+                gpu_rows,
+                blocks_per_row,
+                gpu_output,
+                || {
+                    accumulate_q8_0_block_dot_quantized_cpu(
+                        quantized_input,
+                        cpu_weight_blocks,
+                        cpu_output,
+                    )
+                },
+            ) {
+                trace_q8_0_hybrid_retained_success(cpu_rows, gpu_rows, blocks_per_row);
+                return;
+            }
+        }
+    }
+    if q8_0_metal_retained_enabled() {
+        let (input_scales, input_quants) = q8_0_block_scales_and_quants(quantized_input);
+        let weight_bytes = q8_0_blocks_as_bytes(weight_blocks);
+        if metal::try_q8_0_block_linear_row(
+            &input_scales,
+            &input_quants,
+            weight_bytes,
+            output.len(),
+            blocks_per_row,
+            output,
+        ) {
+            return;
+        }
+    }
+    accumulate_q8_0_block_dot_quantized_cpu(quantized_input, weight_blocks, output);
+}
+
+fn accumulate_q8_0_block_dot_quantized_cpu(
+    quantized_input: &[Q8_0Block],
+    weight_blocks: &[Q8_0Block],
+    output: &mut [f32],
+) {
+    let blocks_per_row = quantized_input.len();
     debug_assert_eq!(weight_blocks.len(), output.len() * blocks_per_row);
     if should_parallelize_linear_output(output.len()) {
         output
