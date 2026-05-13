@@ -15,6 +15,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use minijinja::{context, Environment, Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -3412,6 +3413,12 @@ struct RenderedPrompt {
     parse_special: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct ChatTemplateMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
 fn normalize_mistral_instruct_bos_prefix_tokens(
     token_ids: &mut Vec<u32>,
     rendered_prompt: &RenderedPrompt,
@@ -3443,8 +3450,8 @@ fn render_chat_prompt_for_tokenization(
 ) -> RenderedPrompt {
     if let Some(template) = tokenizer.chat_template.as_deref() {
         if metadata_chat_template_enabled() {
-            if let Some(rendered) =
-                render_llama3_metadata_subset_prompt(messages, tokenizer, template)
+            if let Ok(rendered) =
+                render_metadata_jinja_chat_template_prompt(messages, tokenizer, template)
             {
                 return rendered;
             }
@@ -3522,31 +3529,71 @@ fn metadata_chat_template_enabled() -> bool {
     )
 }
 
-fn render_llama3_metadata_subset_prompt(
+fn render_metadata_jinja_chat_template_prompt(
     messages: &[ChatMessage],
     tokenizer: &Tokenizer,
     template: &str,
-) -> Option<RenderedPrompt> {
-    if !is_llama3_instruct_template(template) || !template.contains("bos_token") {
-        return None;
-    }
-    let bos = tokenizer.token_text(tokenizer.special.bos)?;
-    let trim_content = template.contains("| trim") || template.contains(".strip()");
-    let append_generation_prompt = template.contains("add_generation_prompt");
-    let mut prompt = String::new();
-    prompt.push_str(bos);
-    prompt.push_str(&render_llama3_instruct_prompt_with_options(
-        messages,
-        trim_content,
-        append_generation_prompt,
-    ));
-    Some(RenderedPrompt {
-        text: prompt,
-        // The metadata template already emitted bos_token as text. With parse_special=true
-        // it becomes the same control token without duplicating the tokenizer-level BOS.
-        add_special: false,
+) -> std::result::Result<RenderedPrompt, MiniJinjaError> {
+    let rendered = render_jinja_chat_template(messages, tokenizer, template)?;
+    Ok(RenderedPrompt {
+        add_special: !rendered_prompt_starts_with_token_text(
+            &rendered,
+            tokenizer.special.bos,
+            tokenizer,
+        ),
+        text: rendered,
         parse_special: tokenizer.chat_prompt_parse_special(),
     })
+}
+
+fn render_jinja_chat_template(
+    messages: &[ChatMessage],
+    tokenizer: &Tokenizer,
+    template: &str,
+) -> std::result::Result<String, MiniJinjaError> {
+    let template_messages = messages
+        .iter()
+        .map(|message| ChatTemplateMessage {
+            role: message.role.trim(),
+            content: message.content.as_str(),
+        })
+        .collect::<Vec<_>>();
+    let bos_token = tokenizer.token_text(tokenizer.special.bos).unwrap_or("");
+    let eos_token = tokenizer.token_text(tokenizer.special.eos).unwrap_or("");
+    let eot_token = tokenizer.token_text(tokenizer.special.eot).unwrap_or("");
+    let eom_token = tokenizer.token_text(tokenizer.special.eom).unwrap_or("");
+    let unk_token = tokenizer.token_text(tokenizer.special.unk).unwrap_or("");
+
+    let mut env = Environment::new();
+    env.add_function(
+        "raise_exception",
+        |message: String| -> std::result::Result<String, MiniJinjaError> {
+            Err(MiniJinjaError::new(
+                MiniJinjaErrorKind::InvalidOperation,
+                message,
+            ))
+        },
+    );
+    let compiled = env.template_from_str(template)?;
+    compiled.render(context! {
+        messages => template_messages,
+        bos_token => bos_token,
+        eos_token => eos_token,
+        eot_token => eot_token,
+        eom_token => eom_token,
+        unk_token => unk_token,
+        add_generation_prompt => true,
+    })
+}
+
+fn rendered_prompt_starts_with_token_text(
+    rendered: &str,
+    token_id: Option<u32>,
+    tokenizer: &Tokenizer,
+) -> bool {
+    tokenizer
+        .token_text(token_id)
+        .is_some_and(|token_text| !token_text.is_empty() && rendered.starts_with(token_text))
 }
 
 fn render_tinyllama_marker_prompt(messages: &[ChatMessage], tokenizer: &Tokenizer) -> String {
@@ -4412,6 +4459,8 @@ mod tests {
 
     #[test]
     fn renders_tinyllama_marker_prompt_with_eos_newline_and_assistant_prefix() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = Tokenizer {
             model: TokenizerModel::LlamaSpm,
             tokens: vec![
@@ -4467,6 +4516,8 @@ mod tests {
     }
     #[test]
     fn renders_llama3_instruct_prompt_with_header_tokens_and_special_parsing() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = Tokenizer {
             model: TokenizerModel::Gpt2Bpe,
             tokens: Vec::new(),
@@ -4506,6 +4557,8 @@ mod tests {
 
     #[test]
     fn renders_llama3_instruct_prompt_with_system_and_multi_turn_messages() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = llama3_test_tokenizer();
 
         assert_eq!(
@@ -4536,6 +4589,8 @@ mod tests {
 
     #[test]
     fn renders_llama3_instruct_prompt_without_generation_header_after_assistant_final() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = llama3_test_tokenizer();
 
         assert_eq!(
@@ -4558,6 +4613,8 @@ mod tests {
 
     #[test]
     fn renders_llama3_instruct_prompt_preserving_multiline_content() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = llama3_test_tokenizer();
 
         assert_eq!(
@@ -4574,6 +4631,8 @@ mod tests {
 
     #[test]
     fn renders_mistral_instruct_prompt_with_system_preamble() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = mistral_test_tokenizer();
 
         assert_eq!(
@@ -4600,6 +4659,8 @@ mod tests {
 
     #[test]
     fn mistral_instruct_renderer_avoids_duplicate_bos_for_tokenization() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = mistral_test_tokenizer();
 
         let rendered = render_chat_prompt_for_tokenization(
@@ -4617,6 +4678,8 @@ mod tests {
 
     #[test]
     fn renders_mistral_instruct_prompt_with_completed_assistant_turn() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
         let tokenizer = mistral_test_tokenizer();
 
         assert_eq!(
@@ -4664,7 +4727,7 @@ mod tests {
     }
 
     #[test]
-    fn can_opt_into_llama3_metadata_subset_renderer_without_duplicate_bos() {
+    fn can_opt_into_llama3_metadata_jinja_renderer_without_duplicate_bos() {
         let _guard = crate::test_support::env_lock();
         std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
         let tokenizer = llama3_metadata_subset_test_tokenizer();
@@ -4687,7 +4750,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_subset_renderer_matches_llama3_gguf_template_shape() {
+    fn metadata_jinja_renderer_matches_llama3_gguf_template_shape() {
         let _guard = crate::test_support::env_lock();
         std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
         let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
@@ -4716,7 +4779,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_subset_renderer_honors_add_generation_prompt_after_assistant_turn() {
+    fn metadata_jinja_renderer_honors_add_generation_prompt_after_assistant_turn() {
         let _guard = crate::test_support::env_lock();
         std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
         let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
@@ -4745,10 +4808,12 @@ mod tests {
     }
 
     #[test]
-    fn metadata_template_opt_in_falls_back_without_bos_token_expression() {
+    fn metadata_jinja_renderer_executes_templates_without_bos_token_expression() {
         let _guard = crate::test_support::env_lock();
         std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
-        let tokenizer = llama3_test_tokenizer();
+        let tokenizer = llama3_tokenizer_with_template(
+            "{% for message in messages %}<|start_header_id|>{{ message['role'] }}<|end_header_id|>{{ message['content'] }}<|eot_id|>{% endfor %}",
+        );
 
         let rendered = render_chat_prompt_for_tokenization(
             &[ChatMessage {
@@ -4762,17 +4827,54 @@ mod tests {
         assert!(rendered.parse_special);
         assert_eq!(
             rendered.text,
-            "<|start_header_id|>user<|end_header_id|>\n\n  hello  <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+            "<|start_header_id|>user<|end_header_id|>  hello  <|eot_id|>"
         );
         std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
     }
 
     #[test]
-    fn arbitrary_jinja_template_is_not_executed_as_supported_renderer() {
+    fn metadata_jinja_renderer_handles_multi_turn_chat_template_parity_shape() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let tokenizer = llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE);
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: " Answer tersely. ".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: " Alpha? ".to_string(),
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: " alpha ".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: " Beta? ".to_string(),
+                },
+            ],
+            &tokenizer,
+        );
+
+        assert!(!rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(
+            rendered.text,
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nAnswer tersely.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nAlpha?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nalpha<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nBeta?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
+    fn metadata_jinja_renderer_executes_simple_loop_templates() {
         let _guard = crate::test_support::env_lock();
         std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
         let tokenizer = llama3_tokenizer_with_template(
-            "{% for message in messages %}{{ message['role'] }}={{ message['content'] }}{% endfor %}",
+            "{% for message in messages %}{{ message['role'] }}={{ message['content'] }}\n{% endfor %}",
         );
 
         let rendered = render_chat_prompt_for_tokenization(
@@ -4791,7 +4893,29 @@ mod tests {
 
         assert!(rendered.add_special);
         assert!(rendered.parse_special);
-        assert_eq!(rendered.text, "system: Be brief.\nuser: hello\n");
+        assert_eq!(rendered.text, "system=Be brief.\nuser=hello\n");
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
+    fn metadata_jinja_renderer_reports_raise_exception_as_unsupported() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let template = "{{ raise_exception('unsupported chat-template branch') }}";
+        let tokenizer = llama3_tokenizer_with_template(template);
+
+        let err =
+            render_metadata_jinja_chat_template_prompt(&[], &tokenizer, template).unwrap_err();
+        assert!(err.to_string().contains("unsupported chat-template branch"));
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            &tokenizer,
+        );
+        assert_eq!(rendered.text, "user: hello\n");
         std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
     }
 
