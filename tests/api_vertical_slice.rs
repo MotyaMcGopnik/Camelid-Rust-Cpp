@@ -80,7 +80,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(
         body["support_contract"]["current_gate"],
-        "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B/3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied."
+        "Current exact-row support: TinyLlama Q8_0 current gate; Llama 3.2 1B Instruct Q8_0 has checked bounded 512/1024/2048/4096 packs, while Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have checked bounded 512/1024/2048 packs where row-specific PASS artifacts exist. Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf has bounded one-token backend MoE runtime evidence only; later 5-token/API/WebUI/RSS promotion-candidate artifacts are superseded by Gate 9A 50-token divergence and a longer-continuation hang, so broad/API/WebUI/frontend readiness remains unsupported. These are exact bounded lanes only; no model-native/larger context beyond the checked packs, arbitrary-template behavior, throughput, portability, neighboring-row, or broad-family support is implied."
     );
     let q8 = body["supported_quantization"]
         .as_array()
@@ -91,7 +91,10 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(q8["status"], "supported_current_gate");
     let q8_notes = q8["notes"].as_str().unwrap();
     assert!(q8_notes.contains(
-        "exact Llama 3.2 1B/3B Instruct Q8_0 rows and the exact Llama 3 8B Instruct Q8_0 row have checked bounded 512/1024/2048-context packs"
+        "exact Llama 3.2 1B Instruct Q8_0 now has checked bounded 512/1024/2048/4096-context packs"
+    ));
+    assert!(q8_notes.contains(
+        "exact Llama 3.2 3B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 rows have checked bounded 512/1024/2048-context packs"
     ));
     assert!(q8_notes.contains("where row-specific PASS artifacts exist"));
     assert!(!q8_notes.contains("8B 1024/2048 remain red"));
@@ -115,7 +118,10 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     let llama_bpe_notes = llama_bpe_family["notes"].as_str().unwrap();
     assert!(llama_bpe_notes.contains(
-        "exact Llama 3.2 1B/3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs"
+        "exact Llama 3.2 1B Instruct Q8_0 has row-specific smoke support with checked bounded 512/1024/2048/4096-context packs"
+    ));
+    assert!(llama_bpe_notes.contains(
+        "exact Llama 3.2 3B Instruct Q8_0 and exact Llama 3 8B Instruct Q8_0 have row-specific smoke support with checked bounded 512/1024/2048-context packs"
     ));
     assert!(llama_bpe_notes
         .contains("published source/runtime-head 8B 1024/2048 PASS bundle at 8e26be0a73c0"));
@@ -193,6 +199,9 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(tinyllama["bounded_context_2048_pack"], "not_promoted");
     assert_eq!(tinyllama["bounded_context_2048_pack_id"], "not_selected");
     assert_eq!(tinyllama["bounded_context_2048_window"], 2048);
+    assert_eq!(tinyllama["bounded_context_4096_pack"], "not_promoted");
+    assert_eq!(tinyllama["bounded_context_4096_pack_id"], "not_selected");
+    assert_eq!(tinyllama["bounded_context_4096_window"], 4096);
     assert_eq!(tinyllama["latest_checked_bucket"], "direct_chat_smoke");
     assert_eq!(tinyllama["latest_checked_result"], "pass");
     assert_eq!(tinyllama["latest_checked_output"], "Certainly! Here");
@@ -209,7 +218,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     assert_eq!(llama32_1b["frontend_load_path_verified"], "validated");
     assert_eq!(
         llama32_1b["tested_context"],
-        "short_api_webui_smoke_plus_first_512_second_1024_and_third_2048_context_packs"
+        "short_api_webui_smoke_plus_first_512_second_1024_third_2048_and_fourth_4096_context_packs"
     );
     assert_eq!(llama32_1b["chat_template_renderer"], "compact");
     assert_eq!(
@@ -248,15 +257,24 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
     );
     assert_eq!(llama32_1b["bounded_context_2048_window"], 2048);
     assert_eq!(
+        llama32_1b["bounded_context_4096_pack"],
+        "validated_fourth_pack"
+    );
+    assert_eq!(
+        llama32_1b["bounded_context_4096_pack_id"],
+        "llama3-context-4096-smoke-v1"
+    );
+    assert_eq!(llama32_1b["bounded_context_4096_window"], 4096);
+    assert_eq!(
         llama32_1b["latest_checked_bucket"],
-        "llama3-context-2048-smoke-v1"
+        "llama3-context-4096-smoke-v1"
     );
     assert_eq!(llama32_1b["latest_checked_result"], "pass");
-    assert_eq!(llama32_1b["latest_checked_output"], "CMLD-204");
+    assert_eq!(llama32_1b["latest_checked_output"], "CMLD-409");
     assert!(llama32_1b["evidence"]
         .as_str()
         .unwrap()
-        .contains("third bounded 2048-context parity after the RoPE frequency-factor fix"));
+        .contains("fourth bounded 4096-context parity on current head"));
     let llama32_3b = compatibility
         .iter()
         .find(|item| item["id"] == "llama32_3b_instruct_q8_0")
@@ -307,6 +325,9 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "llama3-context-2048-smoke-v1"
     );
     assert_eq!(llama32_3b["bounded_context_2048_window"], 2048);
+    assert_eq!(llama32_3b["bounded_context_4096_pack"], "not_promoted");
+    assert_eq!(llama32_3b["bounded_context_4096_pack_id"], "not_selected");
+    assert_eq!(llama32_3b["bounded_context_4096_window"], 4096);
     assert_eq!(
         llama32_3b["latest_checked_bucket"],
         "llama3-context-2048-smoke-v1"
@@ -367,6 +388,9 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         "llama3-context-2048-smoke-v1"
     );
     assert_eq!(llama3["bounded_context_2048_window"], 2048);
+    assert_eq!(llama3["bounded_context_4096_pack"], "not_promoted");
+    assert_eq!(llama3["bounded_context_4096_pack_id"], "not_selected");
+    assert_eq!(llama3["bounded_context_4096_window"], 4096);
     assert_eq!(
         llama3["latest_checked_bucket"],
         "llama3-context-2048-smoke-v1"
