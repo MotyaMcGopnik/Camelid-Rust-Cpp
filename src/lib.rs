@@ -2,6 +2,7 @@ pub mod api;
 pub mod error;
 pub mod gguf;
 pub mod inference;
+pub mod metal;
 pub mod model;
 pub mod model_source;
 pub mod tensor;

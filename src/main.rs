@@ -3,6 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Instant};
 use camelid::{
     api,
     gguf::{read_metadata, GgufTensorType},
+    metal::detect_metal_device,
     tensor::{CpuTensor, Q8_0TensorBlocks, TensorStore},
 };
 use clap::{Parser, Subcommand};
@@ -22,6 +23,23 @@ enum Command {
     Serve {
         #[arg(long, default_value = "127.0.0.1:8181", env = "CAMELID_ADDR")]
         addr: SocketAddr,
+        /// Override Rayon worker threads for the inference server.
+        #[arg(long, env = "CAMELID_THREADS")]
+        threads: Option<usize>,
+        /// Override the linear-output parallelization threshold used by hot-path CPU kernels.
+        #[arg(long, env = "CAMELID_PARALLEL_LINEAR_MIN_OUTPUTS")]
+        parallel_linear_min_outputs: Option<usize>,
+        /// Override the minimum matrix size before macOS Accelerate BLAS is used.
+        ///
+        /// On macOS, Camelid defaults to using Accelerate only for larger dense linear rows.
+        #[arg(long, env = "CAMELID_APPLE_ACCELERATE_MIN_ELEMENTS")]
+        apple_accelerate_min_elements: Option<usize>,
+        /// Enable the experimental Metal dense linear-row path on macOS.
+        #[arg(long, env = "CAMELID_METAL_LINEAR", default_value_t = false)]
+        metal_linear: bool,
+        /// Log the current acceleration/runtime discovery state at startup.
+        #[arg(long, default_value_t = true)]
+        log_acceleration: bool,
     },
     /// Inspect GGUF metadata and tensor descriptors.
     Inspect { path: PathBuf },
@@ -101,7 +119,25 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match Cli::parse().command {
-        Command::Serve { addr } => api::serve(addr).await?,
+        Command::Serve {
+            addr,
+            threads,
+            parallel_linear_min_outputs,
+            apple_accelerate_min_elements,
+            metal_linear,
+            log_acceleration,
+        } => {
+            configure_rayon_threads(threads)?;
+            apply_runtime_tuning_env(
+                parallel_linear_min_outputs,
+                apple_accelerate_min_elements,
+                metal_linear,
+            );
+            if log_acceleration {
+                log_acceleration_state();
+            }
+            api::serve(addr).await?
+        }
         Command::Inspect { path } => {
             let gguf = read_metadata(path)?;
             println!("{}", serde_json::to_string_pretty(&gguf)?);
@@ -625,6 +661,46 @@ fn bench_values(len: usize, scale: f32) -> Vec<f32> {
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
+}
+
+fn apply_runtime_tuning_env(
+    parallel_linear_min_outputs: Option<usize>,
+    apple_accelerate_min_elements: Option<usize>,
+    metal_linear: bool,
+) {
+    if let Some(value) = parallel_linear_min_outputs.filter(|value| *value > 0) {
+        std::env::set_var("CAMELID_PARALLEL_LINEAR_MIN_OUTPUTS", value.to_string());
+    }
+    if let Some(value) = apple_accelerate_min_elements.filter(|value| *value > 0) {
+        std::env::set_var("CAMELID_APPLE_ACCELERATE_MIN_ELEMENTS", value.to_string());
+    }
+    if metal_linear {
+        std::env::set_var("CAMELID_METAL_LINEAR", "1");
+    }
+}
+
+fn log_acceleration_state() {
+    let metal = detect_metal_device();
+    tracing::info!(
+        rayon_threads = rayon::current_num_threads(),
+        parallel_linear_min_outputs = std::env::var("CAMELID_PARALLEL_LINEAR_MIN_OUTPUTS")
+            .ok()
+            .as_deref()
+            .unwrap_or("default"),
+        apple_accelerate_min_elements = std::env::var("CAMELID_APPLE_ACCELERATE_MIN_ELEMENTS")
+            .ok()
+            .as_deref()
+            .unwrap_or("default(262144 on macOS)"),
+        apple_accelerate = cfg!(target_os = "macos"),
+        metal_linear = std::env::var("CAMELID_METAL_LINEAR")
+            .ok()
+            .as_deref()
+            .unwrap_or("off"),
+        metal_available = metal.available,
+        metal_device = metal.device_name.as_deref().unwrap_or("none"),
+        metal_note = metal.note.as_deref().unwrap_or(""),
+        "camelid acceleration state"
+    );
 }
 
 fn configure_rayon_threads(threads: Option<usize>) -> anyhow::Result<()> {

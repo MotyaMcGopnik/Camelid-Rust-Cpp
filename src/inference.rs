@@ -14,6 +14,9 @@ use std::{
 use rayon::prelude::*;
 use serde::Serialize;
 
+#[cfg(target_os = "macos")]
+use crate::metal;
+
 use crate::{
     gguf::GgufTensorType,
     model::{
@@ -6996,6 +6999,9 @@ fn accumulate_descriptor_linear_row(
     weight: BorrowedLinearWeight<'_>,
     output: &mut [f32],
 ) {
+    if try_accumulate_descriptor_linear_row_metal(input_row, weight, output) {
+        return;
+    }
     if try_accumulate_descriptor_linear_row_accelerate(input_row, weight, output) {
         return;
     }
@@ -7027,6 +7033,28 @@ fn accumulate_descriptor_linear_row(
         for (out_value, rhs_value) in output.iter_mut().zip(rhs_row) {
             *out_value += lhs_value * rhs_value;
         }
+    }
+}
+
+fn try_accumulate_descriptor_linear_row_metal(
+    input_row: &[f32],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if std::env::var("CAMELID_METAL_LINEAR").ok().as_deref() != Some("1") {
+            return false;
+        }
+        if weight.q8_0_blocks.is_some() || weight.q8_0_file_backing.is_some() {
+            return false;
+        }
+        metal::try_linear_row_f32(input_row, weight.data, weight.rows, weight.cols, output)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (input_row, weight, output);
+        false
     }
 }
 
@@ -7556,6 +7584,9 @@ fn accumulate_transposed_linear_row(
     weight: BorrowedLinearWeight<'_>,
     output: &mut [f32],
 ) {
+    if try_accumulate_transposed_linear_row_metal(input_row, weight, output) {
+        return;
+    }
     if should_parallelize_linear_output(output.len()) {
         output
             .par_iter_mut()
@@ -7572,6 +7603,34 @@ fn accumulate_transposed_linear_row(
         let rhs_start = out_idx * input_row.len();
         let rhs_row = &weight.data[rhs_start..rhs_start + input_row.len()];
         *out_value = dot_product_row(input_row, rhs_row);
+    }
+}
+
+fn try_accumulate_transposed_linear_row_metal(
+    input_row: &[f32],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if std::env::var("CAMELID_METAL_LINEAR").ok().as_deref() != Some("1") {
+            return false;
+        }
+        if weight.q8_0_blocks.is_some() || weight.q8_0_file_backing.is_some() {
+            return false;
+        }
+        metal::try_linear_row_transposed_f32(
+            input_row,
+            weight.data,
+            input_row.len(),
+            output.len(),
+            output,
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (input_row, weight, output);
+        false
     }
 }
 
