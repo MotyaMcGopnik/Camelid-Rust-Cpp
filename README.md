@@ -2,33 +2,35 @@
 
 [![CI][ci-badge]][ci-workflow]
 
-**Camelid is a Rust-native local inference backend for GGUF language models built for teams that need local AI they can actually trust.**
+**Camelid is trust-first local AI infrastructure for teams that need local models they can actually adopt.**
 
-Local-model infrastructure is easy to demo and hard to trust in production. Camelid is built for the teams that need more than a flashy chat surface: they need a runtime, API, and UI that stay honest about what works, what is ready, and what evidence backs each claim.
+Most local-model stacks are easy to demo and hard to trust. Camelid is a Rust-native local inference backend for GGUF language models built for the point where local AI becomes real infrastructure: products, internal platforms, regulated environments, and customer-facing workflows.
 
 Camelid does not treat “probably works” as “supported.” Support moves on evidence.
 
+## Why organizations adopt Camelid
+
+Organizations adopt Camelid because local AI needs more than raw inference. They need to know what works, what does not, and whether the runtime, API, and UI all tell the same truth.
+
+Camelid gives teams:
+
+- **clear support contracts** instead of hand-wavy compatibility
+- **OpenAI-compatible APIs** that fit existing tools and agent stacks
+- **fail-closed readiness** so unsupported models do not masquerade as production-ready
+- **evidence-backed support** tied directly to runtime reality
+- **one consistent product contract** across backend, API, WebUI, docs, and validation
+
+If you have ever wanted to use local AI without guessing what is actually ready, Camelid is built for that gap.
+
 ## Why Camelid matters
 
-Most local inference stacks optimize for breadth first and clarity later. Camelid takes the opposite approach.
+The hard problem in local AI is no longer just getting a model to run. The hard problem is operational trust.
 
-Camelid is for teams that need clear answers to practical questions:
+Most local inference stacks optimize for breadth first and clarity later. Camelid takes the opposite approach: make support explicit, make readiness visible, and make the product fail closed when the evidence is not there.
 
-- **What exactly works today?**
-- **What evidence proves that claim?**
-- **Will the backend, API, and UI tell the same truth?**
-- **Can support expand without hand-waving?**
+That discipline is not just a docs preference. It is the wedge.
 
-That discipline is not just a docs preference. It is the product wedge.
-
-## Why Camelid wins trust
-
-- **Evidence-gated support** — support claims move only when row-specific validation is green.
-- **One support contract across surfaces** — runtime, API, WebUI, docs, and evidence stay aligned.
-- **Fail-closed product behavior** — chat unlocks only when the loaded GGUF is actually ready and supported.
-- **Local-first deployment clarity** — exact-row capability reporting makes support visible instead of implied.
-
-## What exists today
+## Why people want to try it
 
 Camelid already ships a serious local inference product surface:
 
@@ -101,7 +103,7 @@ Camelid’s public support boundary is intentionally narrow and exact-row. Read 
 | Exact lane | Public status | Green evidence today |
 | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 | **Verified support** | End-to-end generation, broader five-prompt/50-token parity, template-shape checks, 512-context coverage, and backend RSS/perf sampling. |
-| Llama 3.2 1B Instruct Q8_0 | **Verified end-to-end support** | Load, completions, chat completions, WebUI validation, compact/broader parity, template-shape checks, unique-chat perf/RSS sampling, and checked 512/1024/2048/4096/8192-context packs. |
+| Llama 3.2 1B Instruct Q8_0 | **Verified end-to-end support** | Load, completions, chat completions, WebUI validation, compact/broader parity, exact-row metadata-Jinja row-template checks, template-shape checks, unique-chat perf/RSS sampling, and checked 512/1024/2048/4096/8192-context packs. |
 | Llama 3.2 3B Instruct Q8_0 | **Verified support** | Load, completions, chat completions, WebUI validation, compact/broader 50-token parity, template-shape checks, unique-chat perf/RSS, checked 512/1024/2048-context packs, and an opt-in parallel Q8 first-token direction probe. |
 | Llama 3 8B Instruct Q8_0 | **Verified support** | Load, completions, chat completions, WebUI validation, compact parity, three-prompt 50-token parity, checked 512/1024/2048-context packs, compact chat-template-shapes pack, memory evidence, structured RSS/Q8 file-read counters, and lazy-Q8 hot-path measurements. |
 | Mistral-7B-Instruct-v0.3.Q8_0.gguf | **In active validation; not supported yet** | Source/SHA, exact tokenizer/template references, 1-token generation parity, broader five-prompt/50-token parity, checked 512/1024/2048 bring-up, checked 4096/8192 context validation, and fail-closed API/WebUI/RSS evidence are green; latest context bundle: `qa/evidence-bundles/mistral-7b-v0.3-q8-context-4096-8192-ubuntu-20260509T005229Z-head-9e3c64f2cfab/manifest.json`. |
