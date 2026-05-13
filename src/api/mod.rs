@@ -4146,7 +4146,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn capabilities_public_string_guard_rejects_local_evidence_bundle_paths() {
+        let evidence_key = vec!["evidence".to_string()];
+
+        assert_eq!(
+            private_capability_string_marker(
+                "qa/evidence-bundles/backend-local-support-contract-guard-current-head-20260513T0342Z-head-5bcdd99d5ee7/manifest.json",
+                &evidence_key,
+            ),
+            Some("qa/evidence-bundles/backend-local")
+        );
+        assert_eq!(
+            private_capability_string_marker(
+                "qa/evidence-bundles/local-support-contract-guard-20260513T000328Z-head-62527d7d863b/manifest.json",
+                &evidence_key,
+            ),
+            Some("qa/evidence-bundles/local-")
+        );
+        assert_eq!(
+            private_capability_string_marker(
+                "target/backend-local-latest-artifact.txt",
+                &evidence_key,
+            ),
+            Some("target/")
+        );
+    }
+
     fn assert_public_capability_string(text: &str, json_path: &str, key_path: &[String]) {
+        if let Some(marker) = private_capability_string_marker(text, key_path) {
+            panic!("{json_path} must not expose local/operator path marker {marker:?}: {text}");
+        }
+    }
+
+    fn private_capability_string_marker(text: &str, key_path: &[String]) -> Option<&'static str> {
         const PRIVATE_PATH_MARKERS: &[&str] = &[
             "/Users/",
             "/home/",
@@ -4156,20 +4189,28 @@ mod tests {
             "ssh://",
             "ubuntu@",
         ];
+        const LOCAL_EVIDENCE_BUNDLE_MARKERS: &[&str] = &[
+            "qa/evidence-bundles/backend-local",
+            "qa/evidence-bundles/local-",
+            "qa/evidence-bundles/tpm-local-",
+        ];
 
         for marker in PRIVATE_PATH_MARKERS {
-            assert!(
-                !text.contains(marker),
-                "{json_path} must not expose local/operator path marker {marker:?}: {text}"
-            );
+            if text.contains(marker) {
+                return Some(marker);
+            }
+        }
+        for marker in LOCAL_EVIDENCE_BUNDLE_MARKERS {
+            if text.contains(marker) {
+                return Some(marker);
+            }
         }
 
-        if key_path.last().is_some_and(|key| key == "evidence") {
-            assert!(
-                !text.contains("target/"),
-                "{json_path} evidence must cite durable public artifacts instead of local target/ paths: {text}"
-            );
+        if key_path.last().is_some_and(|key| key == "evidence") && text.contains("target/") {
+            return Some("target/");
         }
+
+        None
     }
 
     #[test]
