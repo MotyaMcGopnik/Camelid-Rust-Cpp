@@ -829,7 +829,7 @@ fn capabilities_response() -> CapabilitiesResponse {
                 status: "supported_current_gate",
                 support_scope: "current_full_gate_exact_row",
                 full_support_status: "current_gate_refresh_under_stricter_bar",
-                full_support_blockers: "do not widen beyond TinyLlama 1.1B Chat Q8_0 without repeated current-head API/WebUI/parity/RSS/context evidence under the stricter bar",
+                full_support_blockers: "do not widen beyond TinyLlama 1.1B Chat Q8_0 without repeated current-head API/WebUI/parity/RSS/context evidence under the stricter bar; arbitrary/Jinja template behavior and production throughput remain outside this exact current gate unless separately validated",
                 metadata_parses: "validated",
                 tokenizer_works: "validated",
                 tensors_load: "validated",
@@ -4018,6 +4018,22 @@ mod tests {
                 !target.full_support_status.is_empty() && !target.full_support_blockers.is_empty(),
                 "{id} must carry the stricter full-support bar"
             );
+            assert!(
+                target.full_support_blockers.contains("template")
+                    || target.full_support_blockers.contains("Jinja"),
+                "{id} must not silently promote arbitrary/Jinja template coverage"
+            );
+            assert!(
+                target.full_support_blockers.contains("production")
+                    || target.full_support_blockers.contains("throughput"),
+                "{id} must not silently promote production throughput"
+            );
+            assert!(
+                !target
+                    .performance_measured
+                    .contains("production_throughput"),
+                "{id} must keep bounded perf/RSS evidence distinct from production throughput"
+            );
         }
 
         let tiny = response
@@ -4748,6 +4764,34 @@ mod tests {
             rendered.text,
             "<|start_header_id|>user<|end_header_id|>\n\n  hello  <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
         );
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
+    fn arbitrary_jinja_template_is_not_executed_as_supported_renderer() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let tokenizer = llama3_tokenizer_with_template(
+            "{% for message in messages %}{{ message['role'] }}={{ message['content'] }}{% endfor %}",
+        );
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: "Be brief.".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                },
+            ],
+            &tokenizer,
+        );
+
+        assert!(rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(rendered.text, "system: Be brief.\nuser: hello\n");
         std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
     }
 
