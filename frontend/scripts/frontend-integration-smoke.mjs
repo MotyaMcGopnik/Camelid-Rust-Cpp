@@ -148,6 +148,37 @@ try {
   assert.match(preTokenMarkup, /Waiting for first token/, 'pre-token streaming should render the first-token live status')
   assert.match(preTokenMarkup, /pacman-loader-mouth/, 'pre-token streaming should render the active loader, not a static placeholder')
 
+  const completedUnclosedFenceMarkup = renderToStaticMarkup(React.createElement(ChatWorkspace, {
+    selectedConversation: {
+      id: 'conversation-completed-unclosed-code',
+      title: 'Completed unclosed code',
+      updated_at: '2026-05-13T04:21:00.000Z',
+      messages: [
+        { id: 'user-4', role: 'user', content: 'Write a tiny Python script', created_at: '2026-05-13T04:21:00.000Z' },
+        { id: 'assistant-4', role: 'assistant', content: '```python\nprint("safe")', streaming: false, created_at: '2026-05-13T04:21:01.000Z' },
+      ],
+    },
+    selectedModel,
+    selectedModelId: selectedModel.id,
+    setSelectedModelId: noop,
+    models: [selectedModel],
+    runtime: readyRuntime,
+    capabilities,
+    pendingConversation: null,
+    composer: '',
+    setComposer: noop,
+    saveToMemory: noop,
+    sendMessage: noop,
+    sending: false,
+    selectedModelRunnable: true,
+    setTab: noop,
+  }))
+
+  assert.match(completedUnclosedFenceMarkup, /message-code-card/, 'completed replies with an unclosed fenced block should still render as a safe code card')
+  assert.match(completedUnclosedFenceMarkup, /print\([\s\S]*&quot;safe&quot;[\s\S]*\)/, 'completed unclosed code content should remain visible and escaped in the code card')
+  assert.doesNotMatch(completedUnclosedFenceMarkup, /Still generating — code block incomplete/, 'completed unclosed code should not claim the backend is still generating')
+  assert.doesNotMatch(completedUnclosedFenceMarkup, /data-code-streaming-state="open"/, 'completed unclosed code should not expose an active streaming code state')
+
   const preTokenSendingMarkup = renderToStaticMarkup(React.createElement(ChatWorkspace, {
     selectedConversation: {
       id: 'conversation-pre-token-active-send',
@@ -198,6 +229,48 @@ try {
   assert.match(mismatchedRuntimeMarkup, /Different loaded model is ready/, 'API readiness should fail closed when active_model_id differs from the selected exact row')
   assert.match(mismatchedRuntimeMarkup, /Blocked for UX chat until selected exact row evidence and runtime readiness both match/, 'API curl should stay blocked until exact row and runtime readiness both match')
   assert.doesNotMatch(mismatchedRuntimeMarkup, /Selected exact row ready/, 'mismatched runtime must not claim selected exact-row readiness')
+
+  const plannedExactModel = {
+    id: 'mistral-7b-instruct-v0.3-q8_0',
+    name: 'Mistral 7B Instruct v0.3 Q8_0',
+    provider_kind: 'local',
+    status: 'ready',
+    loaded_now: true,
+    generation_ready: true,
+    quant: 'Q8_0',
+    model_path: '/models/mistral-7b-instruct-v0.3-q8_0.gguf',
+  }
+  const plannedExactCapabilities = {
+    ...capabilities,
+    model_compatibility: [
+      ...capabilities.model_compatibility,
+      {
+        id: 'mistral_7b_instruct_v0_3_q8_0',
+        status: 'planned',
+        family: 'mistral',
+        quantization: 'Q8_0',
+        support_scope: 'exact row only once validated',
+        frontend_readiness_gate: 'must stay blocked until supported',
+        latest_checked_bucket: 'not_started',
+        latest_checked_result: 'not_started',
+        latest_checked_output: 'no validated output yet',
+        full_support_status: 'not_supported',
+        full_support_blockers: 'generation evidence missing',
+        evidence: 'Planned exact-row placeholder, not runnable support.',
+        next_step: 'Collect exact-row evidence before unlocking chat.',
+      },
+    ],
+  }
+  const plannedExactMarkup = renderToStaticMarkup(React.createElement(ApiView, {
+    runtime: { ...readyRuntime, active_model_id: plannedExactModel.id },
+    selectedModel: plannedExactModel,
+    capabilities: plannedExactCapabilities,
+  }))
+
+  assert.match(plannedExactMarkup, /mistral_7b_instruct_v0_3_q8_0/, 'API view should show selected planned exact-row evidence by row id')
+  assert.match(plannedExactMarkup, /Generation ready; exact row required/, 'API readiness should stay guarded when the selected exact row is not supported')
+  assert.match(plannedExactMarkup, /Planned exact-row placeholder, not runnable support\./, 'API view should render the exact row evidence without broad-family inference')
+  assert.doesNotMatch(plannedExactMarkup, /Selected exact row ready/, 'planned exact rows must not claim selected exact-row readiness even when runtime health is green')
 
   console.log('Frontend integration smoke passed')
 } finally {
