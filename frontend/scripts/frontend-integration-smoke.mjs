@@ -118,6 +118,36 @@ try {
   assert.match(streamingMarkup, /aria-busy="true"/, 'streaming rows and code cards should be marked busy while backend generation is active')
   assert.match(streamingMarkup, /message-code-card is-generating/, 'open streaming code should render as the real ForgeLocal-derived code card, not fallback prose')
 
+  const activeSendStreamingMarkup = renderToStaticMarkup(React.createElement(ChatWorkspace, {
+    selectedConversation: {
+      id: 'conversation-active-send-with-content',
+      title: 'Active send with content',
+      updated_at: '2026-05-13T04:21:00.000Z',
+      messages: [
+        { id: 'user-active-send', role: 'user', content: 'Create one self-contained HTML page', created_at: '2026-05-13T04:21:00.000Z' },
+        { id: 'assistant-active-send', role: 'assistant', content: '```html\n<!doctype html>\n<title>Live</title>', streaming: true, streaming_phase: 'streaming', created_at: '2026-05-13T04:21:01.000Z' },
+      ],
+    },
+    selectedModel,
+    selectedModelId: selectedModel.id,
+    setSelectedModelId: noop,
+    models: [selectedModel],
+    runtime: readyRuntime,
+    capabilities,
+    pendingConversation: null,
+    composer: '',
+    setComposer: noop,
+    saveToMemory: noop,
+    sendMessage: noop,
+    sending: true,
+    selectedModelRunnable: true,
+    setTab: noop,
+  }))
+
+  assert.equal((activeSendStreamingMarkup.match(/data-streaming-state="active"/g) || []).length, 1, 'active sends with visible streamed content should keep exactly one active assistant row')
+  assert.match(activeSendStreamingMarkup, /message-live-generation-badge/, 'active sends with visible streamed content should keep the live generation badge until completion')
+  assert.doesNotMatch(activeSendStreamingMarkup, /Preparing local response/, 'visible streamed content should replace the pre-token pending loader during an active send')
+
   const preTokenMarkup = renderToStaticMarkup(React.createElement(ChatWorkspace, {
     selectedConversation: {
       id: 'conversation-pre-token',
