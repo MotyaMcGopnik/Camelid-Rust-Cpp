@@ -25,7 +25,8 @@ use crate::{
     tensor::{
         dot_product, parse_byte_count_env, q8_0_file_read_stats, record_q8_0_file_read,
         should_parallelize_linear_output, with_q8_file_cache_capacity_override, CpuTensor,
-        Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, TensorShape, TensorStore,
+        Q8_0Block, Q8_0FileBacking, Q8_0FileReadStats, Q8_0PackedRows4, Q8_0PackedRows4Block,
+        Q8_0PackedRows4Interleave, TensorShape, TensorStore,
     },
     BackendError, Result,
 };
@@ -1833,6 +1834,8 @@ impl LlamaInferenceSession {
             };
             hidden.source_type = None;
             hidden.q8_0_blocks = None;
+            hidden.q8_0_packed_rows4_4x4 = None;
+            hidden.q8_0_packed_rows4_4x8 = None;
             hidden.q8_0_file_backing = None;
             trace_forward_memory(&format!("prefill_layer_major_layer_{layer_idx}_done"));
         }
@@ -4674,6 +4677,8 @@ fn linear_weight_reinterpreted_as_transposed(
 fn weight_with_swapped_matrix_shape(weight: &CpuTensor) -> CpuTensor {
     let mut reinterpreted = weight.clone();
     reinterpreted.shape.dims.swap(0, 1);
+    reinterpreted.q8_0_packed_rows4_4x4 = None;
+    reinterpreted.q8_0_packed_rows4_4x8 = None;
     reinterpreted
 }
 
@@ -4684,6 +4689,8 @@ struct BorrowedLinearWeight<'a> {
     data: &'a [f32],
     source_type: Option<GgufTensorType>,
     q8_0_blocks: Option<&'a [Q8_0Block]>,
+    q8_0_packed_rows4_4x4: Option<&'a Q8_0PackedRows4>,
+    q8_0_packed_rows4_4x8: Option<&'a Q8_0PackedRows4>,
     q8_0_file_backing: Option<&'a Q8_0FileBacking>,
 }
 
@@ -4701,6 +4708,8 @@ impl<'a> BorrowedLinearWeight<'a> {
             data: &weight.data,
             source_type: weight.source_type,
             q8_0_blocks: weight.q8_0_blocks.as_deref(),
+            q8_0_packed_rows4_4x4: weight.q8_0_packed_rows4_4x4.as_ref(),
+            q8_0_packed_rows4_4x8: weight.q8_0_packed_rows4_4x8.as_ref(),
             q8_0_file_backing: weight.q8_0_file_backing.as_ref(),
         })
     }
@@ -4709,6 +4718,8 @@ impl<'a> BorrowedLinearWeight<'a> {
         Self {
             rows: self.cols,
             cols: self.rows,
+            q8_0_packed_rows4_4x4: None,
+            q8_0_packed_rows4_4x8: None,
             ..self
         }
     }
@@ -4773,6 +4784,8 @@ fn add_tensor_in_place(
     tensor.name = name.into();
     tensor.source_type = None;
     tensor.q8_0_blocks = None;
+    tensor.q8_0_packed_rows4_4x4 = None;
+    tensor.q8_0_packed_rows4_4x8 = None;
     tensor.q8_0_file_backing = None;
     Ok(())
 }
@@ -6534,6 +6547,17 @@ fn matmul_rhs_transposed_q8_0_block_dot(
                 continue;
             }
         }
+        if let Some((packed, interleave)) = q8_0_selected_packed_rows4(weight) {
+            if packed.rows == output_width && packed.blocks_per_row == blocks_per_row {
+                accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                    &quantized_input.blocks,
+                    packed,
+                    interleave,
+                    output_row,
+                );
+                continue;
+            }
+        }
         if should_parallelize_q8_0_file_reader_output(output_width) {
             output_row
                 .par_iter_mut()
@@ -6744,6 +6768,127 @@ unsafe fn q8_0_two_dot_rows_dotprod(
         second_sum += second_int_sum as f32 * second_block.scale * input_block.scale;
     }
     (first_sum, second_sum)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
+unsafe fn q8_0_packed_4x4_block_dotprod(
+    packed_quants: *const i8,
+    input_quants: *const i8,
+) -> [i32; 4] {
+    use std::arch::aarch64::{vdupq_n_s32, vld1q_s8};
+    use std::arch::asm;
+
+    // SAFETY: callers provide a packed 128-i8 block and a 32-i8 input block.
+    let b0 = unsafe { vld1q_s8(packed_quants) };
+    let b1 = unsafe { vld1q_s8(packed_quants.add(16)) };
+    let b2 = unsafe { vld1q_s8(packed_quants.add(32)) };
+    let b3 = unsafe { vld1q_s8(packed_quants.add(48)) };
+    let b4 = unsafe { vld1q_s8(packed_quants.add(64)) };
+    let b5 = unsafe { vld1q_s8(packed_quants.add(80)) };
+    let b6 = unsafe { vld1q_s8(packed_quants.add(96)) };
+    let b7 = unsafe { vld1q_s8(packed_quants.add(112)) };
+    let a0 = unsafe { vld1q_s8(input_quants) };
+    let a1 = unsafe { vld1q_s8(input_quants.add(16)) };
+
+    let mut acc = vdupq_n_s32(0);
+    // SAFETY: target_feature(dotprod) enables SDOT. This mirrors llama.cpp's q8_0 4x4
+    // GEMV lane-dot shape: one output row per accumulator lane.
+    unsafe {
+        asm!(
+            "sdot {acc:v}.4s, {b0:v}.16b, {a0:v}.4b[0]",
+            "sdot {acc:v}.4s, {b1:v}.16b, {a0:v}.4b[1]",
+            "sdot {acc:v}.4s, {b2:v}.16b, {a0:v}.4b[2]",
+            "sdot {acc:v}.4s, {b3:v}.16b, {a0:v}.4b[3]",
+            "sdot {acc:v}.4s, {b4:v}.16b, {a1:v}.4b[0]",
+            "sdot {acc:v}.4s, {b5:v}.16b, {a1:v}.4b[1]",
+            "sdot {acc:v}.4s, {b6:v}.16b, {a1:v}.4b[2]",
+            "sdot {acc:v}.4s, {b7:v}.16b, {a1:v}.4b[3]",
+            acc = inout(vreg) acc,
+            b0 = in(vreg) b0,
+            b1 = in(vreg) b1,
+            b2 = in(vreg) b2,
+            b3 = in(vreg) b3,
+            b4 = in(vreg) b4,
+            b5 = in(vreg) b5,
+            b6 = in(vreg) b6,
+            b7 = in(vreg) b7,
+            a0 = in(vreg) a0,
+            a1 = in(vreg) a1,
+            options(nostack, preserves_flags)
+        );
+    }
+    // SAFETY: int32x4_t is a four-lane i32 vector; lane order is output-row order.
+    unsafe { std::mem::transmute::<std::arch::aarch64::int32x4_t, [i32; 4]>(acc) }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
+unsafe fn q8_0_packed_4x8_block_dotprod(
+    packed_quants: *const i8,
+    input_quants: *const i8,
+) -> [i32; 4] {
+    use std::arch::aarch64::{vcombine_s8, vdupq_n_s32, vld1_s8, vld1q_s8};
+    use std::arch::asm;
+
+    // SAFETY: callers provide a packed 128-i8 block and a 32-i8 input block.
+    let b0 = unsafe { vld1q_s8(packed_quants) };
+    let b1 = unsafe { vld1q_s8(packed_quants.add(16)) };
+    let b2 = unsafe { vld1q_s8(packed_quants.add(32)) };
+    let b3 = unsafe { vld1q_s8(packed_quants.add(48)) };
+    let b4 = unsafe { vld1q_s8(packed_quants.add(64)) };
+    let b5 = unsafe { vld1q_s8(packed_quants.add(80)) };
+    let b6 = unsafe { vld1q_s8(packed_quants.add(96)) };
+    let b7 = unsafe { vld1q_s8(packed_quants.add(112)) };
+    let a0_half = unsafe { vld1_s8(input_quants) };
+    let a1_half = unsafe { vld1_s8(input_quants.add(8)) };
+    let a2_half = unsafe { vld1_s8(input_quants.add(16)) };
+    let a3_half = unsafe { vld1_s8(input_quants.add(24)) };
+    let a0 = vcombine_s8(a0_half, a0_half);
+    let a1 = vcombine_s8(a1_half, a1_half);
+    let a2 = vcombine_s8(a2_half, a2_half);
+    let a3 = vcombine_s8(a3_half, a3_half);
+
+    let mut acc0 = vdupq_n_s32(0);
+    let mut acc1 = vdupq_n_s32(0);
+    // SAFETY: target_feature(dotprod) enables SDOT. This mirrors llama.cpp's q8_0 4x8
+    // GEMV dot shape; pairwise lane sums below mirror vpaddq_s32(ret0, ret1).
+    unsafe {
+        asm!(
+            "sdot {acc0:v}.4s, {b0:v}.16b, {a0:v}.16b",
+            "sdot {acc1:v}.4s, {b1:v}.16b, {a0:v}.16b",
+            "sdot {acc0:v}.4s, {b2:v}.16b, {a1:v}.16b",
+            "sdot {acc1:v}.4s, {b3:v}.16b, {a1:v}.16b",
+            "sdot {acc0:v}.4s, {b4:v}.16b, {a2:v}.16b",
+            "sdot {acc1:v}.4s, {b5:v}.16b, {a2:v}.16b",
+            "sdot {acc0:v}.4s, {b6:v}.16b, {a3:v}.16b",
+            "sdot {acc1:v}.4s, {b7:v}.16b, {a3:v}.16b",
+            acc0 = inout(vreg) acc0,
+            acc1 = inout(vreg) acc1,
+            b0 = in(vreg) b0,
+            b1 = in(vreg) b1,
+            b2 = in(vreg) b2,
+            b3 = in(vreg) b3,
+            b4 = in(vreg) b4,
+            b5 = in(vreg) b5,
+            b6 = in(vreg) b6,
+            b7 = in(vreg) b7,
+            a0 = in(vreg) a0,
+            a1 = in(vreg) a1,
+            a2 = in(vreg) a2,
+            a3 = in(vreg) a3,
+            options(nostack, preserves_flags)
+        );
+    }
+    // SAFETY: int32x4_t is a four-lane i32 vector.
+    let lanes0 = unsafe { std::mem::transmute::<std::arch::aarch64::int32x4_t, [i32; 4]>(acc0) };
+    let lanes1 = unsafe { std::mem::transmute::<std::arch::aarch64::int32x4_t, [i32; 4]>(acc1) };
+    [
+        lanes0[0] + lanes0[1],
+        lanes0[2] + lanes0[3],
+        lanes1[0] + lanes1[1],
+        lanes1[2] + lanes1[3],
+    ]
 }
 
 fn q8_0_reader_backing(weight: &CpuTensor, input_width: usize) -> Result<Option<&Q8_0FileBacking>> {
@@ -8083,7 +8228,153 @@ fn accumulate_transposed_linear_row_q8_0_block_dot_quantized(
             return;
         }
     }
+    if let Some((packed, interleave)) = q8_0_selected_borrowed_packed_rows4(weight) {
+        if packed.rows == output.len() && packed.blocks_per_row == blocks_per_row {
+            accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                quantized_input,
+                packed,
+                interleave,
+                output,
+            );
+            return;
+        }
+    }
     accumulate_q8_0_block_dot_quantized_cpu(quantized_input, weight_blocks, output);
+}
+
+fn q8_0_packed_4x4_dot_enabled() -> bool {
+    env_flag_enabled("CAMELID_Q8_0_PACKED_4X4_DOT")
+}
+
+fn q8_0_packed_4x8_dot_enabled() -> bool {
+    env_flag_enabled("CAMELID_Q8_0_PACKED_4X8_DOT")
+}
+
+fn q8_0_selected_packed_rows4(
+    weight: &CpuTensor,
+) -> Option<(&Q8_0PackedRows4, Q8_0PackedRows4Interleave)> {
+    if q8_0_packed_4x8_dot_enabled() {
+        if let Some(packed) = weight.q8_0_packed_rows4_4x8.as_ref() {
+            return Some((packed, Q8_0PackedRows4Interleave::I8));
+        }
+    }
+    if q8_0_packed_4x4_dot_enabled() {
+        if let Some(packed) = weight.q8_0_packed_rows4_4x4.as_ref() {
+            return Some((packed, Q8_0PackedRows4Interleave::I4));
+        }
+    }
+    None
+}
+
+fn q8_0_selected_borrowed_packed_rows4(
+    weight: BorrowedLinearWeight<'_>,
+) -> Option<(&Q8_0PackedRows4, Q8_0PackedRows4Interleave)> {
+    if q8_0_packed_4x8_dot_enabled() {
+        if let Some(packed) = weight.q8_0_packed_rows4_4x8 {
+            return Some((packed, Q8_0PackedRows4Interleave::I8));
+        }
+    }
+    if q8_0_packed_4x4_dot_enabled() {
+        if let Some(packed) = weight.q8_0_packed_rows4_4x4 {
+            return Some((packed, Q8_0PackedRows4Interleave::I4));
+        }
+    }
+    None
+}
+
+fn accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+    quantized_input: &[Q8_0Block],
+    packed: &Q8_0PackedRows4,
+    interleave: Q8_0PackedRows4Interleave,
+    output: &mut [f32],
+) {
+    let blocks_per_row = quantized_input.len();
+    debug_assert_eq!(packed.blocks_per_row, blocks_per_row);
+    debug_assert_eq!(packed.rows, output.len());
+    debug_assert!(output.len().is_multiple_of(4));
+
+    let compute_group = |group_idx: usize, output_chunk: &mut [f32]| {
+        debug_assert_eq!(output_chunk.len(), 4);
+        let group_blocks =
+            &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
+        let sums = q8_0_packed_rows4_dot(group_blocks, quantized_input, interleave);
+        output_chunk.copy_from_slice(&sums);
+    };
+
+    if should_parallelize_linear_output(output.len()) {
+        output
+            .par_chunks_mut(4)
+            .enumerate()
+            .for_each(|(group_idx, output_chunk)| compute_group(group_idx, output_chunk));
+        return;
+    }
+
+    for (group_idx, output_chunk) in output.chunks_mut(4).enumerate() {
+        compute_group(group_idx, output_chunk);
+    }
+}
+
+fn q8_0_packed_rows4_dot(
+    packed_blocks: &[Q8_0PackedRows4Block],
+    input: &[Q8_0Block],
+    interleave: Q8_0PackedRows4Interleave,
+) -> [f32; 4] {
+    debug_assert_eq!(packed_blocks.len(), input.len());
+    let mut sums = [0.0_f32; 4];
+    for (packed_block, input_block) in packed_blocks.iter().zip(input) {
+        #[cfg(target_arch = "aarch64")]
+        let int_sums = if aarch64_dotprod_enabled() {
+            // SAFETY: runtime feature detection confirms dot-product support; packed quants
+            // contain 128 i8 values and input quants contain 32 contiguous i8 values.
+            unsafe {
+                match interleave {
+                    Q8_0PackedRows4Interleave::I4 => q8_0_packed_4x4_block_dotprod(
+                        packed_block.quants.as_ptr(),
+                        input_block.quants.as_ptr(),
+                    ),
+                    Q8_0PackedRows4Interleave::I8 => q8_0_packed_4x8_block_dotprod(
+                        packed_block.quants.as_ptr(),
+                        input_block.quants.as_ptr(),
+                    ),
+                }
+            }
+        } else {
+            q8_0_packed_rows4_block_dot_scalar(
+                &packed_block.quants,
+                &input_block.quants,
+                interleave,
+            )
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let int_sums = q8_0_packed_rows4_block_dot_scalar(
+            &packed_block.quants,
+            &input_block.quants,
+            interleave,
+        );
+        for lane in 0..4 {
+            sums[lane] += int_sums[lane] as f32 * packed_block.scales[lane] * input_block.scale;
+        }
+    }
+    sums
+}
+
+fn q8_0_packed_rows4_block_dot_scalar(
+    packed: &[i8; 128],
+    input: &[i8; 32],
+    interleave: Q8_0PackedRows4Interleave,
+) -> [i32; 4] {
+    let block_len = interleave.block_len();
+    let chunks = 32 / block_len;
+    let mut sums = [0_i32; 4];
+    for chunk in 0..chunks {
+        for lane in 0..4 {
+            for idx in 0..block_len {
+                sums[lane] += i32::from(packed[chunk * 4 * block_len + lane * block_len + idx])
+                    * i32::from(input[chunk * block_len + idx]);
+            }
+        }
+    }
+    sums
 }
 
 fn accumulate_q8_0_block_dot_quantized_cpu(
@@ -10922,6 +11213,78 @@ mod tests {
 
         assert_eq!(first, q8_0_dot_rows(&first_weight, &input));
         assert_eq!(second, q8_0_dot_rows(&second_weight, &input));
+    }
+
+    fn assert_packed_rows4_matches_retained(interleave: Q8_0PackedRows4Interleave) {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        match interleave {
+            Q8_0PackedRows4Interleave::I4 => {
+                std::env::set_var("CAMELID_Q8_0_PACKED_4X4_DOT", "on");
+                std::env::remove_var("CAMELID_Q8_0_PACKED_4X8_DOT");
+            }
+            Q8_0PackedRows4Interleave::I8 => {
+                std::env::set_var("CAMELID_Q8_0_PACKED_4X8_DOT", "on");
+                std::env::remove_var("CAMELID_Q8_0_PACKED_4X4_DOT");
+            }
+        }
+
+        let rows = 4;
+        let blocks_per_row = 3;
+        let mut weight_blocks = Vec::new();
+        let mut dequantized = Vec::new();
+        for row in 0..rows {
+            for block_idx in 0..blocks_per_row {
+                let block = Q8_0Block {
+                    scale: 0.125 + row as f32 * 0.03125 + block_idx as f32 * 0.015625,
+                    quants: std::array::from_fn(|idx| {
+                        ((row as i32 * 11 + block_idx as i32 * 7 + idx as i32) % 41 - 20) as i8
+                    }),
+                };
+                dequantized.extend(block.quants.iter().map(|q| block.scale * f32::from(*q)));
+                weight_blocks.push(block);
+            }
+        }
+        let weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "weight",
+            vec![rows, blocks_per_row * Q8_0_BLOCK_VALUES],
+            dequantized,
+            weight_blocks.clone(),
+        )
+        .unwrap();
+        let packed = match interleave {
+            Q8_0PackedRows4Interleave::I4 => weight.q8_0_packed_rows4_4x4.as_ref(),
+            Q8_0PackedRows4Interleave::I8 => weight.q8_0_packed_rows4_4x8.as_ref(),
+        }
+        .expect("packed rows4 sidecar should be built when opted in");
+        assert_eq!(packed.rows, rows);
+        assert_eq!(packed.blocks_per_row, blocks_per_row);
+        assert_eq!(packed.interleave, interleave);
+
+        let input = quantize_q8_0_blocks(
+            &(0..blocks_per_row * Q8_0_BLOCK_VALUES)
+                .map(|idx| (idx as f32 - 31.0) * 0.02125)
+                .collect::<Vec<_>>(),
+        );
+        let expected = (0..rows)
+            .map(|row| {
+                let start = row * blocks_per_row;
+                q8_0_dot_rows(&weight_blocks[start..start + blocks_per_row], &input)
+            })
+            .collect::<Vec<_>>();
+        let actual = q8_0_packed_rows4_dot(&packed.blocks, &input, interleave);
+
+        assert_eq!(actual.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn q8_0_packed_4x4_rows4_matches_retained_block_dot() {
+        assert_packed_rows4_matches_retained(Q8_0PackedRows4Interleave::I4);
+    }
+
+    #[test]
+    fn q8_0_packed_4x8_rows4_matches_retained_block_dot() {
+        assert_packed_rows4_matches_retained(Q8_0PackedRows4Interleave::I8);
     }
 
     #[test]

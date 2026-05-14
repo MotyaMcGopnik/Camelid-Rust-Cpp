@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
+    time::Instant,
 };
 
 const RETAIN_Q8_BLOCKS_ENV: &str = "CAMELID_RETAIN_Q8_0_BLOCKS";
@@ -84,6 +85,152 @@ pub enum RuntimeDType {
 pub struct Q8_0Block {
     pub scale: f32,
     pub quants: [i8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Q8_0PackedRows4Interleave {
+    I4,
+    I8,
+}
+
+impl Q8_0PackedRows4Interleave {
+    pub fn block_len(self) -> usize {
+        match self {
+            Self::I4 => 4,
+            Self::I8 => 8,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::I4 => "4x4",
+            Self::I8 => "4x8",
+        }
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Q8_0PackedRows4Block {
+    pub scales: [f32; 4],
+    pub quants: [i8; 128],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Q8_0PackedRows4 {
+    pub rows: usize,
+    pub blocks_per_row: usize,
+    pub interleave: Q8_0PackedRows4Interleave,
+    pub blocks: Vec<Q8_0PackedRows4Block>,
+}
+
+impl Q8_0PackedRows4 {
+    pub fn from_rows(
+        rows: usize,
+        blocks_per_row: usize,
+        interleave: Q8_0PackedRows4Interleave,
+        row_major_blocks: &[Q8_0Block],
+    ) -> Result<Self> {
+        let expected = rows.checked_mul(blocks_per_row).ok_or_else(|| {
+            BackendError::InvalidTensorData("q8_0 packed rows4 block count overflow".to_string())
+        })?;
+        if row_major_blocks.len() != expected || !rows.is_multiple_of(4) {
+            return Err(BackendError::InvalidTensorData(format!(
+                "q8_0 packed rows4 expected row-major blocks for rows multiple of 4; rows={rows}, blocks_per_row={blocks_per_row}, got {} blocks",
+                row_major_blocks.len()
+            )));
+        }
+
+        let block_len = interleave.block_len();
+        let chunks = 32 / block_len;
+        let mut blocks = Vec::with_capacity((rows / 4) * blocks_per_row);
+        for row_group in (0..rows).step_by(4) {
+            for block_idx in 0..blocks_per_row {
+                let mut scales = [0.0_f32; 4];
+                let mut quants = [0_i8; 128];
+                for lane in 0..4 {
+                    let source = &row_major_blocks[(row_group + lane) * blocks_per_row + block_idx];
+                    scales[lane] = source.scale;
+                }
+                for chunk in 0..chunks {
+                    for lane in 0..4 {
+                        let source =
+                            &row_major_blocks[(row_group + lane) * blocks_per_row + block_idx];
+                        let src_start = chunk * block_len;
+                        let dst_start = chunk * 4 * block_len + lane * block_len;
+                        quants[dst_start..dst_start + block_len]
+                            .copy_from_slice(&source.quants[src_start..src_start + block_len]);
+                    }
+                }
+                blocks.push(Q8_0PackedRows4Block { scales, quants });
+            }
+        }
+
+        Ok(Self {
+            rows,
+            blocks_per_row,
+            interleave,
+            blocks,
+        })
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.blocks.len() * std::mem::size_of::<Q8_0PackedRows4Block>()
+    }
+}
+
+fn q8_0_pack_trace_enabled() -> bool {
+    env_flag_enabled("CAMELID_Q8_0_PACK_TRACE")
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+fn q8_0_packed_rows4_enabled(interleave: Q8_0PackedRows4Interleave) -> bool {
+    match interleave {
+        Q8_0PackedRows4Interleave::I4 => env_flag_enabled("CAMELID_Q8_0_PACKED_4X4_DOT"),
+        Q8_0PackedRows4Interleave::I8 => env_flag_enabled("CAMELID_Q8_0_PACKED_4X8_DOT"),
+    }
+}
+
+fn q8_0_packed_rows4_for_shape(
+    name: &str,
+    shape: &TensorShape,
+    q8_0_blocks: Option<&[Q8_0Block]>,
+    interleave: Q8_0PackedRows4Interleave,
+) -> Result<Option<Q8_0PackedRows4>> {
+    if !q8_0_packed_rows4_enabled(interleave) {
+        return Ok(None);
+    }
+    let Some(blocks) = q8_0_blocks else {
+        return Ok(None);
+    };
+    if shape.dims.len() != 2 {
+        return Ok(None);
+    }
+    let rows = shape.dims[0];
+    let cols = shape.dims[1];
+    if !rows.is_multiple_of(4) || !cols.is_multiple_of(32) {
+        return Ok(None);
+    }
+    let started = Instant::now();
+    let packed = Q8_0PackedRows4::from_rows(rows, cols / 32, interleave, blocks)?;
+    if q8_0_pack_trace_enabled() {
+        eprintln!(
+            "camelid_q8_pack tensor={name} layout={} rows={rows} cols={cols} blocks={} bytes={} micros={}",
+            interleave.label(),
+            packed.blocks.len(),
+            packed.byte_len(),
+            started.elapsed().as_micros()
+        );
+    }
+    Ok(Some(packed))
 }
 
 #[derive(Debug, Clone)]
@@ -359,6 +506,8 @@ pub struct CpuTensor {
     pub dtype: RuntimeDType,
     pub source_type: Option<GgufTensorType>,
     pub q8_0_blocks: Option<Vec<Q8_0Block>>,
+    pub q8_0_packed_rows4_4x4: Option<Q8_0PackedRows4>,
+    pub q8_0_packed_rows4_4x8: Option<Q8_0PackedRows4>,
     pub q8_0_file_backing: Option<Q8_0FileBacking>,
     pub q8_0_split_file_backing: Option<Vec<Q8_0FileBacking>>,
     pub data: Vec<f32>,
@@ -505,6 +654,8 @@ impl Q8_0TensorBlocks {
             dtype: RuntimeDType::F32,
             source_type: None,
             q8_0_blocks: None,
+            q8_0_packed_rows4_4x4: None,
+            q8_0_packed_rows4_4x8: None,
             q8_0_file_backing: None,
             q8_0_split_file_backing: None,
             data,
@@ -567,6 +718,8 @@ impl CpuTensor {
             dtype: RuntimeDType::F32,
             source_type: None,
             q8_0_blocks: None,
+            q8_0_packed_rows4_4x4: None,
+            q8_0_packed_rows4_4x8: None,
             q8_0_file_backing: None,
             q8_0_split_file_backing: None,
             data,
@@ -593,6 +746,18 @@ impl CpuTensor {
         let mut tensor = Self::from_f32(name, dims, data)?;
         tensor.source_type = Some(GgufTensorType::Q8_0);
         tensor.q8_0_blocks = Some(q8_0_blocks);
+        tensor.q8_0_packed_rows4_4x4 = q8_0_packed_rows4_for_shape(
+            &tensor.name,
+            &tensor.shape,
+            tensor.q8_0_blocks.as_deref(),
+            Q8_0PackedRows4Interleave::I4,
+        )?;
+        tensor.q8_0_packed_rows4_4x8 = q8_0_packed_rows4_for_shape(
+            &tensor.name,
+            &tensor.shape,
+            tensor.q8_0_blocks.as_deref(),
+            Q8_0PackedRows4Interleave::I8,
+        )?;
         Ok(tensor)
     }
 
@@ -614,12 +779,27 @@ impl CpuTensor {
                 q8_0_blocks.len()
             )));
         }
+        let name = name.into();
+        let q8_0_packed_rows4_4x4 = q8_0_packed_rows4_for_shape(
+            &name,
+            &shape,
+            Some(&q8_0_blocks),
+            Q8_0PackedRows4Interleave::I4,
+        )?;
+        let q8_0_packed_rows4_4x8 = q8_0_packed_rows4_for_shape(
+            &name,
+            &shape,
+            Some(&q8_0_blocks),
+            Q8_0PackedRows4Interleave::I8,
+        )?;
         Ok(Self {
-            name: name.into(),
+            name,
             shape,
             dtype: RuntimeDType::F32,
             source_type: Some(GgufTensorType::Q8_0),
             q8_0_blocks: Some(q8_0_blocks),
+            q8_0_packed_rows4_4x4,
+            q8_0_packed_rows4_4x8,
             q8_0_file_backing: None,
             q8_0_split_file_backing: None,
             data: Vec::new(),
@@ -642,6 +822,8 @@ impl CpuTensor {
             dtype: RuntimeDType::F32,
             source_type: Some(GgufTensorType::Q8_0),
             q8_0_blocks: None,
+            q8_0_packed_rows4_4x4: None,
+            q8_0_packed_rows4_4x8: None,
             q8_0_file_backing: Some(backing),
             q8_0_split_file_backing: None,
             data: Vec::new(),
@@ -659,6 +841,8 @@ impl CpuTensor {
             dtype: RuntimeDType::F32,
             source_type: Some(GgufTensorType::Q8_0),
             q8_0_blocks: None,
+            q8_0_packed_rows4_4x4: None,
+            q8_0_packed_rows4_4x8: None,
             q8_0_file_backing: None,
             q8_0_split_file_backing: Some(backings),
             data: Vec::new(),
@@ -2192,12 +2376,26 @@ impl TensorStore {
                 )))
             }
         };
+        let q8_0_packed_rows4_4x4 = q8_0_packed_rows4_for_shape(
+            name,
+            &shape,
+            q8_0_blocks.as_deref(),
+            Q8_0PackedRows4Interleave::I4,
+        )?;
+        let q8_0_packed_rows4_4x8 = q8_0_packed_rows4_for_shape(
+            name,
+            &shape,
+            q8_0_blocks.as_deref(),
+            Q8_0PackedRows4Interleave::I8,
+        )?;
         Ok(CpuTensor {
             name: name.to_string(),
             shape,
             dtype: RuntimeDType::F32,
             source_type: Some(desc.tensor_type),
             q8_0_blocks,
+            q8_0_packed_rows4_4x4,
+            q8_0_packed_rows4_4x8,
             q8_0_file_backing,
             q8_0_split_file_backing: None,
             data,
