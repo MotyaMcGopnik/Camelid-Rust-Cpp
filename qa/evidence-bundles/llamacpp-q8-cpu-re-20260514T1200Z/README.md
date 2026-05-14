@@ -4,6 +4,17 @@ Generated: 2026-05-14 UTC
 LANE: `UBUNTU_X86_Q8`
 Scope: Ubuntu x86_64 dense Llama Q8_0 only.
 
+
+## CAMELID TPM UBUNTU X86 Q8 handoff — cron 0719640b, 2026-05-14T22:49Z
+
+- CAMELID TPM UBUNTU X86 Q8: Active evidence root remains this directory; latest recheck artifact is `artifacts/cron-0719640b-20260514T2249Z-verification.txt`.
+- CAMELID TPM UBUNTU X86 Q8: Canonical host path was re-verified as Ubuntu x86_64 on Intel Xeon Platinum 8488C with 16 vCPUs and AVX2/AVX512/VNNI/AMX hardware flags; this lane claims only the measured Ubuntu CPU path.
+- CAMELID TPM UBUNTU X86 Q8: llama.cpp evidence still shows Release CPU build with `GGML_CPU_REPACK=ON`, `GGML_OPENMP=ON`, AVX/AVX2/F16C/FMA on, and AVX512/VNNI/AMX build gates off for the measured binary.
+- CAMELID TPM UBUNTU X86 Q8: perf proof remains `artifacts/perf-bench-pp-symbols.txt`, dominated by `tinyBLAS_Q0_AVX<block_q8_0, block_q8_0>::gemm4xN<2>` via `llamafile_sgemm`/`ggml_compute_forward_mul_mat`; this proves the actual measured win is tiled Q8_0 MUL_MAT + OpenMP scheduling, not an AVX512/VNNI/AMX kernel.
+- CAMELID TPM UBUNTU X86 Q8: same-host llama.cpp and Camelid benchmark artifacts remain under `benchmarks/`; Camelid baseline/default-parallel/parallel-off retained-block microbench stayed ~16 ms with equal checksum, while the bounded default-off `CAMELID_X86_Q8_REPACK=on CAMELID_X86_Q8_KERNEL=avx2` API smoke cut first-token wall from 147425.30 ms to 75650.18 ms and kept token id 8586.
+- CAMELID TPM UBUNTU X86 Q8: bounded safe port slice is commit `80f6271` in `src/tensor/mod.rs`, `src/inference.rs`, and `tests/tensor_store.rs`; current Q8 path remains fallback when env gates are absent/off or AVX2 is unavailable.
+- CAMELID TPM UBUNTU X86 Q8: blocker is still full end-to-end Camelid API throughput equivalence against llama.cpp; next owner should extend the default-off packed/tiled Q8 GEMM architecture to FFN down and more dense linears only after Ubuntu x86 parity/perf evidence per tensor family.
+
 ## Repositories and status
 
 - Camelid local worktree: `main...origin/main [ahead 1]` with pre-existing unrelated dirty files; this active Ubuntu x86 evidence root records only the `UBUNTU_X86_Q8` findings/slice and should not be used as evidence for other platforms. This lane touched the x86 Q8 implementation files plus this evidence bundle; unrelated dirty evidence from other lanes was left unstaged.
@@ -12,6 +23,7 @@ Scope: Ubuntu x86_64 dense Llama Q8_0 only.
 - Model: `/home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf`.
 
 Evidence:
+- `artifacts/cron-0719640b-20260514T2249Z-verification.txt`
 - `artifacts/ubuntu-host-repos-models.txt`
 - `artifacts/ubuntu-llamacpp-build-symbols.txt`
 - `artifacts/llamacpp-git-grep.txt`
