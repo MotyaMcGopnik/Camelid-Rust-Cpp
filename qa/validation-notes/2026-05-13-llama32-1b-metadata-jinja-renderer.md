@@ -97,3 +97,24 @@ Local gates recorded there:
 - `scripts/check-public-scrub.sh` — passed.
 
 Claim boundary: this is a renderer/API/runtime guard refresh for the existing exact-row 1B lane. It does not promote model-native/larger context beyond checked packs, arbitrary templates beyond the supported row-template path, production throughput, portability, neighboring rows, or broad/full support.
+
+## 2026-05-14 10:00 UTC exact-row unsupported-template fail-closed refresh
+
+Scope: exact Llama 3.2 1B Instruct Q8_0 metadata-Jinja renderer hardening. The model-aware renderer path now treats the exact 1B Q8_0 lane as a required metadata-template path: when that exact row is selected, chat prompt construction errors honestly if `tokenizer.chat_template` is missing or if the template is not the recognized Llama 3 instruct header/EOT shape. Generic/non-exact rows still keep the compact/fallback behavior unless `CAMELID_METADATA_CHAT_TEMPLATE=metadata` is explicitly set, and the env opt-in still executes arbitrary test templates for development coverage.
+
+Validation artifact: `target/cron-95495a91-20260514T0959Z-jinja-unsupported-shape-api-runtime-head-83b1d00/`
+
+Recorded gates:
+
+- `cargo fmt --check` — passed.
+- `cargo test exact_llama32_1b --lib -- --nocapture` — 8/8 exact-row renderer tests passed, including the new missing-template and unrecognized-template fail-closed cases.
+- `cargo test metadata_jinja_renderer --lib -- --nocapture` — 16/16 focused metadata-Jinja tests passed, preserving system+user, user-only, multi-turn, assistant continuation/final, no-BOS, loop-template, dot-access, cache, strict undefined-variable, and explicit `raise_exception(...)` behavior.
+- `cargo test capabilities_report_support_contract_and_planned_lanes --test api_vertical_slice -- --nocapture` — API/support contract passed, keeping the exact 1B metadata-Jinja renderer surface and checked 512/1024/2048/4096/8192 bounded-pack fields.
+- Focused runtime/multi-CPU guards passed locally: `q8_0_file_reader_parallelizes_wide_outputs_by_default`, `q8_0_block_reader_linear_matches_q8_path_with_parallel_chunks`, and `batch_attention_parallel_context_matches_serial`.
+- `node scripts/test-chat-parity-harness.mjs` — passed.
+- `scripts/check-public-scrub.sh` — passed.
+- `git diff --check` — passed.
+- `cargo test` — full local Rust suite passed: 201 lib tests, 12 main tests, 59 API vertical tests, and all integration/doc-test targets.
+- Canonical Ubuntu validation host readiness showed `/` at 54% used with ~91G available; focused current working-tree validation using the Rust 1.87 toolchain passed `cargo test exact_llama32_1b --lib -- --nocapture` and `cargo test capabilities_report_support_contract_and_planned_lanes --test api_vertical_slice -- --nocapture`. The temporary remote validation checkout was removed after the run.
+
+Claim boundary: this is a fail-closed prompt-construction/API/runtime guard refresh for the existing exact-row 1B lane. It does not add a new model-runtime 8192 parity bundle and does not promote arbitrary templates beyond the supported row-template path, neighboring rows, model-native/larger contexts beyond checked packs, production throughput, portability, or broad/full support.

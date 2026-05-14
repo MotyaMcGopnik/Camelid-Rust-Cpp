@@ -3480,12 +3480,23 @@ fn render_chat_prompt_for_tokenization_for_model_result(
     tokenizer: &Tokenizer,
     model_id: Option<&str>,
 ) -> std::result::Result<RenderedPrompt, MiniJinjaError> {
+    let exact_llama32_1b_row = model_id.is_some_and(is_llama32_1b_exact_row_model_id);
     if let Some(template) = tokenizer.chat_template.as_deref() {
-        if metadata_chat_template_enabled()
-            || metadata_jinja_chat_template_supported_for_model(model_id, template)
-        {
+        if metadata_chat_template_enabled() {
             return render_metadata_jinja_chat_template_prompt(messages, tokenizer, template);
         }
+        if exact_llama32_1b_row {
+            if is_llama3_instruct_template(template) {
+                return render_metadata_jinja_chat_template_prompt(messages, tokenizer, template);
+            }
+            return Err(exact_llama32_1b_chat_template_error(
+                "exact Llama 3.2 1B Instruct Q8_0 requires a recognized Llama 3 metadata chat_template containing <|start_header_id|>, <|end_header_id|>, and <|eot_id|>",
+            ));
+        }
+    } else if exact_llama32_1b_row {
+        return Err(exact_llama32_1b_chat_template_error(
+            "exact Llama 3.2 1B Instruct Q8_0 requires tokenizer.chat_template metadata for chat prompt rendering",
+        ));
     }
 
     Ok(render_chat_prompt_for_tokenization_fallback(
@@ -3569,13 +3580,8 @@ fn is_mistral_instruct_template(template: &str) -> bool {
         && (template.contains("bos_token") || template.contains("</s>"))
 }
 
-fn metadata_jinja_chat_template_supported_for_model(
-    model_id: Option<&str>,
-    template: &str,
-) -> bool {
-    model_id.is_some_and(|model_id| {
-        is_llama32_1b_exact_row_model_id(model_id) && is_llama3_instruct_template(template)
-    })
+fn exact_llama32_1b_chat_template_error(message: &str) -> MiniJinjaError {
+    MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, message.to_string())
 }
 
 fn is_llama32_1b_exact_row_model_id(model_id: &str) -> bool {
@@ -5274,6 +5280,55 @@ mod tests {
         assert!(err
             .to_string()
             .contains("unsupported exact-row chat-template branch"));
+    }
+
+    #[test]
+    fn exact_llama32_1b_required_renderer_rejects_unrecognized_template_shape() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(
+            "{% for message in messages %}{{ message.role }}: {{ message.content }}{% endfor %}",
+        );
+
+        let err = render_chat_prompt_for_tokenization_for_model_result(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            &tokenizer,
+            Some("Llama-3.2-1B-Instruct-Q8_0"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), MiniJinjaErrorKind::InvalidOperation);
+        assert!(err
+            .to_string()
+            .contains("requires a recognized Llama 3 metadata chat_template"));
+    }
+
+    #[test]
+    fn exact_llama32_1b_required_renderer_rejects_missing_template_metadata() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = Tokenizer {
+            chat_template: None,
+            ..llama3_tokenizer_with_template(LLAMA3_METADATA_SUBSET_TEMPLATE)
+        };
+
+        let err = render_chat_prompt_for_tokenization_for_model_result(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            &tokenizer,
+            Some("llama32_1b_instruct_q8_0"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), MiniJinjaErrorKind::InvalidOperation);
+        assert!(err
+            .to_string()
+            .contains("requires tokenizer.chat_template metadata"));
     }
 
     #[test]
