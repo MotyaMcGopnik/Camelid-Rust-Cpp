@@ -22,7 +22,7 @@ Validation artifacts:
 
 - Local artifact: `target/cron-95495a91-20260513T2149Z-jinja-required-error-head-1ae5e9a17aaf/`
 - Local passes recorded there: `cargo fmt --check`; `cargo test metadata_jinja_renderer --lib -- --nocapture`; `cargo test`; `cargo test output_projection_q8_0_descriptor_shape_uses_storage_token_rows --lib -- --nocapture`.
-- Earlier clean Ubuntu validation copied clean source head `1ae5e9a17aaf` plus the Jinja/API-contract patch to `/home/ubuntu/work/camelid-jinja-supported-1b-20260513T2240Z-head-1ae5e9a17aaf` and passed focused renderer/API-contract gates plus `cargo test -q --lib` under rustc/cargo 1.87.0; this follow-up required-renderer-error slice was validated locally because it is a prompt-construction/API error-path change, not a model-runtime parity change.
+- Earlier clean Ubuntu validation copied clean source head `1ae5e9a17aaf` plus the Jinja/API-contract patch to a scrubbed remote checkout and passed focused renderer/API-contract gates plus `cargo test -q --lib` under rustc/cargo 1.87.0; this follow-up required-renderer-error slice was validated locally because it is a prompt-construction/API error-path change, not a model-runtime parity change.
 - Canonical Ubuntu host readiness was checked for this slice; `/` is currently 100% used with about 905 MiB free and the default `/usr/bin/cargo`/`rustc` is 1.75.0, so no fresh remote build/test was attempted. Readiness details are recorded in the local artifact as `ubuntu-host-readiness.log`.
 
 Known blockers / not promoted:
@@ -40,7 +40,7 @@ Additional validation artifacts are under `target/cron-0719640b-20260513T2253Z-t
 - `cargo-test-exact-llama32-1b.log`: 5/5 exact Llama 3.2 1B row renderer tests passed.
 - `cargo-test-capabilities-llama32-boundaries.log` and `cargo-test-api-vertical-capabilities-contract.log`: API capability gates passed for the exact 1B metadata-Jinja renderer surface plus 512/1024/2048/4096/8192 bounded pack fields.
 - `frontend-smoke-model-state-after-fixture-update.log` and `frontend-build-after-fixture-update.log`: frontend model-state smoke and Vite production build passed after updating the smoke fixture to enforce the 1B 4096/8192 boundary and latest `CMLD-819` surface.
-- Canonical Ubuntu host validation was attempted with a clean current-head source archive at `/home/ubuntu/work/camelid-tpm-jinja-d15581b-20260513T2258Z`, but a fresh build failed with `No space left on device`; the attempted tree was removed. As a fallback, the existing near-head Ubuntu Jinja lane `/home/ubuntu/work/camelid-jinja-supported-1b-20260513T2240Z-head-1ae5e9a17aaf` passed the focused metadata-Jinja/exact-row tests from its compiled target cache (`remote-existing-cargo-test-jinja-exact-1ae5.log`). Treat local current-head tests as the authoritative current-head evidence for this follow-up; the Ubuntu fallback is portability signal only, not a fresh current-head runtime promotion.
+- Canonical Ubuntu validation was attempted with a clean current-head source archive in a scrubbed remote checkout, but a fresh build failed with `No space left on device`; the attempted tree was removed. As a fallback, the existing near-head Ubuntu Jinja lane passed the focused metadata-Jinja/exact-row tests from its compiled target cache (`remote-existing-cargo-test-jinja-exact-1ae5.log`). Treat local current-head tests as the authoritative current-head evidence for this follow-up; the Ubuntu fallback is portability signal only, not a fresh current-head runtime promotion.
 
 No new model-runtime 4096/8192 bundle was produced in this follow-up. The 1B row continues to cite the existing bounded compact-template runtime bundles in `STATUS.md`: 4096 at `qa/evidence-bundles/llama32-1b-context-4096-current-head-20260513T163426Z-head-470388f/manifest.json` and 8192 at `qa/evidence-bundles/llama32-1b-context-8192-current-head-20260513T183501Z-head-aaf9207d1669/manifest.json`.
 
@@ -59,7 +59,7 @@ Validation artifacts are under `target/cron-58d09b5e-20260513T2302Z-backend-resu
 - `cargo-clippy-all-targets-all-features.log`: clippy passed with `-D warnings`.
 - `cargo-test-all-targets-all-features.log`: full Rust test suite passed.
 - `frontend-smoke-model-state.log` and `frontend-build.log`: frontend support-surface smoke and production build passed.
-- `ubuntu-readiness.log`: canonical Ubuntu host `54.186.43.33` remains blocked for fresh current-head validation because `/` is 100% full with about 297 MiB available and the default Rust toolchain is 1.75.0. No fresh remote build was attempted in this resume.
+- `ubuntu-readiness.log`: the canonical Ubuntu validation lane remained blocked for fresh current-head validation because `/` was 100% full with about 297 MiB available and the default Rust toolchain was 1.75.0. No fresh remote build was attempted in this resume.
 
 This resume still does not promote arbitrary templates, neighboring rows, model-native/larger contexts beyond the checked 512/1024/2048/4096/8192 packs for the exact 1B row, production throughput, portability, or full Llama-family support.
 

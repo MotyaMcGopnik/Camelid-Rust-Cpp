@@ -15,7 +15,7 @@ Dry-run plan / command audit without starting servers:
 ```sh
 node scripts/bench-llama3-same-host.mjs \
   --print-plan \
-  --model /home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf \
+  --model /path/to/Llama-3.2-3B-Instruct-Q8_0.gguf \
   --model-id llama32-3b-q8-throughput \
   --row-id llama32_3b_instruct_q8_0 \
   --max-tokens 16 --warmup 1 --repeats 3 --threads 8 \
@@ -28,7 +28,7 @@ Measurement run after building Camelid and ensuring llama.cpp `llama-server` is 
 CAMELID_BIN=target/release/camelid \
 LLAMA3_LLAMA_SERVER=target/reference/llama.cpp/build/bin/llama-server \
 node scripts/bench-llama3-same-host.mjs \
-  --model /home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf \
+  --model /path/to/Llama-3.2-3B-Instruct-Q8_0.gguf \
   --model-id llama32-3b-q8-throughput \
   --row-id llama32_3b_instruct_q8_0 \
   --max-tokens 16 --warmup 1 --repeats 3 --threads 8 \

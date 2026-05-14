@@ -5,7 +5,7 @@ set -euo pipefail
 # and validation-host details out of tracked files.
 patterns=(
   '/Users''/[^/]+/'
-  '/home/ubuntu/work''/Camelid'
+  '/home/ubuntu'
   'Documents''/cert'
   'ssh ''-i'
   '[A-Za-z0-9._-]+@''[0-9]{1,3}([.][0-9]{1,3}){3}'
@@ -13,6 +13,8 @@ patterns=(
   '(^|[^0-9])192[.]168[.][0-9]{1,3}[.][0-9]{1,3}([^0-9]|$)'
   '(^|[^0-9])172[.](1[6-9]|2[0-9]|3[0-1])[.][0-9]{1,3}[.][0-9]{1,3}([^0-9]|$)'
   '54[.]218[.]217[.]232'
+  '54[.]186[.]43[.]33'
+  '35[.]91[.]125[.]30'
   '[.]pem([^A-Za-z0-9_]|$)'
   '[$]HOME/Desktop/Code/backend|/Desktop/Code/backend'
   'StrictHostKeyChecking=accept-new'
