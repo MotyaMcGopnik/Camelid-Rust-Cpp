@@ -358,6 +358,7 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
   const hasTokenMetrics = false
   const showStreamingStatus = assistantStreaming && !messageContent
   const showLiveGenerationBadge = assistantStreaming && Boolean(messageContent)
+  const showLengthWarning = message.role === 'assistant' && !assistantStreaming && message.finish_reason === 'length'
 
   return (
     <article
@@ -374,6 +375,11 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
             : null
           : <p>{messageContent}</p>}
         {showLiveGenerationBadge && <LiveGenerationBadge elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} />}
+        {showLengthWarning && (
+          <div className="message-finish-warning" role="status">
+            Stopped before completing. Ask “continue” for a complete file.
+          </div>
+        )}
         {hasTokenMetrics && (
           <div className="message-token-metrics" aria-label="Generation speed">
             {message.first_byte_ms !== null && message.first_byte_ms !== undefined && <span>TTFB {(Number(message.first_byte_ms) / 1000).toFixed(2)}s</span>}

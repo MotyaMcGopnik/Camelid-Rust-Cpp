@@ -101,6 +101,7 @@ function estimateChatTokenCount(messages) {
 
 const CODE_FIRST_SYSTEM_PROMPT = 'begin immediately with complete runnable code. No intro. Output one self-contained file unless the user asks otherwise. For Python, start exactly with ```python, include imports, and close the fence after the complete script. For Python games, prefer tkinter from the standard library over pygame, keep it compact, and include a complete runnable event loop. For HTML output ONE self-contained file. Never use external files or script src. Include inline <style> and inline <script> with working click/game logic before </body>. Start exactly with ```html then <!doctype html> and close the fence after </html>.'
 const LOCAL_CHAT_DEMO_MAX_TOKENS = 800
+const LOCAL_CHAT_CODE_MAX_TOKENS = 2048
 
 function looksLikeCodePrompt(value) {
   const text = String(value || '').toLowerCase()
@@ -115,6 +116,11 @@ function applyLocalChatPolicy(messages) {
     { role: 'system', content: CODE_FIRST_SYSTEM_PROMPT },
     ...messages,
   ]
+}
+
+function localChatMaxTokens(messages) {
+  const lastUser = [...(messages || [])].reverse().find((message) => message.role === 'user')
+  return looksLikeCodePrompt(lastUser?.content) ? LOCAL_CHAT_CODE_MAX_TOKENS : LOCAL_CHAT_DEMO_MAX_TOKENS
 }
 
 function tokensPerSecond(tokens, elapsedMs) {
@@ -685,7 +691,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       const response = await fetch(`${normalizedApiBase}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: selectedModelId, messages: requestMessages, temperature: 0, max_tokens: LOCAL_CHAT_DEMO_MAX_TOKENS, stream: true }),
+        body: JSON.stringify({ model: selectedModelId, messages: requestMessages, temperature: 0, max_tokens: localChatMaxTokens(history), stream: true }),
       })
       const applyAssistantStreamPatch = (patch) => {
         updateConversationsState((current) => current.map((item) => (
