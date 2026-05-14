@@ -4,7 +4,7 @@ import { getChatGateState } from '../lib/chatGate'
 import { readStreamingChatCompletion } from '../lib/chatCompletionStream'
 import { NEW_CHAT_SENTINEL, resolveSelectedConversation, shouldCreateConversationForSend } from '../lib/chatState'
 import { normalizeStoredConversations } from '../lib/conversationStorage.js'
-import { isExternalModel, isRunnableModel, modelRuntimeIdMatches } from '../lib/modelState'
+import { getRuntimeRequestModelId, isExternalModel, isRunnableModel, modelRuntimeIdMatches } from '../lib/modelState'
 
 const TAB_STORAGE_KEY = 'camelid.activeTab'
 const SELECTED_CONVERSATION_STORAGE_KEY = 'camelid.selectedConversationId'
@@ -700,10 +700,11 @@ export function useDashboardData({ showNotice, clearNotice }) {
       )))
       setPendingChat(null)
 
+      const requestModelId = getRuntimeRequestModelId(selectedModel, runtime, selectedModelId)
       const response = await fetch(`${normalizedApiBase}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: selectedModelId, messages: requestMessages, temperature: 0, max_tokens: localChatMaxTokens(history), stream: true }),
+        body: JSON.stringify({ model: requestModelId, messages: requestMessages, temperature: 0, max_tokens: localChatMaxTokens(history), stream: true }),
       })
       const applyAssistantStreamPatch = (patch) => {
         updateConversationsState((current) => current.map((item) => (

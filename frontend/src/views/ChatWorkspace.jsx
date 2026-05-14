@@ -502,7 +502,7 @@ export default function ChatWorkspace({
     ? 'Load a supported model to chat'
     : !selectedModelRunnable
       ? describeModelState(selectedModel)
-      : runtime?.loaded_now && runtime?.active_model_id === selectedModelId
+      : selectedChatGate.runtimeLoaded
       ? 'Ready'
       : 'Ready to chat'
   const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !generationActive

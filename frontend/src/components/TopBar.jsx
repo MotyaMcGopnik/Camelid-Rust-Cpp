@@ -2,7 +2,7 @@ import { memo } from 'react'
 import { clampText, formatPreview, formatSidebarDate } from '../lib/formatters'
 import { formatCapabilityStatus, frontendSupportContractCopy, getCurrentCompatibilityTarget } from '../lib/capabilities'
 import { getChatGateState } from '../lib/chatGate'
-import { describeModelState, getModelStatusLabel } from '../lib/modelState'
+import { describeModelState, getModelStatusLabel, modelRuntimeIdMatches } from '../lib/modelState'
 
 const titles = {
   chat: 'Chat',
@@ -27,7 +27,7 @@ const navItems = [
 function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUpdatedAt, selectedConversationPreview, runtime, capabilities, selectedModelId, setSelectedModelId, models, demoMode = false }) {
   const rawConversationTitle = selectedConversationTitle?.trim()
   const hasCustomConversationTitle = Boolean(rawConversationTitle && rawConversationTitle.toLowerCase() !== 'new conversation')
-  const activeModel = models.find((model) => model.id === runtime?.active_model_id)
+  const activeModel = models.find((model) => modelRuntimeIdMatches(model, runtime))
   const selectedModel = models.find((model) => model.id === selectedModelId)
   const activeChatGate = getChatGateState(capabilities, activeModel, runtime)
   const runtimeChatReady = activeChatGate.chatUnlocked

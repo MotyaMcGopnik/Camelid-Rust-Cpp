@@ -284,6 +284,32 @@ try {
     runtime_model_name: selectedModel.id,
     model_path: '/models/Llama-3.2-3B-Instruct-Q8_0.gguf',
   }
+  const aliasApiMarkup = renderToStaticMarkup(React.createElement(ApiView, {
+    runtime: readyRuntime,
+    selectedModel: aliasSelectedModel,
+    capabilities,
+  }))
+
+  assert.match(aliasApiMarkup, /Selected exact row ready/, 'API view should keep alias-selected 3B exact rows green when active_model_id matches runtime_model_name')
+  assert.match(aliasApiMarkup, /&quot;model&quot;: &quot;llama32_3b_instruct_q8_0&quot;/, 'API curl should send the backend loaded model id, not the browser-only alias')
+  assert.doesNotMatch(aliasApiMarkup, /&quot;model&quot;: &quot;browser-llama32-3b-alias&quot;/, 'API curl must not create model_mismatch risk for alias-selected exact rows')
+
+  const aliasTopBarMarkup = renderToStaticMarkup(React.createElement(TopBar, {
+    tab: 'api',
+    setTab: noop,
+    selectedConversationTitle: '',
+    selectedConversationUpdatedAt: '',
+    selectedConversationPreview: '',
+    runtime: readyRuntime,
+    capabilities,
+    selectedModelId: aliasSelectedModel.id,
+    setSelectedModelId: noop,
+    models: [aliasSelectedModel],
+  }))
+
+  assert.match(aliasTopBarMarkup, /Runtime chat gate[\s\S]*Llama 3\.2 3B Instruct Q8_0/, 'TopBar runtime readiness should resolve the active model through runtime_model_name aliases')
+  assert.doesNotMatch(aliasTopBarMarkup, /Nothing loaded now/, 'TopBar must not show an empty runtime state for alias-selected loaded 3B rows')
+
   const modelsMarkup = renderToStaticMarkup(React.createElement(ModelsView, {
     runtime: readyRuntime,
     capabilities,
