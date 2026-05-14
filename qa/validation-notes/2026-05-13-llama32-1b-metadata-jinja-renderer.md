@@ -80,3 +80,20 @@ Recorded local gates:
 - `scripts/check-public-scrub.sh`
 
 No new model-runtime 8192 parity bundle was produced in this follow-up; the existing exact-row 8192 runtime bundle remains the current cited model-runtime evidence. No broad arbitrary-template, neighboring-row, production-throughput, portability, or broader/full-support claim is promoted here.
+
+## 2026-05-14 current-head dot-access/API/runtime guard refresh
+
+Scope: exact Llama 3.2 1B Instruct Q8_0 metadata-Jinja renderer hardening plus the adjacent 8192/API and focused multi-CPU runtime guardrails. Added a renderer execution test for MiniJinja `message.role` / `message.content` dot-field access and `loop.index0`, in addition to the existing bracket-access Llama 3 template shape coverage. This closes a small prompt-construction parity edge common in HuggingFace chat templates without widening the support claim beyond the recognized exact-row Llama 3.2 1B Q8_0 metadata-template path.
+
+Validation artifact: `target/cron-95495a91-20260514T0704Z-jinja-dot-access-api-runtime-head-12784e8/`
+
+Local gates recorded there:
+
+- `cargo fmt --check` — passed.
+- `cargo test metadata_jinja_renderer --lib -- --nocapture` — 16/16 focused metadata-Jinja tests passed, including dot-field access, system+user, user-only, multi-turn, assistant continuation/final, no-BOS templates, loop-template execution, cache reuse, strict undefined-variable errors, and explicit `raise_exception(...)` unsupported cases.
+- `cargo test capabilities_report_support_contract_and_planned_lanes --test api_vertical_slice -- --nocapture` — passed; preserves the exact 1B metadata-Jinja renderer surface plus checked 512/1024/2048/4096/8192 bounded context fields and fail-closed broader-template wording.
+- Focused runtime/multi-CPU guards passed: `q8_0_file_reader_parallelizes_wide_outputs_by_default`, `q8_0_block_reader_linear_matches_q8_path_with_parallel_chunks`, and `batch_attention_parallel_context_matches_serial`.
+- `node scripts/test-chat-parity-harness.mjs` — passed.
+- `scripts/check-public-scrub.sh` — passed.
+
+Claim boundary: this is a renderer/API/runtime guard refresh for the existing exact-row 1B lane. It does not promote model-native/larger context beyond checked packs, arbitrary templates beyond the supported row-template path, production throughput, portability, neighboring rows, or broad/full support.

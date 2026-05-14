@@ -5183,6 +5183,34 @@ mod tests {
     }
 
     #[test]
+    fn metadata_jinja_renderer_supports_dot_access_message_fields() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var(METADATA_CHAT_TEMPLATE_ENV, "metadata");
+        let tokenizer = llama3_tokenizer_with_template(
+            "{% for message in messages %}{{ loop.index0 }}:{{ message.role }}={{ message.content }}\n{% endfor %}",
+        );
+
+        let rendered = render_chat_prompt_for_tokenization(
+            &[
+                ChatMessage {
+                    role: " system ".to_string(),
+                    content: "Be brief.".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                },
+            ],
+            &tokenizer,
+        );
+
+        assert!(rendered.add_special);
+        assert!(rendered.parse_special);
+        assert_eq!(rendered.text, "0:system=Be brief.\n1:user=hello\n");
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+    }
+
+    #[test]
     fn metadata_jinja_renderer_reuses_compiled_template_environment() {
         let _guard = crate::test_support::env_lock();
         clear_jinja_chat_template_environment_cache();
