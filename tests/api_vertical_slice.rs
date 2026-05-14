@@ -301,7 +301,10 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
         llama32_3b["tested_context"],
         "short_api_webui_smoke_with_broader_prompt_pack_parity_plus_first_512_second_1024_and_third_2048_context_packs"
     );
-    assert_eq!(llama32_3b["chat_template_renderer"], "compact");
+    assert_eq!(
+        llama32_3b["chat_template_renderer"],
+        "metadata_jinja_supported_for_exact_row"
+    );
     assert_eq!(
         llama32_3b["chat_template_shape_pack"],
         "validated_bounded_pack"
