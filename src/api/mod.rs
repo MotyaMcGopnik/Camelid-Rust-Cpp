@@ -5452,6 +5452,30 @@ mod tests {
     }
 
     #[test]
+    fn exact_llama32_3b_required_renderer_rejects_unrecognized_template_shape() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let tokenizer = llama3_tokenizer_with_template(
+            "{% for message in messages %}{{ message.role }}: {{ message.content }}{% endfor %}",
+        );
+
+        let err = render_chat_prompt_for_tokenization_for_model_result(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            &tokenizer,
+            Some("Llama-3.2-3B-Instruct-Q8_0"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), MiniJinjaErrorKind::InvalidOperation);
+        assert!(err.to_string().contains(
+            "exact Llama 3.2 3B Instruct Q8_0 requires a recognized Llama 3 metadata chat_template"
+        ));
+    }
+
+    #[test]
     fn exact_llama32_1b_required_renderer_rejects_missing_template_metadata() {
         let _guard = crate::test_support::env_lock();
         std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
@@ -5533,6 +5557,27 @@ mod tests {
             }],
             &tokenizer,
             Some("Llama-3.2-1B-Instruct-Q8_0"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), MiniJinjaErrorKind::UndefinedError);
+    }
+
+    #[test]
+    fn exact_llama32_3b_required_metadata_jinja_renderer_reports_undefined_variables() {
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var(METADATA_CHAT_TEMPLATE_ENV);
+        let template =
+            "{{ unsupported_template_variable }}<|start_header_id|><|end_header_id|><|eot_id|>";
+        let tokenizer = llama3_tokenizer_with_template(template);
+
+        let err = render_chat_prompt_for_tokenization_for_model_result(
+            &[ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            &tokenizer,
+            Some("Meta-Llama-3.2-3B-Instruct-Q8_0"),
         )
         .unwrap_err();
 
