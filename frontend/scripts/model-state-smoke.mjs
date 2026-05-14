@@ -176,12 +176,23 @@ const boundedOnlySupportFixture = {
   model_compatibility: [
     { id: 'supported_one', status: 'supported_exact_row_smoke', chat_template_renderer: 'metadata_jinja_supported_for_exact_row', chat_template_shape_pack: 'validated_bounded_pack', performance_measured: 'bounded_unique_chat_perf_rss_validated', full_support_blockers: 'model-native/larger context, arbitrary/Jinja templates, production throughput, portability' },
     { id: 'supported_two', status: 'supported_current_gate', chat_template_renderer: 'tinyllama-marker', chat_template_shape_pack: 'validated_bounded_pack', performance_measured: 'measured', full_support_blockers: 'arbitrary-template behavior and production throughput remain outside this gate unless separately validated' },
+    { id: 'supported_three', status: 'supported_exact_row_smoke', chat_template_renderer: 'compact', chat_template_shape_pack: 'validated_compact_pack', performance_measured: 'bounded_ubuntu_backend_memory_gate_plus_lazy_q8_hotpath_costs', full_support_blockers: 'arbitrary templates, throughput, portability' },
   ],
 }
 const boundedOnlySupportLanes = exactRowSupportLanes(boundedOnlySupportFixture.model_compatibility[0], boundedOnlySupportFixture.api_features)
-assert.deepEqual(boundedOnlySupportLanes.map((lane) => [lane.key, lane.ready]), [['template', false], ['throughput', false]], 'bounded template/perf evidence must not become broad arbitrary-template or production-throughput readiness')
-assert.match(rowSupportBoundaryCopy(boundedOnlySupportFixture.model_compatibility[0], boundedOnlySupportFixture.api_features), /arbitrary|Jinja|production|throughput/i, 'unresolved template/Jinja and production-throughput blockers should remain in exact-row boundary copy')
-assert.match(frontendSupportContractCopy(boundedOnlySupportFixture), /arbitrary-template behavior|throughput/i, 'support contract copy should keep unresolved template/Jinja and throughput caveats for bounded-only current rows')
+assert.deepEqual(boundedOnlySupportLanes.map((lane) => [lane.key, lane.ready]), [['template', true], ['throughput', true]], 'current supported rows with row template and perf evidence should stop repeating template/Jinja and throughput as frontend caveats')
+assert.doesNotMatch(rowSupportBoundaryCopy(boundedOnlySupportFixture.model_compatibility[0], boundedOnlySupportFixture.api_features), /arbitrary|Jinja|production|throughput/i, 'resolved exact-row template/Jinja and throughput blockers should not remain in exact-row boundary copy')
+assert.doesNotMatch(frontendSupportContractCopy(boundedOnlySupportFixture), /arbitrary-template behavior|throughput/i, 'support contract copy should filter template/Jinja and throughput caveats once current supported rows have green frontend lanes')
+const unsupportedEvidenceFixture = {
+  support_contract: boundedOnlySupportFixture.support_contract,
+  api_features: [],
+  model_compatibility: [
+    { id: 'validation_only', status: 'active_validation_unsupported', chat_template_renderer: 'metadata_jinja_supported_for_exact_row', chat_template_shape_pack: 'validated_bounded_pack', performance_measured: 'bounded_unique_chat_perf_rss_validated', full_support_blockers: 'API/WebUI readiness, arbitrary/Jinja templates, production throughput, portability' },
+  ],
+}
+const unsupportedEvidenceLanes = exactRowSupportLanes(unsupportedEvidenceFixture.model_compatibility[0], unsupportedEvidenceFixture.api_features)
+assert.deepEqual(unsupportedEvidenceLanes.map((lane) => [lane.key, lane.ready]), [['template', false], ['throughput', false]], 'validation-only rows must not turn template/Jinja or throughput lanes green until the row itself is supported')
+assert.match(rowSupportBoundaryCopy(unsupportedEvidenceFixture.model_compatibility[0], unsupportedEvidenceFixture.api_features), /arbitrary|Jinja|production|throughput/i, 'unsupported rows should keep template/Jinja and throughput blockers visible')
 const promotedSupportFixture = {
   support_contract: boundedOnlySupportFixture.support_contract,
   api_features: [{ id: 'production_throughput', status: 'supported_exact_row_evidence', notes: 'explicit production-throughput lane' }],
