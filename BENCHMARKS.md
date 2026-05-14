@@ -59,6 +59,28 @@ Method summary:
 
 This is a useful Camelid result, but the claim must stay precise: Camelid's Rust GGUF path can run the exact Q8_0 rows with substantially lower resident memory in the memory-first profile. It does **not** claim Camelid is faster than MLX-LM on this workload.
 
+### Apple Silicon retained-Q8 scheduler gate
+
+These results come from `qa/evidence-bundles/apple-silicon-retained-q8-hybrid-default-off-20260514T020011Z-head-fbd37d1/summary.json`.
+
+Method summary:
+
+- scope: same-host Apple Silicon retained-Q8 short decode gate
+- exact row: Llama 3.2 3B Instruct Q8_0
+- endpoint: `/v1/chat/completions`
+- max tokens: `8`
+- weight cache: hot on measured rows
+- prompt cache: unique prompts, no measured prompt-cache hits
+- boundary: this is a narrow scheduler tuning gate, not a broad Metal benchmark
+
+| Mode | Repeats | Avg generate ms | Avg layers ms | Avg FFN total ms | Observed peak backend RSS MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Previous implicit hybrid default, 10% GPU suffix | 2 | 4867 | 4749.75 | 883.52 | 4458.73 |
+| Explicit CPU-only sweep | 2 | 4808 | 4689.74 | 858.8 | 4255.06 |
+| New default, hybrid off | 3 | 4819.33 | 4701.71 | 846.32 | 3817.66 |
+
+Decision: retained-Q8 CPU+Metal hybrid remains available as an explicit experiment, but normal retained-Q8 serving defaults to the CPU path because the measured hybrid suffix scheduler did not win this gate.
+
 ### Ubuntu first-token direction probe
 
 This result comes from `qa/evidence-bundles/llama32-3b-parallel-q8-first-token-20260505T140400Z-head-ffc22b85214f/manifest.json`.

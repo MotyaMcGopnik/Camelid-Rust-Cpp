@@ -716,11 +716,7 @@ fn log_acceleration_state() {
         hybrid_q8_retained = std::env::var("CAMELID_HYBRID_Q8_RETAINED")
             .ok()
             .as_deref()
-            .unwrap_or(if cfg!(target_os = "macos") {
-                "auto"
-            } else {
-                "off"
-            }),
+            .unwrap_or("off"),
         hybrid_q8_gpu_percent = std::env::var("CAMELID_HYBRID_Q8_GPU_PERCENT")
             .ok()
             .as_deref()

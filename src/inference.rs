@@ -6200,11 +6200,11 @@ fn q8_0_hybrid_retained_enabled() -> bool {
                 || value.eq_ignore_ascii_case("disabled")
                 || value.eq_ignore_ascii_case("cpu"))
         }
-        // On macOS, retained Q8_0 is Camelid's fast local path. Enable the hybrid
-        // scheduler by default with a small GPU slice; the Metal call falls back to
-        // CPU automatically if Metal is unavailable or rejects the shape.
-        Err(env::VarError::NotPresent) => cfg!(target_os = "macos"),
-        Err(_) => cfg!(target_os = "macos"),
+        // Same-host Apple Silicon sweeps showed the retained-Q8 CPU+Metal suffix
+        // scheduler was slower and used more RSS than the paired CPU Q8 path for
+        // short decode gates. Keep it as an explicit experiment instead of making
+        // normal retained-Q8 serving pay Metal submission/synchronization overhead.
+        Err(_) => false,
     }
 }
 
