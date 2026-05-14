@@ -4,7 +4,7 @@ import { getChatGateState } from '../lib/chatGate'
 import { readStreamingChatCompletion } from '../lib/chatCompletionStream'
 import { NEW_CHAT_SENTINEL, resolveSelectedConversation, shouldCreateConversationForSend } from '../lib/chatState'
 import { normalizeStoredConversations } from '../lib/conversationStorage.js'
-import { isExternalModel, isRunnableModel } from '../lib/modelState'
+import { isExternalModel, isRunnableModel, modelRuntimeIdMatches } from '../lib/modelState'
 
 const TAB_STORAGE_KEY = 'camelid.activeTab'
 const SELECTED_CONVERSATION_STORAGE_KEY = 'camelid.selectedConversationId'
@@ -211,8 +211,17 @@ function modelReadinessFromCurrent(currentModel, active, generationReady) {
   }
 }
 
+function localRecordMatchesBackendId(record, backendModelId) {
+  if (!record || !backendModelId) return false
+  return backendModelId === record.id || backendModelId === record.runtime_model_name
+}
+
+function modelMatchesHealthActive(model, health) {
+  return modelRuntimeIdMatches(model, { active_model_id: health?.active_model_id })
+}
+
 function modelFromLocalRecord(record, health, currentModel, apiBase) {
-  const active = health?.active_model_id === record.id
+  const active = modelMatchesHealthActive(record, health)
   const generationReady = active && Boolean(health?.generation_ready)
   return {
     ...record,
@@ -228,19 +237,21 @@ function modelFromLocalRecord(record, health, currentModel, apiBase) {
 }
 
 function modelFromBackend(item, health, currentModel, localRecord, apiBase) {
-  const active = health?.active_model_id === item.id
+  const runtimeModelName = item.id
+  const id = localRecord?.id || item.id
+  const active = localRecordMatchesBackendId(localRecord, health?.active_model_id) || health?.active_model_id === item.id
   const generationReady = active && Boolean(health?.generation_ready)
   const tokenizer = active ? currentModel?.tokenizer : null
   const quantLabel = active ? getLoadedModelQuantLabel(currentModel) : null
   const modelPath = active ? getModelPath(currentModel) || localRecord?.model_path || '' : localRecord?.model_path || ''
 
   return {
-    id: item.id,
+    id,
     name: localRecord?.name || item.name || item.id,
     provider_kind: 'local',
     status: generationReady ? 'ready' : localRecord?.status || 'registered',
     model_path: modelPath,
-    runtime_model_name: item.id,
+    runtime_model_name: runtimeModelName,
     source: localRecord?.source || 'Camelid local runtime',
     engine: 'camelid',
     quant: quantLabel || localRecord?.quant || null,
@@ -264,8 +275,9 @@ function mergeModelLists({ modelItems, health, currentModel, localModels, apiBas
     byId.set(record.id, modelFromLocalRecord(record, health, currentModel, apiBase))
   })
   modelItems.forEach((item) => {
-    const localRecord = localRecords.find((record) => record.id === item.id) || null
-    byId.set(item.id, modelFromBackend(item, health, currentModel, localRecord, apiBase))
+    const localRecord = localRecords.find((record) => localRecordMatchesBackendId(record, item.id)) || null
+    const mergedModel = modelFromBackend(item, health, currentModel, localRecord, apiBase)
+    byId.set(mergedModel.id, mergedModel)
   })
   return [...byId.values()].sort(compareModelsByName)
 }
@@ -485,7 +497,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       setSelectedModelId((current) => {
         if (!nextModels.length) return ''
         const currentModel = current ? nextModels.find((model) => model.id === current) : null
-        const activeModel = health?.active_model_id ? nextModels.find((model) => model.id === health.active_model_id) : null
+        const activeModel = health?.active_model_id ? nextModels.find((model) => modelRuntimeIdMatches(model, { active_model_id: health.active_model_id })) : null
         const activeModelRunnable = activeModel && isRunnableModel(activeModel)
         const currentModelRunnable = currentModel && isRunnableModel(currentModel)
         const runnableModel = nextModels.find((model) => isRunnableModel(model)) || null
@@ -908,7 +920,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
       showNotice('This model needs a local GGUF path before Camelid can load it.', 'error')
       return
     }
-    if (runtime?.active_model_id === id && runtime?.generation_ready) {
+    if (modelRuntimeIdMatches(model, runtime) && runtime?.generation_ready) {
       showNotice('That model is already loaded and generation-ready.', 'success')
       return
     }

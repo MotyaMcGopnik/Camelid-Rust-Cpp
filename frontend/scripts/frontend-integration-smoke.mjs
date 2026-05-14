@@ -20,6 +20,7 @@ const server = await createServer({
 try {
   const { default: ChatWorkspace } = await server.ssrLoadModule('/src/views/ChatWorkspace.jsx')
   const { default: ApiView } = await server.ssrLoadModule('/src/views/ApiView.jsx')
+  const { default: ModelsView } = await server.ssrLoadModule('/src/views/ModelsView.jsx')
   const { default: TopBar } = await server.ssrLoadModule('/src/components/TopBar.jsx')
 
   const noop = () => {}
@@ -275,6 +276,40 @@ try {
 
   assert.match(topBarMarkup, /Support contract/, 'TopBar should render the support contract status surface')
   assert.doesNotMatch(topBarMarkup, /arbitrary|Jinja|production throughput|throughput/s, 'TopBar support contract label should use filtered frontend support copy once template/Jinja and throughput lanes are green')
+
+  const aliasSelectedModel = {
+    ...selectedModel,
+    id: 'browser-llama32-3b-alias',
+    runtime_model_name: selectedModel.id,
+    model_path: '/models/Llama-3.2-3B-Instruct-Q8_0.gguf',
+  }
+  const modelsMarkup = renderToStaticMarkup(React.createElement(ModelsView, {
+    runtime: readyRuntime,
+    capabilities,
+    refreshDashboard: noop,
+    registerForm: { id: '', name: '', model_path: '', runtime_model_name: '' },
+    setRegisterForm: noop,
+    externalForm: { id: '', name: '', source: '', api_base: '', api_key: '', model_name: '' },
+    setExternalForm: noop,
+    registerModel: noop,
+    connectExternalModel: noop,
+    models: [aliasSelectedModel],
+    selectedModelId: aliasSelectedModel.id,
+    setSelectedModelId: noop,
+    loadingModelId: '',
+    activateModel: noop,
+    unloadCurrentModel: noop,
+    installModel: noop,
+    installCatalogModel: noop,
+    cancelModelDownload: noop,
+  }))
+
+  assert.match(modelsMarkup, /Llama 3\.2 3B Instruct Q8_0/, 'Models view should render the exact 3B row when the browser id differs from the backend runtime id')
+  assert.match(modelsMarkup, /chat enabled|The selected model is loaded, generation-ready, and backed by an exact supported \/api\/capabilities row/, 'Models view should treat runtime_model_name active_model_id matches as next-chat ready when exact 3B evidence is supported')
+  assert.match(modelsMarkup, /Chat unlockable/, 'Tracked 3B card should turn green only after exact row support and runtime readiness both match')
+  assert.match(modelsMarkup, /Loaded exact-row match/, 'Tracked 3B card should mark the alias model as the loaded exact-row match')
+  assert.match(modelsMarkup, /3B API\/WebUI smoke passed/, 'Models view should keep 3B end-to-end WebUI evidence visible on the exact row card')
+  assert.doesNotMatch(modelsMarkup, /This browser\/runtime list does not currently show the exact 3B row/, 'Alias runtime matches must not fall through to the missing-3B acceptance placeholder')
 
   assert.match(exactReadyMarkup, /responses stream/, 'API view should normalize provider-scoped dotted feature ids before rendering')
   assert.match(exactReadyMarkup, /hosted model-style streamed response compatibility stays provider-neutral/, 'API view should neutralize hosted-brand feature notes before rendering')
