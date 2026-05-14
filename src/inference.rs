@@ -3272,40 +3272,75 @@ fn forward_layer_timed(
     }
     trace_forward_layer_memory(layer_idx, "attention_norm_done");
 
-    let started = Instant::now();
-    let q = linear_runtime(
-        &attn_norm,
-        &layer.attention_q,
-        format!("layer_{layer_idx}_attention_q"),
-        collect_diagnostics,
-    )?;
+    let qkv_started = Instant::now();
+    let shared_qkv = if collect_diagnostics {
+        None
+    } else {
+        try_attention_qkv_shared_q8_0_block_dot(
+            &attn_norm,
+            &layer.attention_q,
+            &layer.attention_k,
+            &layer.attention_v,
+        )?
+    };
+
+    let (q, k, v, shared_qkv_elapsed) = if let Some((q, k, v)) = shared_qkv {
+        let elapsed = qkv_started.elapsed().as_micros();
+        (q, k, v, Some(elapsed))
+    } else {
+        let started = Instant::now();
+        let q = linear_runtime(
+            &attn_norm,
+            &layer.attention_q,
+            format!("layer_{layer_idx}_attention_q"),
+            collect_diagnostics,
+        )?;
+        timings.attention_q = started.elapsed().as_micros();
+
+        let started = Instant::now();
+        let k = linear_for_role_runtime(
+            &attn_norm,
+            &layer.attention_k,
+            format!("layer_{layer_idx}_attention_k"),
+            "attention_k",
+            collect_diagnostics,
+        )?;
+        timings.attention_k = started.elapsed().as_micros();
+
+        let started = Instant::now();
+        let v = linear_for_role_runtime(
+            &attn_norm,
+            &layer.attention_v,
+            format!("layer_{layer_idx}_attention_v"),
+            "attention_v",
+            collect_diagnostics,
+        )?;
+        timings.attention_v = started.elapsed().as_micros();
+        (q, k, v, None)
+    };
+    if let Some(total_elapsed) = shared_qkv_elapsed {
+        let base = total_elapsed / 3;
+        timings.attention_q = base;
+        timings.attention_k = base;
+        timings.attention_v = total_elapsed - (base * 2);
+    }
     let attention_q_stats = collect_diagnostics
         .then(|| LlamaTensorStats::from_tensor(&q))
         .transpose()?;
     let attention_q_diagnostic = collect_diagnostics
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_q, &q, "linear"))
         .transpose()?;
-    timings.attention_q = started.elapsed().as_micros();
     if let Some(memory) = &mut memory {
         memory.record_after_attention_q(capture_memory_sample(kv_cache));
     }
     trace_forward_layer_memory(layer_idx, "attention_q_done");
 
-    let started = Instant::now();
-    let k = linear_for_role_runtime(
-        &attn_norm,
-        &layer.attention_k,
-        format!("layer_{layer_idx}_attention_k"),
-        "attention_k",
-        collect_diagnostics,
-    )?;
     let attention_k_stats = collect_diagnostics
         .then(|| LlamaTensorStats::from_tensor(&k))
         .transpose()?;
     let attention_k_diagnostic = collect_diagnostics
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_k, &k, "attention_k"))
         .transpose()?;
-    timings.attention_k = started.elapsed().as_micros();
     if let Some(memory) = &mut memory {
         memory.record_after_attention_k(capture_memory_sample(kv_cache));
     }
@@ -3368,21 +3403,12 @@ fn forward_layer_timed(
     }
     trace_forward_layer_memory(layer_idx, "attention_rope_done");
 
-    let started = Instant::now();
-    let v = linear_for_role_runtime(
-        &attn_norm,
-        &layer.attention_v,
-        format!("layer_{layer_idx}_attention_v"),
-        "attention_v",
-        collect_diagnostics,
-    )?;
     let attention_v_stats = collect_diagnostics
         .then(|| LlamaTensorStats::from_tensor(&v))
         .transpose()?;
     let attention_v_diagnostic = collect_diagnostics
         .then(|| linear_projection_diagnostics(&attn_norm, &layer.attention_v, &v, "attention_v"))
         .transpose()?;
-    timings.attention_v = started.elapsed().as_micros();
     if let Some(memory) = &mut memory {
         memory.record_after_attention_v(capture_memory_sample(kv_cache));
     }
@@ -5486,6 +5512,66 @@ fn top_signed_output_components(
     });
     filtered.truncate(TENSOR_CHECKPOINT_SAMPLE);
     filtered
+}
+
+fn try_attention_qkv_shared_q8_0_block_dot(
+    input: &CpuTensor,
+    q_weight: &CpuTensor,
+    k_weight: &CpuTensor,
+    v_weight: &CpuTensor,
+) -> Result<Option<(CpuTensor, CpuTensor, CpuTensor)>> {
+    if input.rank() != 2 || input.dim(0)? != 1 {
+        return Ok(None);
+    }
+    let input_width = input.dim(1)?;
+    let q_width = linear_output_width(input, q_weight, "attention q")?;
+    let k_width = linear_output_width(input, k_weight, "attention k")?;
+    let v_width = linear_output_width(input, v_weight, "attention v")?;
+    let input_row = &input.data[..input_width];
+
+    let (q_transposed, k_transposed, v_transposed) = match (
+        borrowed_linear_weight_as_transposed(q_weight, input_width),
+        borrowed_linear_weight_as_transposed(k_weight, input_width),
+        borrowed_linear_weight_as_transposed(v_weight, input_width),
+    ) {
+        (Ok(q_transposed), Ok(k_transposed), Ok(v_transposed))
+            if q_transposed.rows == q_width
+                && k_transposed.rows == k_width
+                && v_transposed.rows == v_width
+                && should_use_borrowed_q8_0_block_dot(q_transposed, input_width)
+                && should_use_borrowed_q8_0_block_dot(k_transposed, input_width)
+                && should_use_borrowed_q8_0_block_dot(v_transposed, input_width) =>
+        {
+            (q_transposed, k_transposed, v_transposed)
+        }
+        _ => return Ok(None),
+    };
+
+    let quantized_input = quantize_q8_0_row(input_row);
+    let mut q = vec![0.0; q_width];
+    let mut k = vec![0.0; k_width];
+    let mut v = vec![0.0; v_width];
+    accumulate_transposed_linear_row_q8_0_block_dot_quantized(
+        &quantized_input.blocks,
+        q_transposed,
+        &mut q,
+    );
+    accumulate_transposed_linear_row_q8_0_block_dot_quantized(
+        &quantized_input.blocks,
+        k_transposed,
+        &mut k,
+    );
+    accumulate_transposed_linear_row_q8_0_block_dot_quantized(
+        &quantized_input.blocks,
+        v_transposed,
+        &mut v,
+    );
+
+    Ok(Some((
+        CpuTensor::from_f32("attention_q_shared_q8", vec![1, q_width], q)?,
+        CpuTensor::from_f32("attention_k_shared_q8", vec![1, k_width], k)?,
+        CpuTensor::from_f32("attention_v_shared_q8", vec![1, v_width], v)?,
+    )))
 }
 
 fn gated_ffn_activation(
