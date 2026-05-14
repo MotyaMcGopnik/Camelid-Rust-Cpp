@@ -1,4 +1,4 @@
-file:///home/ubuntu/work/camelid-mixtral-sev1-20260514T123044Z-head-61e6e972a294/frontend/node_modules/rolldown/dist/shared/rolldown-build-DSxL8qiP.mjs:9
+file://<validation-host-home>/work/camelid-mixtral-sev1-20260514T123044Z-head-61e6e972a294/frontend/node_modules/rolldown/dist/shared/rolldown-build-DSxL8qiP.mjs:9
 import { formatWithOptions, styleText } from "node:util";
                             ^^^^^^^^^
 SyntaxError: The requested module 'node:util' does not provide an export named 'styleText'

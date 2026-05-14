@@ -1,5 +1,5 @@
 {
-  "path": "/home/ubuntu/models/mixtral/mixtral-8x7b-instruct-v0.1.Q8_0.gguf",
+  "path": "<validation-host-home>/models/mixtral/mixtral-8x7b-instruct-v0.1.Q8_0.gguf",
   "version": 3,
   "tensor_count": 995,
   "metadata_count": 26,

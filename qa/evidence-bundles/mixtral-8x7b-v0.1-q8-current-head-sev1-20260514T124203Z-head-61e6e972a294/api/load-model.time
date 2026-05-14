@@ -1,4 +1,4 @@
-	Command being timed: "curl -sS --max-time 900 -w \nHTTP_CODE=%{http_code}\nTIME_TOTAL=%{time_total}\n -H content-type: application/json -d {"path":"/home/ubuntu/models/mixtral/mixtral-8x7b-instruct-v0.1.Q8_0.gguf","id":"mixtral_8x7b_instruct_v0_1_q8_0"} http://127.0.0.1:9317/api/models/load"
+	Command being timed: "curl -sS --max-time 900 -w \nHTTP_CODE=%{http_code}\nTIME_TOTAL=%{time_total}\n -H content-type: application/json -d {"path":"<validation-host-home>/models/mixtral/mixtral-8x7b-instruct-v0.1.Q8_0.gguf","id":"mixtral_8x7b_instruct_v0_1_q8_0"} http://127.0.0.1:9317/api/models/load"
 	User time (seconds): 0.00
 	System time (seconds): 0.00
 	Percent of CPU this job got: 6%
