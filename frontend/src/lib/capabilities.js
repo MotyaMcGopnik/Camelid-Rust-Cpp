@@ -331,26 +331,37 @@ export function rowSupportNextStepCopy(target, apiFeatures = []) {
   return remaining.length ? remaining : 'Template/Jinja and production-throughput are already represented by green row-scoped readiness lanes for this exact row; continue to require runtime loaded_now/generation_ready and any other advertised evidence before widening support.'
 }
 
-export function supportedRowsHaveGreenTemplateAndThroughput(capabilities) {
+function supportedRowsHaveGreenLane(capabilities, laneKey) {
   const rows = capabilities?.model_compatibility || []
   const apiFeatures = capabilities?.api_features || []
   const supportedRows = rows.filter((target) => isSupportedCapabilityStatus(target.status))
   return Boolean(supportedRows.length && supportedRows.every((target) => {
     const lanes = exactRowSupportLanes(target, apiFeatures)
-    return lanes.every((lane) => lane.ready)
+    return lanes.some((lane) => lane.key === laneKey && lane.ready)
   }))
 }
 
-function stripResolvedCurrentGateCaveats(copy) {
-  return String(copy || '')
-    .replace(/,?\s*broader arbitrary[- ]template behavior beyond[^,.;]*/gi, '')
-    .replace(/,?\s*broader arbitrary templates beyond[^,.;]*/gi, '')
-    .replace(/,?\s*arbitrary GGUF\/Jinja templates?(?:\s+behavior)?/gi, '')
-    .replace(/,?\s*arbitrary\/Jinja[- ]?templates?(?:\s+behavior)?/gi, '')
-    .replace(/,?\s*arbitrary Jinja[- ]?templates?(?:\s+behavior)?/gi, '')
-    .replace(/,?\s*arbitrary[- ]templates?(?:\s+behavior)?(?:\s+remain outside[^,.;]*)?/gi, '')
-    .replace(/,?\s*production[- ]throughput(?:\s+(?:behavior|support|evidence|readiness))?(?:\s+remain outside[^,.;]*)?/gi, '')
-    .replace(/,?\s*throughput(?:\s+(?:behavior|support|evidence|readiness))?(?:\s+remain outside[^,.;]*)?/gi, '')
+export function supportedRowsHaveGreenTemplateAndThroughput(capabilities) {
+  return supportedRowsHaveGreenLane(capabilities, 'template') && supportedRowsHaveGreenLane(capabilities, 'throughput')
+}
+
+function stripResolvedCurrentGateCaveats(copy, { templateReady = false, throughputReady = false } = {}) {
+  let text = String(copy || '')
+  if (templateReady) {
+    text = text
+      .replace(/,?\s*broader arbitrary[- ]template behavior beyond[^,.;]*/gi, '')
+      .replace(/,?\s*broader arbitrary templates beyond[^,.;]*/gi, '')
+      .replace(/,?\s*arbitrary GGUF\/Jinja templates?(?:\s+behavior)?/gi, '')
+      .replace(/,?\s*arbitrary\/Jinja[- ]?templates?(?:\s+behavior)?/gi, '')
+      .replace(/,?\s*arbitrary Jinja[- ]?templates?(?:\s+behavior)?/gi, '')
+      .replace(/,?\s*arbitrary[- ]templates?(?:\s+behavior)?(?:\s+remain outside[^,.;]*)?/gi, '')
+  }
+  if (throughputReady) {
+    text = text
+      .replace(/,?\s*production[- ]throughput(?:\s+(?:behavior|support|evidence|readiness))?(?:\s+remain outside[^,.;]*)?/gi, '')
+      .replace(/,?\s*throughput(?:\s+(?:behavior|support|evidence|readiness))?(?:\s+remain outside[^,.;]*)?/gi, '')
+  }
+  return text
     .replace(/no model-native\/larger context beyond the checked packs,\s*or portability/gi, 'no model-native/larger context beyond the checked packs or portability')
     .replace(/,\s*,/g, ',')
     .replace(/,\s*or\s*,/g, ',')
@@ -363,9 +374,11 @@ function stripResolvedCurrentGateCaveats(copy) {
 export function frontendSupportContractCopy(capabilities) {
   const currentGate = capabilities?.support_contract?.current_gate || ''
   if (!currentGate) return 'Capabilities unavailable'
-  if (!supportedRowsHaveGreenTemplateAndThroughput(capabilities)) return currentGate
+  const templateReady = supportedRowsHaveGreenLane(capabilities, 'template')
+  const throughputReady = supportedRowsHaveGreenLane(capabilities, 'throughput')
+  if (!templateReady && !throughputReady) return currentGate
 
-  return stripResolvedCurrentGateCaveats(currentGate)
+  return stripResolvedCurrentGateCaveats(currentGate, { templateReady, throughputReady })
 }
 
 export function isGuardedCapabilityStatus(status = '') {
@@ -569,6 +582,15 @@ export function compatibilityHintCopy(hint) {
 
 export function isExactCompatibilityHint(hint) {
   return Boolean(hint?.kind === 'compatibility' && hint.exact === true)
+}
+
+export function compatibilityHintMatchesExactTarget(capabilities, model, target, catalogItem) {
+  const hint = findCompatibilityHint(capabilities, model, catalogItem)
+  return Boolean(
+    isExactCompatibilityHint(hint)
+    && target?.id
+    && hint.target?.id === target.id,
+  )
 }
 
 export function isCompatibilitySupportedForModel(capabilities, model, catalogItem) {

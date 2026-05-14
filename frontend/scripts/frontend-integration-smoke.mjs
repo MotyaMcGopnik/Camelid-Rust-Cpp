@@ -253,10 +253,10 @@ try {
   assert.match(exactReadyMarkup, /Exact row evidence bundle\./, 'API view should render exact-row evidence text')
   assert.match(exactReadyMarkup, /exact row fixture output/, 'API view should render latest exact-row output evidence')
   assert.match(exactReadyMarkup, /Template\/Jinja readiness[\s\S]*Template readiness is green for this supported exact row/, 'API view should show resolved template/Jinja as a green exact-row readiness lane')
-  assert.match(exactReadyMarkup, /Throughput readiness[\s\S]*Production-throughput readiness is green for this supported exact row/, 'API view should show resolved production-throughput as a green exact-row readiness lane')
-  assert.match(exactReadyMarkup, /Remaining support boundary:<\/b> model-native\/larger context beyond checked packs; portability; and durable repeated current-head bundles remain missing/, 'API view should keep unresolved row blockers while filtering resolved template/Jinja and throughput caveats')
-  assert.doesNotMatch(exactReadyMarkup, /arbitrary-template behavior|arbitrary\/Jinja templates, production throughput|throughput, portability, neighboring-row/, 'API support surface should not repeat resolved template/Jinja or throughput caveats as generic blockers')
-  assert.doesNotMatch(exactReadyMarkup, /normalizing model-native\/larger context; arbitrary\/Jinja template behavior; production throughput/, 'API compatibility list next-step copy should filter resolved template/Jinja and production-throughput caveats')
+  assert.match(exactReadyMarkup, /Throughput readiness[\s\S]*Bounded row-scoped performance\/RSS evidence is present/, 'API view should show bounded 3B performance/RSS evidence without promoting production-throughput readiness')
+  assert.match(exactReadyMarkup, /Remaining support boundary:<\/b> model-native\/larger context beyond checked packs; production throughput; portability; durable repeated current-head bundles remain missing/, 'API view should keep unresolved row blockers while filtering only resolved template/Jinja caveats')
+  assert.doesNotMatch(exactReadyMarkup, /arbitrary-template behavior|arbitrary\/Jinja templates/, 'API support surface should not repeat resolved template/Jinja caveats after row-scoped template evidence is green')
+  assert.doesNotMatch(exactReadyMarkup, /normalizing model-native\/larger context; arbitrary\/Jinja template behavior; production throughput/, 'API compatibility list next-step copy should filter resolved template/Jinja caveats while retaining production-throughput blockers')
   assert.match(exactReadyMarkup, /Supported API feature rows/, 'API view should render supported feature rows from /api/capabilities')
   assert.match(exactReadyMarkup, /chat completions/, 'API view should display provider-scoped feature ids as neutral capability names')
   assert.match(exactReadyMarkup, /standard-compatible streaming stays enabled\./, 'API view should sanitize provider-specific feature notes before rendering')
@@ -275,7 +275,8 @@ try {
   }))
 
   assert.match(topBarMarkup, /Support contract/, 'TopBar should render the support contract status surface')
-  assert.doesNotMatch(topBarMarkup, /arbitrary|Jinja|production throughput|throughput/s, 'TopBar support contract label should use filtered frontend support copy once template/Jinja and throughput lanes are green')
+  assert.doesNotMatch(topBarMarkup, /arbitrary|Jinja/s, 'TopBar support contract label should filter resolved template/Jinja caveats')
+  assert.match(topBarMarkup, /production throughput|throughput/s, 'TopBar support contract label should keep production-throughput caveats until explicit production evidence is green')
 
   const aliasSelectedModel = {
     ...selectedModel,

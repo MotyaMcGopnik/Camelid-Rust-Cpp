@@ -12,6 +12,7 @@ import {
   capabilityStatusTone,
   compatibilityHintCopy,
   compatibilityHintLabel,
+  compatibilityHintMatchesExactTarget,
   exactRowSupportLanes,
   findCompatibilityHint,
   formatCapabilityStatus,
@@ -385,6 +386,9 @@ const llama32ThreeBHint = findCompatibilityHint(capabilityFixture, { name: 'Llam
 assert.equal(llama32ThreeBHint.target.id, 'llama32_3b_instruct_q8_0', 'Llama 3.2 3B must match its exact row rather than inheriting the 8B row')
 assert.equal(compatibilityHintLabel(llama32ThreeBHint), 'llama32_3b_instruct_q8_0: supported exact row smoke')
 assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }), true, 'exact promoted 3B rows are supported only with exact size/instruct/quant evidence')
+assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { id: 'llama32_3b_instruct_q8_0' }), true, '3B Q8_0 exact-row helpers should match only the promoted row')
+assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q4_K_M', quant: 'Q4_K_M' }, { id: 'llama32_3b_instruct_q8_0' }), false, '3B non-Q8 entries must not satisfy exact-row frontend card/readiness matching')
+assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Base Q8_0', quant: 'Q8_0' }, { id: 'llama32_3b_instruct_q8_0' }), false, '3B base/non-instruct entries must not satisfy the exact instruct support row')
 assert.equal(
   getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-3b', name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-3b', loaded_now: true, generation_ready: true }).chatUnlocked,
   true,

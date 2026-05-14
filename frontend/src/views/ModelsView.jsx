@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { LLAMA32_3B_ACCEPTANCE_AVAILABILITY, LLAMA32_3B_ACCEPTANCE_GATING_NOTE, LLAMA32_3B_ACCEPTANCE_SUMMARY, LLAMA32_3B_ACCEPTANCE_TARGET } from '../lib/acceptanceTargets'
-import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, exactRowSupportLanes, findCompatibilityHint, formatCapabilityStatus, frontendSupportContractCopy, getCurrentCompatibilityTarget, getTrackedCompatibilityTargets, isExactCompatibilityHint, isSupportedCapabilityStatus, rowSupportBoundaryCopy, rowSupportNextStepCopy } from '../lib/capabilities'
+import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, compatibilityHintMatchesExactTarget, exactRowSupportLanes, findCompatibilityHint, formatCapabilityStatus, frontendSupportContractCopy, getCurrentCompatibilityTarget, getTrackedCompatibilityTargets, isExactCompatibilityHint, isSupportedCapabilityStatus, rowSupportBoundaryCopy, rowSupportNextStepCopy } from '../lib/capabilities'
 import { getChatGateState } from '../lib/chatGate'
 import { formatBytes, formatCompactNumber } from '../lib/formatters'
 import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, isRunnableModel, modelRuntimeIdMatches } from '../lib/modelState'
@@ -56,17 +56,24 @@ function findCatalogMatch(models, item) {
   return models.find((model) => model.hf_repo === item.repo_id && model.hf_filename === item.filename)
 }
 
-function matchesLlama32ThreeBTarget(model) {
-  const subject = [model?.id, model?.name, model?.runtime_model_name, model?.model_path, model?.path].filter(Boolean).join(' ').toLowerCase()
-  return model?.id === LLAMA32_3B_ACCEPTANCE_TARGET.id
+function matchesLlama32ThreeBTarget(model, capabilities) {
+  const target = { id: 'llama32_3b_instruct_q8_0' }
+  if (compatibilityHintMatchesExactTarget(capabilities, model, target)) return true
+
+  const subject = [model?.id, model?.name, model?.runtime_model_name, model?.model_path, model?.path, model?.quant].filter(Boolean).join(' ').toLowerCase()
+  const exactAcceptanceIdentity = model?.id === LLAMA32_3B_ACCEPTANCE_TARGET.id
     || model?.model_path === LLAMA32_3B_ACCEPTANCE_TARGET.model_path
-    || /llama[\s._-]*3\.2[\s._-]*3b/.test(subject)
+  const hasLlama32ThreeB = /llama[\s._-]*3\.2[\s._-]*3b/.test(subject)
     || /llama[\s._-]*32[\s._-]*3b/.test(subject)
+  const hasInstruct = /(?:^|[^a-z0-9])instruct(?:[^a-z0-9]|$)/i.test(subject)
+  const hasQ8 = /(?:^|[^a-z0-9])q8[\s._-]*0(?:[^a-z0-9]|$)/i.test(subject)
+    || /\bfile[_\s-]*type\s*7\b/i.test(subject)
+  return Boolean(exactAcceptanceIdentity || (hasLlama32ThreeB && hasInstruct && hasQ8))
 }
 
 function findModelMatchingCapabilityRow(models, capabilities, target, runtime, selectedModelId) {
   if (!target) return { model: null, active: false, selected: false }
-  const matches = models.filter((model) => findCompatibilityHint(capabilities, model)?.target?.id === target.id)
+  const matches = models.filter((model) => compatibilityHintMatchesExactTarget(capabilities, model, target))
   const activeModel = matches.find((model) => modelRuntimeIdMatches(model, runtime)) || null
   const selectedModel = matches.find((model) => model.id === selectedModelId) || null
   return {
@@ -386,8 +393,8 @@ export default function ModelsView({
   )
 
   const llama32ThreeBModel = useMemo(
-    () => models.find(matchesLlama32ThreeBTarget) || null,
-    [models],
+    () => models.find((model) => matchesLlama32ThreeBTarget(model, capabilities)) || null,
+    [models, capabilities],
   )
   const showLlama32ThreeBAcceptanceTarget = !llama32ThreeBModel
   const fillLlama32ThreeBImport = () => {
