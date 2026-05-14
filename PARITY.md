@@ -1,6 +1,6 @@
 # Camelid Parity Proof
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 Camelid's strongest technical claim is not that it can emit tokens.
 
@@ -34,7 +34,7 @@ Everything stays exact-row and artifact-scoped.
 Today Camelid can honestly say:
 
 - **TinyLlama 1.1B Chat Q8_0** is the trusted current gate with parity, template-shape, bounded context, API/WebUI, and RSS/perf evidence.
-- **Llama 3.2 1B Instruct Q8_0** has bounded exact-row parity through checked 512/1024/2048 packs.
+- **Llama 3.2 1B Instruct Q8_0** has bounded exact-row parity through checked 512/1024/2048/4096/8192 packs.
 - **Llama 3.2 3B Instruct Q8_0** has bounded exact-row parity through checked 512/1024/2048 packs, plus broader 50-token parity.
 - **Llama 3 8B Instruct Q8_0** has bounded exact-row parity for compact smoke, broader 50-token validation, and checked 512/1024/2048 packs where cited artifacts exist.
 
@@ -45,7 +45,7 @@ That is the public proof surface. Nothing adjacent inherits support.
 | Exact row | Strongest public parity headline | Start here |
 | --- | --- | --- |
 | TinyLlama 1.1B Chat Q8_0 | Full current gate with broader five-prompt / 50-token parity plus bounded context/template evidence | `qa/evidence-bundles/tinyllama-broader-template-context-perf-rss-20260505T044519Z-head-864e07b51f36/manifest.json` |
-| Llama 3.2 1B Instruct Q8_0 | Exact-row bounded parity through 2048 after the RoPE frequency-factor fix | `qa/evidence-bundles/llama32-1b-context-2048-rope-factors-20260506T0105Z-head-62f8cbc/manifest.json` |
+| Llama 3.2 1B Instruct Q8_0 | Exact-row bounded parity through 8192, with 4096/8192 tied to cited source/runtime heads | `qa/evidence-bundles/llama32-1b-context-8192-current-head-20260513T183501Z-head-aaf9207d1669/manifest.json` |
 | Llama 3.2 3B Instruct Q8_0 | Exact-row bounded parity through 2048 plus broader 50-token parity | `qa/evidence-bundles/llama32-3b-context-2048-20260505T105742Z-head-36ec8e492d65/manifest.json` |
 | Llama 3 8B Instruct Q8_0 | Exact-row bounded 1024/2048 parity plus broader 50-token parity on the named source/runtime head | `qa/evidence-bundles/llama3-8b-context-1024-2048-current-head-20260509T041451Z-head-8e26be0a73c0/manifest.json` |
 
@@ -70,18 +70,23 @@ Primary artifacts:
 
 - `qa/evidence-bundles/llama32-1b-context-1024-20260505T081001Z-head-156ded6fc76b/manifest.json`
 - `qa/evidence-bundles/llama32-1b-context-2048-rope-factors-20260506T0105Z-head-62f8cbc/manifest.json`
+- `qa/evidence-bundles/llama32-1b-context-4096-current-head-20260513T163426Z-head-470388f/manifest.json`
+- `qa/evidence-bundles/llama32-1b-context-8192-current-head-20260513T183501Z-head-aaf9207d1669/manifest.json`
 - `qa/evidence-bundles/llama32-1b-3b-chat-template-shapes-20260505T060036Z-head-e9f28572e090/manifest.json`
 
-What the 2048 artifact proves:
+What the latest 8192 artifact proves:
 
-- prompt-token parity at `1910` prompt tokens
-- generated token parity for `[34,2735,35,12,7854]`
-- generated text parity for `CMLD-204`
+- prompt-token parity at `7650` prompt tokens
+- generated token parity for `[34,2735,35,12,18831]`
+- generated text parity for `CMLD-819`
+
+The 4096 artifact also passed on source/runtime head `470388f8165b` with `3755` prompt tokens and generated text `CMLD-409`.
 
 Why it matters:
 
 - the earlier 2048 red box was real
 - the RoPE frequency-factor fix closed it with a clean public artifact
+- later 4096/8192 compact-template recall packs strengthen only this exact 1B row, not neighboring rows or model-native/larger context beyond checked packs
 
 ### Llama 3.2 3B Instruct Q8_0
 

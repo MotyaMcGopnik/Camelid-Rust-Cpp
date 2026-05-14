@@ -47,7 +47,7 @@ Today, four exact Q8_0 rows are public and evidence-backed:
 - **Llama 3.2 3B Instruct Q8_0** — verified support at checked 512/1024/2048 contexts
 - **Llama 3 8B Instruct Q8_0** — verified support at checked 512/1024/2048 contexts
 
-Mixtral has one-token backend MoE runtime evidence but is not yet promoted to API/WebUI/frontend readiness. Mistral 7B Instruct is the active next exact-row bring-up lane.
+Mixtral has one-token backend MoE runtime evidence but is not yet promoted to API/WebUI/frontend readiness. `Mistral-7B-Instruct-v0.3.Q8_0.gguf` is the active next exact-row bring-up lane.
 
 ## Why this becomes a company
 
@@ -69,7 +69,7 @@ That creates a real commercial path:
 
 ## Current support boundary
 
-Camelid achieves 1:1 parity with llama.cpp only for the supported exact GGUF rows with published validation evidence: TinyLlama at the current validated gate; Llama 3.2 1B Q8_0 with verified end-to-end support at checked 512/1024/2048/4096/8192-context packs; Llama 3.2 3B Q8_0 at checked 512/1024/2048-context packs; and Llama 3 8B Q8_0 through exact-row smoke plus checked 512/1024/2048-context packs on current `main`.
+Camelid achieves 1:1 parity with llama.cpp only for the supported exact GGUF rows with published validation evidence: TinyLlama at the current validated gate; Llama 3.2 1B Q8_0 with verified end-to-end support at checked 512/1024/2048/4096/8192-context packs; Llama 3.2 3B Q8_0 at checked 512/1024/2048-context packs; and Llama 3 8B Q8_0 through exact-row smoke plus checked 512/1024/2048-context packs tied to cited source/runtime-head bundles.
 
 `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` has one-token backend MoE runtime evidence, but Gate 9A later-generation evidence diverges and a longer-continuation backend HTTP hang remains unresolved, so Mixtral API/WebUI/frontend readiness and broad Mixtral support are not claimed. `Mistral-7B-Instruct-v0.3.Q8_0.gguf` remains an active exact-row bring-up lane, not a supported row.
 
@@ -120,7 +120,7 @@ The maintainer matrix now includes four exact Q8_0 supported rows with checked r
 | TinyLlama 1.1B Chat Q8_0 | direct chat validation | PASS | `Certainly! Here` |
 | Llama 3.2 1B Instruct Q8_0 | 8192-context recall pack | PASS on cited source/runtime head `aaf9207d1669` | `CMLD-819` |
 | Llama 3.2 3B Instruct Q8_0 | 2048-context recall pack | PASS | `CMLD-204` |
-| Llama 3 8B Instruct Q8_0 | 2048-context recall pack | PASS on current `main` | `CMLD-204` |
+| Llama 3 8B Instruct Q8_0 | 2048-context recall pack | PASS on cited source/runtime head `8e26be0a73c0` | `CMLD-204` |
 | Mistral-7B-Instruct-v0.3.Q8_0.gguf | Active validation: Ubuntu bring-up plus exact tokenizer/template, 1-token, broader five-prompt/50-token parity, checked 4096/8192 context evidence, and fail-closed API/WebUI/RSS evidence | PASS for validation lane; still unsupported | Explicit contract promotion and synchronized support surfaces still required before any support claim |
 | Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf | Active validation: one-token backend MoE runtime evidence plus Gate 9A/continuation blocker bundles | BLOCKED by later-generation divergence and backend HTTP hang | No Mixtral API/WebUI/frontend readiness, neighboring-row, long-context, arbitrary-template, production-throughput, portability, or broader/full claim |
 
@@ -130,7 +130,7 @@ The maintainer matrix now includes four exact Q8_0 supported rows with checked r
 - Support language currently means only the exact supported rows above; Mistral has no support claim yet and may only be discussed as the exact active validation row above. The Mixtral row may only be described as one-token backend MoE runtime evidence with later-generation/API/WebUI/frontend readiness blocked.
 - Checked context packs do **not** imply model-native or broader context support.
 - Template and bounded perf/RSS evidence for current supported rows is exact-row scoped; it does **not** imply broad arbitrary/Jinja-template behavior, production throughput, neighboring GGUFs, portability, or broader context support.
-- The next major 8B, Mistral, and Mixtral-row gaps are broader context, portability, repeated durability evidence, and normalized support bundles; Mistral also still needs explicit contract promotion after fail-closed API/WebUI/RSS readiness, and Mixtral must first fix later-generation divergence and the continuation hang before any API/WebUI/frontend support claim.
+- The next exact-row 8B, `Mistral-7B-Instruct-v0.3.Q8_0.gguf`, and `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` gaps are broader context, portability, repeated durability evidence, and normalized support bundles; Mistral also still needs explicit contract promotion after fail-closed API/WebUI/RSS readiness, and Mixtral must first fix later-generation divergence and the continuation hang before any API/WebUI/frontend support claim.
 
 Authoritative details live in [`COMPATIBILITY.md`](COMPATIBILITY.md). The current evidence snapshot lives in [`STATUS.md`](STATUS.md).
 
