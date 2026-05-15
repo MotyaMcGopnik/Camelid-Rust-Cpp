@@ -5013,6 +5013,10 @@ fn output_projection_with_layout(
                     input.shape.dims, weight.name, weight.shape.dims
                 )));
             }
+            let name = name.into();
+            if let Some(output) = try_x86_q8_output_decode_owner_path(input, weight, &name)? {
+                return Ok(output);
+            }
             let token_major = borrowed_linear_weight_as_transposed(weight, input_width)?;
             matmul_rhs_transposed_borrowed_with_precision(input, token_major, name)
         }
@@ -6847,6 +6851,59 @@ fn x86_q8_ffn_down_decode_owner_enabled() -> bool {
     {
         false
     }
+}
+
+fn x86_q8_output_decode_owner_enabled() -> bool {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        env_flag_enabled("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER")
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        false
+    }
+}
+
+fn try_x86_q8_output_decode_owner_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+) -> Result<Option<CpuTensor>> {
+    if !x86_q8_output_decode_owner_enabled()
+        || input.rank() != 2
+        || input.dim(0)? != 1
+        || weight.name != "output.weight"
+        || weight.source_type != Some(GgufTensorType::Q8_0)
+    {
+        return Ok(None);
+    }
+    let input_width = input.dim(1)?;
+    let borrowed = borrowed_linear_weight_as_transposed(weight, input_width)?;
+    let Some((packed, interleave)) = q8_0_selected_borrowed_packed_rows4(borrowed) else {
+        return Ok(None);
+    };
+    if interleave != Q8_0PackedRows4Interleave::I8
+        || packed.rows != borrowed.rows
+        || packed.blocks_per_row != input_width / Q8_0_BLOCK_VALUES
+        || !input_width.is_multiple_of(Q8_0_BLOCK_VALUES)
+        || !borrowed.rows.is_multiple_of(4)
+    {
+        return Ok(None);
+    }
+    let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
+    let mut output = vec![0.0_f32; borrowed.rows];
+    let blocks_per_row = packed.blocks_per_row;
+    for (group_idx, output_chunk) in output.chunks_exact_mut(4).enumerate() {
+        let group_blocks =
+            &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
+        let sums = q8_0_packed_rows4_dot(group_blocks, &quantized_input.blocks, interleave);
+        output_chunk.copy_from_slice(&sums);
+    }
+    Ok(Some(CpuTensor::from_f32(
+        name,
+        vec![1, borrowed.rows],
+        output,
+    )?))
 }
 
 fn try_x86_q8_ffn_down_decode_owner_path(
@@ -11941,6 +11998,7 @@ mod tests {
             "CAMELID_ROPE_PAIRING",
             "CAMELID_ROPE_POSITION_MODE",
             "CAMELID_SQUARE_LINEAR_LAYOUT",
+            "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
             std::env::remove_var(key);
         }
@@ -14923,6 +14981,65 @@ mod tests {
         assert_close(diagnostic_logits.data[0], 5.0);
         assert_close(diagnostic_logits.data[1], 6.0);
         assert_close(diagnostic_logits.data[2], 9.0);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn x86_q8_output_decode_owner_path_uses_runtime_packed_storage() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_X86_Q8_REPACK", "on");
+        std::env::set_var("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER", "on");
+
+        let vocab_rows = 8;
+        let input_width = Q8_0_BLOCK_VALUES * 2;
+        let row_blocks: Vec<Q8_0Block> = (0..vocab_rows * 2)
+            .map(|row| Q8_0Block {
+                scale: 0.1 + row as f32 * 0.004,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8).wrapping_mul(5).wrapping_sub(row as i8)
+                }),
+            })
+            .collect();
+        let packed = Q8_0PackedRows4::from_rows(
+            vocab_rows,
+            input_width / Q8_0_BLOCK_VALUES,
+            Q8_0PackedRows4Interleave::I8,
+            &row_blocks,
+        )
+        .unwrap();
+        let output_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "output.weight",
+            TensorShape {
+                dims: vec![input_width, vocab_rows],
+            },
+            packed.clone(),
+        );
+        let input = CpuTensor::from_f32(
+            "output_norm",
+            vec![1, input_width],
+            (0..input_width)
+                .map(|idx| ((idx % 17) as f32 - 8.0) * 0.25)
+                .collect(),
+        )
+        .unwrap();
+
+        let logits = output_projection_runtime(&input, &output_weight, "logits", false).unwrap();
+
+        assert_eq!(logits.shape.dims, vec![1, vocab_rows]);
+        let quantized_input = quantize_q8_0_row(&input.data);
+        let mut expected = Vec::new();
+        for group_blocks in packed.blocks.chunks_exact(packed.blocks_per_row) {
+            expected.extend_from_slice(&q8_0_packed_rows4_dot(
+                group_blocks,
+                &quantized_input.blocks,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+        }
+        assert_eq!(logits.data, expected);
+
+        std::env::remove_var("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER");
+        std::env::remove_var("CAMELID_X86_Q8_REPACK");
     }
 
     #[test]

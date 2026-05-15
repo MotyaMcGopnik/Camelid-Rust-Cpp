@@ -13,6 +13,7 @@ const MANAGED_ENV_KEYS: &[&str] = &[
     "CAMELID_X86_Q8_REPACK",
     "CAMELID_X86_Q8_KERNEL",
     "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
+    "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
 ];
 
 pub const MAC_Q8_PREFILL_I8MM_MIN_ROWS: usize = 4;
@@ -651,6 +652,7 @@ mod tests {
             "CAMELID_X86_Q8_REPACK",
             "CAMELID_X86_Q8_KERNEL",
             "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
+            "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
             env::remove_var(key);
         }
