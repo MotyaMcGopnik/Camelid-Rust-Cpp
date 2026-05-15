@@ -12,6 +12,62 @@ Rules:
 - Ubuntu must not assume Apple Silicon behavior.
 - Product/runtime should expose and select only validated paths.
 
+## Latest cross-lane digests
+
+### Cross-lane sync
+
+Source lane: Ubuntu x86 Q8 / Discord
+
+Finding: `d9ad412` caches the x86 Q8 kernel gate outside hot dot loops; proof remains pending and the active P0 is runtime-overhead validation, not new kernel tuning.
+
+Why it matters: Hot-path env/config reads can dominate optimized kernels and invalidate benchmark conclusions if path sanity is not captured first.
+
+Applies to: Mac arm64 Q8 and Product/ExecutionPlan as an architecture/process lesson: audit hot inference paths for env/config/rwlock reads and expose selected runtime paths before benchmarks.
+
+Does not apply to: Mac performance numbers, Apple Silicon kernel choices, or any claim that Ubuntu AVX2 evidence proves Mac behavior.
+
+Action for other lane: Mac should audit env/config/rwlock hot paths before trusting Q8 results; Product/ExecutionPlan should expose selected backend and Q8 path in `/health` and `/api/capabilities` before benchmark runs.
+
+Evidence / file / commit: `d9ad412 Cache x86 Q8 kernel gate outside hot dot loops`; merged to `origin/main` by `49349db`; source file `src/inference.rs`.
+
+Owner: Cross-lane sync owner; Ubuntu proof owner retains numeric validation.
+
+### Cross-lane sync
+
+Source lane: Mac arm64 Q8 / OpenClaw
+
+Finding: Mac packed-prefill stays default-off/experimental because retained Mac evidence favors the existing auto/direct-pack path over RSS-only packed-prefill wins.
+
+Why it matters: Product defaults should not promote a path that improves memory while regressing wall-clock/prefill compute on the same platform.
+
+Applies to: Ubuntu and Product/ExecutionPlan as a process lesson: require balanced evidence and keep experimental profiles explicit.
+
+Does not apply to: Ubuntu timings, AVX2 gates, or any claim that Mac packed-prefill evidence proves Ubuntu packed-runtime behavior.
+
+Action for other lane: Ubuntu should avoid promoting RSS-only or micro-kernel-only wins without warm wall-clock/path sanity; Product should keep experimental paths opt-in.
+
+Evidence / file / commit: `docs/runtime/cross-lane-sync.md`; prior Mac retained path notes summarized in this document.
+
+Owner: Cross-lane sync owner; Mac lane owner retains Mac numeric validation.
+
+### Cross-lane sync
+
+Source lane: Product / ExecutionPlan / runtime UX
+
+Finding: Benchmarks need product-visible selected backend/Q8 path/profile before results are treated as optimized-path evidence.
+
+Why it matters: If a run silently selects `cpu_reference` or `safe_q8_0_block_dot`, it is safe/reference evidence, not optimized packed-Q8 evidence.
+
+Applies to: Ubuntu x86 Q8 and Mac arm64 Q8 benchmark discipline.
+
+Does not apply to: Any numeric performance transfer between Ubuntu and Mac, or any claim that UX visibility validates a kernel.
+
+Action for other lane: Capture selected backend, selected Q8 path, active profile, gates, and packed-runtime state with every major benchmark.
+
+Evidence / file / commit: `docs/runtime/cross-lane-sync.md`; ExecutionPlan visibility requirements for `/health` and `/api/capabilities`.
+
+Owner: Cross-lane sync owner; Product/ExecutionPlan owner implements UX/runtime exposure.
+
 ## Current Ubuntu x86 Q8 status
 
 - Active priority: runtime/config hot-path overhead, not new Q8 kernel or owner experiments.
