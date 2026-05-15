@@ -304,6 +304,7 @@ fn q8_repack_x86_tensor_enabled(name: &str) -> bool {
     q8_repack_attention_tensor_enabled(name)
         || name.ends_with(".ffn_gate.weight")
         || name.ends_with(".ffn_up.weight")
+        || name.ends_with(".ffn_down.weight")
 }
 
 fn q8_repack_attention_tensor_enabled(name: &str) -> bool {
@@ -319,9 +320,12 @@ fn q8_repack_linear_shape(name: &str, shape: &TensorShape) -> Option<(usize, usi
     }
     let rows = shape.dims[0];
     let cols = shape.dims[1];
-    if name.ends_with(".ffn_gate.weight") || name.ends_with(".ffn_up.weight") {
-        // Llama FFN gate/up descriptors are stored as [input, output], while the
-        // runtime linear path consumes transposed rows [output, input]. Pack the
+    if name.ends_with(".ffn_gate.weight")
+        || name.ends_with(".ffn_up.weight")
+        || name.ends_with(".ffn_down.weight")
+    {
+        // Llama FFN descriptors are stored as [input, output], while the runtime
+        // linear path consumes transposed rows [output, input]. Pack the
         // backend-owned storage in the same output-row order used by the existing
         // file-backed Q8 reader instead of packing descriptor rows that the hot
         // matmul path cannot consume directly.
