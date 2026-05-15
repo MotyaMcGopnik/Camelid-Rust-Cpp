@@ -18,6 +18,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::metal;
+use crate::execution_plan::MAC_Q8_PREFILL_I8MM_MIN_ROWS;
 
 const Q8_SCHEDULE_TELEMETRY_ENV: &str = "CAMELID_Q8_SCHED_TELEMETRY";
 
@@ -6870,7 +6871,7 @@ fn matmul_rhs_transposed_q8_0_block_dot(
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    if mac_q8_prefill_i8mm_enabled() && rows >= 4 {
+    if mac_q8_prefill_i8mm_enabled() && mac_q8_prefill_i8mm_row_threshold_met(rows) {
         if let Some((packed, Q8_0PackedRows4Interleave::I8)) = q8_0_selected_packed_rows4(weight) {
             if packed.rows == output_width && packed.blocks_per_row == blocks_per_row {
                 return matmul_rhs_transposed_q8_0_packed_rows4_prefill_i8mm(
@@ -8859,6 +8860,11 @@ fn accumulate_q8_0_packed_rows4_output_group(
 fn mac_q8_prefill_i8mm_enabled() -> bool {
     env_flag_enabled("CAMELID_MAC_Q8_PREFILL_I8MM")
         && std::arch::is_aarch64_feature_detected!("i8mm")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn mac_q8_prefill_i8mm_row_threshold_met(rows: usize) -> bool {
+    rows >= MAC_Q8_PREFILL_I8MM_MIN_ROWS
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -12715,6 +12721,13 @@ mod tests {
         std::env::remove_var("CAMELID_MAC_Q8_PREFILL_I8MM");
         std::env::remove_var("CAMELID_MAC_Q8_REPACK");
         std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn q8_0_runtime_packed_prefill_i8mm_respects_min_row_threshold() {
+        assert!(!mac_q8_prefill_i8mm_row_threshold_met(MAC_Q8_PREFILL_I8MM_MIN_ROWS - 1));
+        assert!(mac_q8_prefill_i8mm_row_threshold_met(MAC_Q8_PREFILL_I8MM_MIN_ROWS));
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
