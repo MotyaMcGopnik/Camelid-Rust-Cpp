@@ -664,6 +664,67 @@ fn diagnostic_rectangular_linear_layout_env(key: &str) -> Result<RectangularLine
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Q8RuntimeFlags {
+    block_dot: bool,
+    file_reader_block_dot: bool,
+    metal: bool,
+    metal_retained: bool,
+    hybrid_retained: bool,
+    hybrid_gpu_rows: Option<usize>,
+    hybrid_gpu_percent: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedRuntimePlan {
+    linear_accumulation_precision: LinearAccumulationPrecision,
+    q8: Q8RuntimeFlags,
+}
+
+impl ResolvedRuntimePlan {
+    fn from_env() -> Result<Self> {
+        Ok(Self {
+            linear_accumulation_precision: diagnostic_linear_accumulation_precision()?,
+            q8: Q8RuntimeFlags::from_env(),
+        })
+    }
+}
+
+impl Q8RuntimeFlags {
+    fn from_env() -> Self {
+        Self {
+            block_dot: q8_0_env_flag_enabled_default_off("CAMELID_Q8_0_BLOCK_DOT"),
+            file_reader_block_dot: q8_0_env_flag_enabled_default_off(
+                "CAMELID_Q8_0_FILE_READER_BLOCK_DOT",
+            ),
+            metal: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8"),
+            metal_retained: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8_RETAINED"),
+            hybrid_retained: q8_0_env_flag_enabled_default_off("CAMELID_HYBRID_Q8_RETAINED"),
+            hybrid_gpu_rows: env::var("CAMELID_HYBRID_Q8_GPU_ROWS")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok()),
+            hybrid_gpu_percent: env::var("CAMELID_HYBRID_Q8_GPU_PERCENT")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(10)
+                .min(90),
+        }
+    }
+
+    fn hybrid_gpu_rows_for_output(self, output_rows: usize) -> usize {
+        if output_rows < 2 {
+            return 0;
+        }
+        if let Some(rows) = self.hybrid_gpu_rows {
+            return rows.min(output_rows.saturating_sub(1));
+        }
+        ((output_rows * self.hybrid_gpu_percent).div_ceil(100))
+            .max(1)
+            .min(output_rows.saturating_sub(1))
+    }
+}
+
 pub fn diagnostic_rms_norm_epsilon(config_epsilon: f32) -> Result<f32> {
     match env::var("CAMELID_RMS_NORM_EPSILON") {
         Ok(value) if value.is_empty() => Ok(config_epsilon),
@@ -2000,6 +2061,7 @@ impl LlamaInferenceSession {
             )));
         }
 
+        let runtime_plan = ResolvedRuntimePlan::from_env()?;
         let total_started = Instant::now();
         let mut memory = structured_forward_memory_enabled().then(|| {
             LlamaForwardMemoryTimings::new(
@@ -2040,6 +2102,7 @@ impl LlamaInferenceSession {
                     rms_norm_epsilon,
                     layer_idx,
                     collect_diagnostics,
+                    runtime_plan: &runtime_plan,
                 },
                 &mut self.kv_cache,
             )?;
@@ -2086,10 +2149,11 @@ impl LlamaInferenceSession {
                     memory.record_after_final_norm(capture_memory_sample(&self.kv_cache));
                 }
                 let logits_started = Instant::now();
-                let logits = output_projection_runtime(
+                let logits = output_projection_runtime_with_plan(
                     &norm,
                     self.weights.output_projection(),
                     "logits",
+                    &runtime_plan,
                     collect_diagnostics,
                 )?;
                 trace_forward_memory("logits_done");
@@ -3359,6 +3423,7 @@ struct ForwardLayerParams<'a> {
     rms_norm_epsilon: f32,
     layer_idx: usize,
     collect_diagnostics: bool,
+    runtime_plan: &'a ResolvedRuntimePlan,
 }
 
 struct PrefillLayerChunkParams<'a> {
@@ -3382,6 +3447,7 @@ fn forward_layer_timed(
     let rms_norm_epsilon = params.rms_norm_epsilon;
     let layer_idx = params.layer_idx;
     let collect_diagnostics = params.collect_diagnostics;
+    let runtime_plan = params.runtime_plan;
     let total_started = Instant::now();
     let mut timings = LlamaLayerTimings {
         layer_index: layer_idx,
@@ -3425,30 +3491,33 @@ fn forward_layer_timed(
         (q, k, v, Some(elapsed))
     } else {
         let started = Instant::now();
-        let q = linear_runtime(
+        let q = linear_runtime_with_plan(
             &attn_norm,
             &layer.attention_q,
             format!("layer_{layer_idx}_attention_q"),
+            runtime_plan,
             collect_diagnostics,
         )?;
         timings.attention_q = started.elapsed().as_micros();
 
         let started = Instant::now();
-        let k = linear_for_role_runtime(
+        let k = linear_for_role_runtime_with_plan(
             &attn_norm,
             &layer.attention_k,
             format!("layer_{layer_idx}_attention_k"),
             "attention_k",
+            runtime_plan,
             collect_diagnostics,
         )?;
         timings.attention_k = started.elapsed().as_micros();
 
         let started = Instant::now();
-        let v = linear_for_role_runtime(
+        let v = linear_for_role_runtime_with_plan(
             &attn_norm,
             &layer.attention_v,
             format!("layer_{layer_idx}_attention_v"),
             "attention_v",
+            runtime_plan,
             collect_diagnostics,
         )?;
         timings.attention_v = started.elapsed().as_micros();
@@ -3583,10 +3652,11 @@ fn forward_layer_timed(
     trace_forward_layer_memory(layer_idx, "attention_context_done");
 
     let started = Instant::now();
-    let mut attn_out = linear_runtime(
+    let mut attn_out = linear_runtime_with_plan(
         &context,
         &layer.attention_output,
         format!("layer_{layer_idx}_attention_output"),
+        runtime_plan,
         collect_diagnostics,
     )?;
     if collect_diagnostics && diagnostic_zero_delta(DeltaZeroTarget::Attention, layer_idx)? {
@@ -3678,11 +3748,12 @@ fn forward_layer_timed(
             ffn_out, None, None, None, None, None, None, None, None, false,
         )
     } else {
-        let activated = gated_ffn_activation(
+        let activated = gated_ffn_activation_with_plan(
             &ffn_norm,
             &layer.ffn_gate,
             &layer.ffn_up,
             format!("layer_{layer_idx}_ffn_activated"),
+            runtime_plan,
             collect_diagnostics,
         )?;
         timings.ffn_gate = activated.gate;
@@ -3713,11 +3784,12 @@ fn forward_layer_timed(
                 (output, true)
             } else {
                 (
-                    linear_for_role_runtime(
+                    linear_for_role_runtime_with_plan(
                         &activated,
                         &layer.ffn_down,
                         format!("layer_{layer_idx}_ffn_down"),
                         "ffn_down",
+                        runtime_plan,
                         collect_diagnostics,
                     )?,
                     false,
@@ -3725,11 +3797,12 @@ fn forward_layer_timed(
             }
         } else {
             (
-                linear_for_role_runtime(
+                linear_for_role_runtime_with_plan(
                     &activated,
                     &layer.ffn_down,
                     format!("layer_{layer_idx}_ffn_down"),
                     "ffn_down",
+                    runtime_plan,
                     collect_diagnostics,
                 )?,
                 false,
@@ -4528,7 +4601,25 @@ fn linear_runtime(
     name: impl Into<String>,
     collect_diagnostics: bool,
 ) -> Result<CpuTensor> {
-    linear_for_role_runtime(input, weight, name, "linear", collect_diagnostics)
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    linear_runtime_with_plan(input, weight, name, &runtime_plan, collect_diagnostics)
+}
+
+fn linear_runtime_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
+    collect_diagnostics: bool,
+) -> Result<CpuTensor> {
+    linear_for_role_runtime_with_plan(
+        input,
+        weight,
+        name,
+        "linear",
+        runtime_plan,
+        collect_diagnostics,
+    )
 }
 
 fn linear_for_role(
@@ -4553,6 +4644,25 @@ fn linear_for_role_runtime(
     rectangular_role: &str,
     collect_diagnostics: bool,
 ) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    linear_for_role_runtime_with_plan(
+        input,
+        weight,
+        name,
+        rectangular_role,
+        &runtime_plan,
+        collect_diagnostics,
+    )
+}
+
+fn linear_for_role_runtime_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+    collect_diagnostics: bool,
+) -> Result<CpuTensor> {
     if collect_diagnostics {
         linear_for_role(input, weight, name, rectangular_role)
     } else {
@@ -4562,12 +4672,13 @@ fn linear_for_role_runtime(
         {
             return Ok(output);
         }
-        linear_with_diagnostic_layouts(
+        linear_with_diagnostic_layouts_with_plan(
             input,
             weight,
             name,
             SquareLinearLayout::Transposed,
             RectangularLinearLayout::Auto,
+            runtime_plan,
         )
     }
 }
@@ -4784,6 +4895,25 @@ fn linear_with_diagnostic_layouts(
     square_layout: SquareLinearLayout,
     rectangular_layout: RectangularLinearLayout,
 ) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    linear_with_diagnostic_layouts_with_plan(
+        input,
+        weight,
+        name,
+        square_layout,
+        rectangular_layout,
+        &runtime_plan,
+    )
+}
+
+fn linear_with_diagnostic_layouts_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    square_layout: SquareLinearLayout,
+    rectangular_layout: RectangularLinearLayout,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<CpuTensor> {
     let input_width = input.dim(1)?;
     if weight.rank() != 2 {
         return Err(BackendError::RuntimeShapeMismatch(format!(
@@ -4795,19 +4925,26 @@ fn linear_with_diagnostic_layouts(
     let cols = weight.dim(1)?;
     if rows == input_width && cols == input_width {
         match square_layout {
-            SquareLinearLayout::Descriptor => matmul_descriptor_with_precision(input, weight, name),
+            SquareLinearLayout::Descriptor => {
+                matmul_descriptor_with_precision_with_plan(input, weight, name, runtime_plan)
+            }
             SquareLinearLayout::Transposed => {
-                matmul_rhs_transposed_with_precision(input, weight, name)
+                matmul_rhs_transposed_with_precision_with_plan(input, weight, name, runtime_plan)
             }
         }
     } else if rectangular_layout == RectangularLinearLayout::Descriptor {
         let descriptor_weight = linear_weight_reinterpreted_as_descriptor(weight, input_width)?;
-        matmul_descriptor_with_precision(input, &descriptor_weight, name)
+        matmul_descriptor_with_precision_with_plan(input, &descriptor_weight, name, runtime_plan)
     } else if rectangular_layout == RectangularLinearLayout::Transposed || rows == input_width {
         let transposed_weight = linear_weight_reinterpreted_as_transposed(weight, input_width)?;
-        matmul_rhs_transposed_with_precision(input, &transposed_weight, name)
+        matmul_rhs_transposed_with_precision_with_plan(
+            input,
+            &transposed_weight,
+            name,
+            runtime_plan,
+        )
     } else if cols == input_width {
-        matmul_rhs_transposed_with_precision(input, weight, name)
+        matmul_rhs_transposed_with_precision_with_plan(input, weight, name, runtime_plan)
     } else {
         Err(BackendError::RuntimeShapeMismatch(format!(
             "linear input shape {:?} is incompatible with weight {} shape {:?}",
@@ -4993,10 +5130,22 @@ fn add_tensor_in_place(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn output_projection_runtime(
     input: &CpuTensor,
     weight: &CpuTensor,
     name: impl Into<String>,
+    collect_diagnostics: bool,
+) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    output_projection_runtime_with_plan(input, weight, name, &runtime_plan, collect_diagnostics)
+}
+
+fn output_projection_runtime_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
     collect_diagnostics: bool,
 ) -> Result<CpuTensor> {
     let layout = if collect_diagnostics {
@@ -5004,14 +5153,26 @@ fn output_projection_runtime(
     } else {
         OutputProjectionLayout::TokenMajor
     };
-    output_projection_with_layout(input, weight, name, layout)
+    output_projection_with_layout_with_plan(input, weight, name, layout, runtime_plan)
 }
 
+#[allow(dead_code)]
 fn output_projection_with_layout(
     input: &CpuTensor,
     weight: &CpuTensor,
     name: impl Into<String>,
     layout: OutputProjectionLayout,
+) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    output_projection_with_layout_with_plan(input, weight, name, layout, &runtime_plan)
+}
+
+fn output_projection_with_layout_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    layout: OutputProjectionLayout,
+    runtime_plan: &ResolvedRuntimePlan,
 ) -> Result<CpuTensor> {
     match layout {
         OutputProjectionLayout::Descriptor => {
@@ -5023,9 +5184,9 @@ fn output_projection_with_layout(
                 )));
             }
             if weight.dim(0)? == input_width {
-                matmul_descriptor_with_precision(input, weight, name)
+                matmul_descriptor_with_precision_with_plan(input, weight, name, runtime_plan)
             } else if weight.dim(1)? == input_width {
-                matmul_rhs_transposed_with_precision(input, weight, name)
+                matmul_rhs_transposed_with_precision_with_plan(input, weight, name, runtime_plan)
             } else {
                 Err(BackendError::RuntimeShapeMismatch(format!(
                     "output projection input shape {:?} is incompatible with weight {} shape {:?}",
@@ -5052,7 +5213,12 @@ fn output_projection_with_layout(
                 return Ok(output);
             }
             let token_major = borrowed_linear_weight_as_transposed(weight, input_width)?;
-            matmul_rhs_transposed_borrowed_with_precision(input, token_major, name)
+            matmul_rhs_transposed_borrowed_with_precision_with_plan(
+                input,
+                token_major,
+                name,
+                runtime_plan,
+            )
         }
     }
 }
@@ -5062,7 +5228,17 @@ fn matmul_descriptor_with_precision(
     weight: &CpuTensor,
     name: impl Into<String>,
 ) -> Result<CpuTensor> {
-    match diagnostic_linear_accumulation_precision()? {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    matmul_descriptor_with_precision_with_plan(input, weight, name, &runtime_plan)
+}
+
+fn matmul_descriptor_with_precision_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<CpuTensor> {
+    match runtime_plan.linear_accumulation_precision {
         LinearAccumulationPrecision::F32 => input.matmul(weight, name),
         LinearAccumulationPrecision::F64 => matmul_descriptor_f64(input, weight, name),
     }
@@ -5073,17 +5249,28 @@ fn matmul_rhs_transposed_with_precision(
     weight: &CpuTensor,
     name: impl Into<String>,
 ) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    matmul_rhs_transposed_with_precision_with_plan(input, weight, name, &runtime_plan)
+}
+
+fn matmul_rhs_transposed_with_precision_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<CpuTensor> {
     let input_width = input.dim(1)?;
-    if should_use_q8_0_block_dot(weight, input_width) {
-        return matmul_rhs_transposed_q8_0_block_dot(input, weight, name);
+    if should_use_q8_0_block_dot_with_plan(weight, input_width, runtime_plan) {
+        return matmul_rhs_transposed_q8_0_block_dot_with_plan(input, weight, name, runtime_plan);
     }
     if let Some(backing) = q8_0_reader_backing(weight, input_width)? {
-        return matmul_rhs_transposed_q8_0_block_reader(
+        return matmul_rhs_transposed_q8_0_block_reader_with_flags(
             input,
             backing,
             Q8BlockReader::new(backing.absolute_offset, backing.num_blocks),
             weight.dim(0)?,
             name,
+            &runtime_plan.q8,
         );
     }
     if let Some((packed, interleave)) = q8_0_selected_packed_rows4(weight) {
@@ -5095,16 +5282,27 @@ fn matmul_rhs_transposed_with_precision(
             name,
         );
     }
-    match diagnostic_linear_accumulation_precision()? {
+    match runtime_plan.linear_accumulation_precision {
         LinearAccumulationPrecision::F32 => input.matmul_rhs_transposed(weight, name),
         LinearAccumulationPrecision::F64 => matmul_rhs_transposed_f64(input, weight, name),
     }
 }
 
+#[allow(dead_code)]
 fn matmul_rhs_transposed_borrowed_with_precision(
     input: &CpuTensor,
     weight: BorrowedLinearWeight<'_>,
     name: impl Into<String>,
+) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    matmul_rhs_transposed_borrowed_with_precision_with_plan(input, weight, name, &runtime_plan)
+}
+
+fn matmul_rhs_transposed_borrowed_with_precision_with_plan(
+    input: &CpuTensor,
+    weight: BorrowedLinearWeight<'_>,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
 ) -> Result<CpuTensor> {
     let rows = input.dim(0)?;
     let input_width = input.dim(1)?;
@@ -5116,24 +5314,24 @@ fn matmul_rhs_transposed_borrowed_with_precision(
     }
     let output_width = weight.rows;
     if let Some(backing) = borrowed_q8_0_reader_backing(weight, input_width, output_width)? {
-        return matmul_rhs_transposed_q8_0_block_reader(
+        return matmul_rhs_transposed_q8_0_block_reader_with_flags(
             input,
             backing,
             Q8BlockReader::new(backing.absolute_offset, backing.num_blocks),
             output_width,
             name,
+            &runtime_plan.q8,
         );
     }
     let mut output = vec![0.0; rows * output_width];
-    let precision = diagnostic_linear_accumulation_precision()?;
     for row in 0..rows {
         let input_start = row * input_width;
         let output_start = row * output_width;
-        accumulate_transposed_linear_row_runtime(
+        accumulate_transposed_linear_row_runtime_with_plan(
             &input.data[input_start..input_start + input_width],
             weight,
             &mut output[output_start..output_start + output_width],
-            precision,
+            runtime_plan,
         )?;
     }
     CpuTensor::from_f32(name, vec![rows, output_width], output)
@@ -5810,6 +6008,25 @@ fn gated_ffn_activation(
     name: impl Into<String>,
     collect_diagnostics: bool,
 ) -> Result<GatedFfnActivation> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    gated_ffn_activation_with_plan(
+        input,
+        gate_weight,
+        up_weight,
+        name,
+        &runtime_plan,
+        collect_diagnostics,
+    )
+}
+
+fn gated_ffn_activation_with_plan(
+    input: &CpuTensor,
+    gate_weight: &CpuTensor,
+    up_weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
+    collect_diagnostics: bool,
+) -> Result<GatedFfnActivation> {
     let rows = input.dim(0)?;
     if input.rank() != 2 || rows != 1 {
         return Err(BackendError::RuntimeShapeMismatch(format!(
@@ -5840,8 +6057,16 @@ fn gated_ffn_activation(
             (Ok(gate_transposed), Ok(up_transposed))
                 if gate_transposed.rows == gate_width
                     && up_transposed.rows == up_width
-                    && should_use_borrowed_q8_0_block_dot(gate_transposed, input_width)
-                    && should_use_borrowed_q8_0_block_dot(up_transposed, input_width) =>
+                    && should_use_borrowed_q8_0_block_dot_with_plan(
+                        gate_transposed,
+                        input_width,
+                        runtime_plan,
+                    )
+                    && should_use_borrowed_q8_0_block_dot_with_plan(
+                        up_transposed,
+                        input_width,
+                        runtime_plan,
+                    ) =>
             {
                 Some((gate_transposed, up_transposed))
             }
@@ -5859,6 +6084,7 @@ fn gated_ffn_activation(
                 up_transposed,
                 &mut gate,
                 &mut up,
+                &runtime_plan.q8,
             ) {
                 // Gate/up are submitted as one hybrid CPU+Metal batch, so split the measured
                 // elapsed time across the two existing timing fields while preserving the total.
@@ -5969,8 +6195,9 @@ fn try_gated_ffn_gate_up_hybrid_q8_0(
     up_weight: BorrowedLinearWeight<'_>,
     gate: &mut [f32],
     up: &mut [f32],
+    q8_flags: &Q8RuntimeFlags,
 ) -> Option<u128> {
-    if !q8_0_hybrid_retained_enabled() || gate.is_empty() || gate.len() != up.len() {
+    if !q8_flags.hybrid_retained || gate.is_empty() || gate.len() != up.len() {
         return None;
     }
     let blocks_per_row = quantized_input.len();
@@ -5981,7 +6208,7 @@ fn try_gated_ffn_gate_up_hybrid_q8_0(
     {
         return None;
     }
-    let gpu_rows = q8_0_hybrid_retained_gpu_rows(gate.len());
+    let gpu_rows = q8_flags.hybrid_gpu_rows_for_output(gate.len());
     if gpu_rows == 0 || gpu_rows >= gate.len() {
         return None;
     }
@@ -6620,77 +6847,71 @@ fn accumulate_linear_row(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn should_use_q8_0_block_dot(weight: &CpuTensor, input_width: usize) -> bool {
-    q8_0_block_dot_enabled()
+    let runtime_plan = ResolvedRuntimePlan::from_env().unwrap_or(ResolvedRuntimePlan {
+        linear_accumulation_precision: LinearAccumulationPrecision::F32,
+        q8: Q8RuntimeFlags::from_env(),
+    });
+    should_use_q8_0_block_dot_with_plan(weight, input_width, &runtime_plan)
+}
+
+fn should_use_q8_0_block_dot_with_plan(
+    weight: &CpuTensor,
+    input_width: usize,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> bool {
+    runtime_plan.q8.block_dot
         && weight.source_type == Some(GgufTensorType::Q8_0)
         && (weight.q8_0_blocks.is_some() || q8_0_selected_packed_rows4(weight).is_some())
         && input_width.is_multiple_of(Q8_0_BLOCK_VALUES)
 }
 
+#[allow(dead_code)]
 fn should_use_borrowed_q8_0_block_dot(
     weight: BorrowedLinearWeight<'_>,
     input_width: usize,
 ) -> bool {
-    q8_0_block_dot_enabled()
+    let runtime_plan = ResolvedRuntimePlan::from_env().unwrap_or(ResolvedRuntimePlan {
+        linear_accumulation_precision: LinearAccumulationPrecision::F32,
+        q8: Q8RuntimeFlags::from_env(),
+    });
+    should_use_borrowed_q8_0_block_dot_with_plan(weight, input_width, &runtime_plan)
+}
+
+fn should_use_borrowed_q8_0_block_dot_with_plan(
+    weight: BorrowedLinearWeight<'_>,
+    input_width: usize,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> bool {
+    runtime_plan.q8.block_dot
         && weight.source_type == Some(GgufTensorType::Q8_0)
         && (weight.q8_0_blocks.is_some() || q8_0_selected_borrowed_packed_rows4(weight).is_some())
         && input_width.is_multiple_of(Q8_0_BLOCK_VALUES)
 }
 
+#[allow(dead_code)]
 fn q8_0_block_dot_enabled() -> bool {
-    // Retained Q8_0 blocks should use the same quantized-input block-dot path as the
-    // lazy/file-backed reader. This is both the llama.cpp-style execution shape and the only
-    // interactive path for local Q8 chat; keep a dequantized-f32 escape hatch for diagnostics.
-    !q8_0_env_flag_disabled("CAMELID_Q8_0_BLOCK_DOT")
+    q8_0_env_flag_enabled_default_off("CAMELID_Q8_0_BLOCK_DOT")
 }
 
 fn q8_0_file_reader_block_dot_enabled() -> bool {
-    // Lazy/file-backed Q8 rows are Camelid's production Q8_0 surface. Use the
-    // quantized-input block-dot path by default to match llama.cpp-style Q8_0 matmul
-    // tie-break behavior, while keeping an explicit dequantized-f32 escape hatch.
-    !q8_0_env_flag_disabled("CAMELID_Q8_0_FILE_READER_BLOCK_DOT")
+    q8_0_env_flag_enabled_default_off("CAMELID_Q8_0_FILE_READER_BLOCK_DOT")
 }
 
+#[allow(dead_code)]
 fn q8_0_metal_enabled() -> bool {
-    env::var("CAMELID_METAL_Q8")
-        .map(|value| {
-            let value = value.trim();
-            value.eq_ignore_ascii_case("1")
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("on")
-                || value.eq_ignore_ascii_case("enabled")
-        })
-        .unwrap_or(false)
+    q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8")
 }
 
+#[allow(dead_code)]
 fn q8_0_metal_retained_enabled() -> bool {
-    env::var("CAMELID_METAL_Q8_RETAINED")
-        .map(|value| {
-            let value = value.trim();
-            value.eq_ignore_ascii_case("1")
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("on")
-                || value.eq_ignore_ascii_case("enabled")
-        })
-        .unwrap_or(false)
+    q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8_RETAINED")
 }
 
+#[allow(dead_code)]
 fn q8_0_hybrid_retained_enabled() -> bool {
-    match env::var("CAMELID_HYBRID_Q8_RETAINED") {
-        Ok(value) => {
-            let value = value.trim();
-            !(value.eq_ignore_ascii_case("0")
-                || value.eq_ignore_ascii_case("false")
-                || value.eq_ignore_ascii_case("off")
-                || value.eq_ignore_ascii_case("disabled")
-                || value.eq_ignore_ascii_case("cpu"))
-        }
-        // Same-host Apple Silicon sweeps showed the retained-Q8 CPU+Metal suffix
-        // scheduler was slower and used more RSS than the paired CPU Q8 path for
-        // short decode gates. Keep it as an explicit experiment instead of making
-        // normal retained-Q8 serving pay Metal submission/synchronization overhead.
-        Err(_) => false,
-    }
+    q8_0_env_flag_enabled_default_off("CAMELID_HYBRID_Q8_RETAINED")
 }
 
 fn q8_0_metal_trace_enabled() -> bool {
@@ -6721,6 +6942,7 @@ fn trace_q8_0_hybrid_retained_success(cpu_rows: usize, gpu_rows: usize, blocks_p
     }
 }
 
+#[allow(dead_code)]
 fn q8_0_hybrid_retained_gpu_rows(output_rows: usize) -> usize {
     if output_rows < 2 {
         return 0;
@@ -6820,6 +7042,19 @@ fn auto_retain_q8_0_blocks_for_fast_local_chat(binding: &LlamaTensorBinding) -> 
     }
 
     saw_q8_linear && estimated_bytes <= max_bytes
+}
+
+fn q8_0_env_flag_enabled_default_off(key: &str) -> bool {
+    env::var(key)
+        .map(|value| {
+            let value = value.trim();
+            value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("enabled")
+                || value.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false)
 }
 
 fn q8_0_env_flag_disabled(key: &str) -> bool {
@@ -7061,11 +7296,20 @@ fn try_x86_q8_ffn_down_decode_owner_residual_path(
         output,
     )?))
 }
-
 fn matmul_rhs_transposed_q8_0_block_dot(
     input: &CpuTensor,
     weight: &CpuTensor,
     name: impl Into<String>,
+) -> Result<CpuTensor> {
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    matmul_rhs_transposed_q8_0_block_dot_with_plan(input, weight, name, &runtime_plan)
+}
+
+fn matmul_rhs_transposed_q8_0_block_dot_with_plan(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
 ) -> Result<CpuTensor> {
     let rows = input.dim(0)?;
     let input_width = input.dim(1)?;
@@ -7136,7 +7380,7 @@ fn matmul_rhs_transposed_q8_0_block_dot(
             .q8_0_blocks
             .as_ref()
             .expect("q8_0 block-dot precondition checked");
-        if q8_0_metal_retained_enabled() {
+        if runtime_plan.q8.metal_retained {
             let weight_bytes = q8_0_blocks_as_bytes(weight_blocks);
             if with_q8_0_block_scales_and_quants(
                 &quantized_input.blocks,
@@ -7521,12 +7765,32 @@ fn q8_0_reader_backing(weight: &CpuTensor, input_width: usize) -> Result<Option<
     Ok(Some(backing))
 }
 
+#[allow(dead_code)]
 fn matmul_rhs_transposed_q8_0_block_reader(
     input: &CpuTensor,
     backing: &Q8_0FileBacking,
     reader: Q8BlockReader,
     output_width: usize,
     name: impl Into<String>,
+) -> Result<CpuTensor> {
+    let q8_flags = Q8RuntimeFlags::from_env();
+    matmul_rhs_transposed_q8_0_block_reader_with_flags(
+        input,
+        backing,
+        reader,
+        output_width,
+        name,
+        &q8_flags,
+    )
+}
+
+fn matmul_rhs_transposed_q8_0_block_reader_with_flags(
+    input: &CpuTensor,
+    backing: &Q8_0FileBacking,
+    reader: Q8BlockReader,
+    output_width: usize,
+    name: impl Into<String>,
+    q8_flags: &Q8RuntimeFlags,
 ) -> Result<CpuTensor> {
     let rows = input.dim(0)?;
     let input_width = input.dim(1)?;
@@ -7561,7 +7825,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
     let mut output = vec![0.0_f32; output_len];
     let parallelize_output =
         should_use_q8_0_file_reader_parallel_output(row_bytes_len, output_width, rows)?;
-    let use_q8_0_block_dot = q8_0_file_reader_block_dot_enabled();
+    let use_q8_0_block_dot = q8_flags.file_reader_block_dot;
     let chunk_rows = q8_0_file_reader_chunk_rows_for_batch(
         row_bytes_len,
         output_width,
@@ -7626,7 +7890,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             scales,
                         )?;
                         let output_chunk = &mut output[output_idx..output_idx + rows_this_chunk];
-                        let completed_with_metal = if use_q8_0_block_dot && q8_0_metal_enabled() {
+                        let completed_with_metal = if use_q8_0_block_dot && q8_flags.metal {
                             let (input_scales, input_quants) = q8_0_block_scales_and_quants(
                                 &quantized_input_blocks[..blocks_per_row],
                             );
@@ -7732,8 +7996,7 @@ fn matmul_rhs_transposed_q8_0_block_reader(
                             )
                         })?;
                         with_q8_0_file_reader_output_chunk(scratch_len, |output_chunk_scratch| {
-                            let completed_with_metal = if use_q8_0_block_dot && q8_0_metal_enabled()
-                            {
+                            let completed_with_metal = if use_q8_0_block_dot && q8_flags.metal {
                                 let (input_scales, input_quants) =
                                     q8_0_block_scales_and_quants(quantized_input_blocks);
                                 metal::try_q8_0_encoded_linear_rows(
@@ -8481,11 +8744,34 @@ fn accumulate_transposed_linear_row_runtime(
     output: &mut [f32],
     precision: LinearAccumulationPrecision,
 ) -> Result<()> {
+    let runtime_plan = ResolvedRuntimePlan {
+        linear_accumulation_precision: precision,
+        q8: Q8RuntimeFlags::from_env(),
+    };
+    accumulate_transposed_linear_row_runtime_with_plan(input_row, weight, output, &runtime_plan)
+}
+
+fn accumulate_transposed_linear_row_runtime_with_plan(
+    input_row: &[f32],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<()> {
     if let Some(backing) = borrowed_q8_0_reader_backing(weight, input_row.len(), output.len())? {
-        accumulate_transposed_linear_row_q8_0_file_reader(input_row, backing, output)?;
+        accumulate_transposed_linear_row_q8_0_file_reader_with_flags(
+            input_row,
+            backing,
+            output,
+            &runtime_plan.q8,
+        )?;
         return Ok(());
     }
-    accumulate_transposed_linear_row_with_precision(input_row, weight, output, precision);
+    accumulate_transposed_linear_row_with_precision_with_plan(
+        input_row,
+        weight,
+        output,
+        runtime_plan,
+    );
     Ok(())
 }
 
@@ -8521,10 +8807,23 @@ fn borrowed_q8_0_reader_backing<'a>(
     Ok(Some(backing))
 }
 
+#[allow(dead_code)]
 fn accumulate_transposed_linear_row_q8_0_file_reader(
     input_row: &[f32],
     backing: &Q8_0FileBacking,
     output: &mut [f32],
+) -> Result<()> {
+    let q8_flags = Q8RuntimeFlags::from_env();
+    accumulate_transposed_linear_row_q8_0_file_reader_with_flags(
+        input_row, backing, output, &q8_flags,
+    )
+}
+
+fn accumulate_transposed_linear_row_q8_0_file_reader_with_flags(
+    input_row: &[f32],
+    backing: &Q8_0FileBacking,
+    output: &mut [f32],
+    q8_flags: &Q8RuntimeFlags,
 ) -> Result<()> {
     let input_width = input_row.len();
     if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
@@ -8547,7 +8846,7 @@ fn accumulate_transposed_linear_row_q8_0_file_reader(
         )
     })?;
     let output_width = output.len();
-    let use_q8_0_block_dot = q8_0_file_reader_block_dot_enabled();
+    let use_q8_0_block_dot = q8_flags.file_reader_block_dot;
     with_q8_0_file_reader_row_chunk(row_chunk_len, |row_chunk| {
         with_q8_0_file_reader_quantized_inputs(|quantized_input_blocks| {
             quantized_input_blocks.clear();
@@ -8840,14 +9139,38 @@ fn q8_0_file_reader_output_scratch_chunk_rows(
         .min(output_width))
 }
 
+#[allow(dead_code)]
 fn accumulate_transposed_linear_row_with_precision(
     input_row: &[f32],
     weight: BorrowedLinearWeight<'_>,
     output: &mut [f32],
     precision: LinearAccumulationPrecision,
 ) {
-    if should_use_borrowed_q8_0_block_dot(weight, input_row.len()) {
-        accumulate_transposed_linear_row_q8_0_block_dot(input_row, weight, output);
+    let runtime_plan = ResolvedRuntimePlan {
+        linear_accumulation_precision: precision,
+        q8: Q8RuntimeFlags::from_env(),
+    };
+    accumulate_transposed_linear_row_with_precision_with_plan(
+        input_row,
+        weight,
+        output,
+        &runtime_plan,
+    )
+}
+
+fn accumulate_transposed_linear_row_with_precision_with_plan(
+    input_row: &[f32],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+    runtime_plan: &ResolvedRuntimePlan,
+) {
+    if should_use_borrowed_q8_0_block_dot_with_plan(weight, input_row.len(), runtime_plan) {
+        accumulate_transposed_linear_row_q8_0_block_dot_with_flags(
+            input_row,
+            weight,
+            output,
+            &runtime_plan.q8,
+        );
         return;
     }
     if let Some((packed, interleave)) = q8_0_selected_borrowed_packed_rows4(weight) {
@@ -8859,7 +9182,7 @@ fn accumulate_transposed_linear_row_with_precision(
             return;
         }
     }
-    match precision {
+    match runtime_plan.linear_accumulation_precision {
         LinearAccumulationPrecision::F32 => {
             accumulate_transposed_linear_row(input_row, weight, output)
         }
@@ -8884,23 +9207,51 @@ fn accumulate_transposed_linear_row_with_precision(
     }
 }
 
+#[allow(dead_code)]
 fn accumulate_transposed_linear_row_q8_0_block_dot(
     input_row: &[f32],
     weight: BorrowedLinearWeight<'_>,
     output: &mut [f32],
 ) {
+    let q8_flags = Q8RuntimeFlags::from_env();
+    accumulate_transposed_linear_row_q8_0_block_dot_with_flags(input_row, weight, output, &q8_flags)
+}
+
+fn accumulate_transposed_linear_row_q8_0_block_dot_with_flags(
+    input_row: &[f32],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+    q8_flags: &Q8RuntimeFlags,
+) {
     let quantized_input = quantize_q8_0_row(input_row);
-    accumulate_transposed_linear_row_q8_0_block_dot_quantized(
+    accumulate_transposed_linear_row_q8_0_block_dot_quantized_with_flags(
         &quantized_input.blocks,
         weight,
         output,
+        q8_flags,
     );
 }
 
+#[allow(dead_code)]
 fn accumulate_transposed_linear_row_q8_0_block_dot_quantized(
     quantized_input: &[Q8_0Block],
     weight: BorrowedLinearWeight<'_>,
     output: &mut [f32],
+) {
+    let q8_flags = Q8RuntimeFlags::from_env();
+    accumulate_transposed_linear_row_q8_0_block_dot_quantized_with_flags(
+        quantized_input,
+        weight,
+        output,
+        &q8_flags,
+    )
+}
+
+fn accumulate_transposed_linear_row_q8_0_block_dot_quantized_with_flags(
+    quantized_input: &[Q8_0Block],
+    weight: BorrowedLinearWeight<'_>,
+    output: &mut [f32],
+    q8_flags: &Q8RuntimeFlags,
 ) {
     let blocks_per_row = quantized_input.len();
     if let Some((packed, interleave)) = q8_0_selected_borrowed_packed_rows4(weight) {
@@ -8918,8 +9269,8 @@ fn accumulate_transposed_linear_row_q8_0_block_dot_quantized(
         .q8_0_blocks
         .expect("q8_0 block-dot precondition checked");
     debug_assert_eq!(weight_blocks.len(), output.len() * blocks_per_row);
-    if q8_0_hybrid_retained_enabled() {
-        let gpu_rows = q8_0_hybrid_retained_gpu_rows(output.len());
+    if q8_flags.hybrid_retained {
+        let gpu_rows = q8_flags.hybrid_gpu_rows_for_output(output.len());
         if gpu_rows > 0 && gpu_rows < output.len() {
             let cpu_rows = output.len() - gpu_rows;
             let gpu_block_start = cpu_rows * blocks_per_row;
@@ -8949,7 +9300,7 @@ fn accumulate_transposed_linear_row_q8_0_block_dot_quantized(
             }
         }
     }
-    if q8_0_metal_retained_enabled() {
+    if q8_flags.metal_retained {
         let weight_bytes = q8_0_blocks_as_bytes(weight_blocks);
         if with_q8_0_block_scales_and_quants(quantized_input, |input_scales, input_quants| {
             metal::try_q8_0_block_linear_row(
@@ -11280,6 +11631,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
         let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         let mut first_row = [0_i8; Q8_0_BLOCK_VALUES];
         let mut second_row = [0_i8; Q8_0_BLOCK_VALUES];
@@ -12077,6 +12429,11 @@ mod tests {
             "CAMELID_FORWARD_RSS_TIMINGS",
             "CAMELID_GQA_HEAD_MAPPING",
             "CAMELID_LINEAR_ACCUMULATION",
+            "CAMELID_METAL_Q8",
+            "CAMELID_METAL_Q8_RETAINED",
+            "CAMELID_HYBRID_Q8_GPU_PERCENT",
+            "CAMELID_HYBRID_Q8_GPU_ROWS",
+            "CAMELID_HYBRID_Q8_RETAINED",
             "CAMELID_OUTPUT_PROJECTION_LAYOUT",
             "CAMELID_PREFILL_LAYER_MAJOR",
             "CAMELID_PREFILL_LAYER_MAJOR_Q8_0_FILE_CACHE_BYTES",
@@ -12103,6 +12460,7 @@ mod tests {
             "CAMELID_ROPE_DIRECTION",
             "CAMELID_ROPE_PAIRING",
             "CAMELID_ROPE_POSITION_MODE",
+            "CAMELID_RUNTIME_PROFILE",
             "CAMELID_SQUARE_LINEAR_LAYOUT",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
@@ -12394,9 +12752,55 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_block_dot_defaults_to_quantized_fast_path() {
+    fn q8_0_hot_path_uses_resolved_plan_not_current_env() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
+
+        let input = CpuTensor::from_f32("input", vec![1, 32], vec![0.25; 32]).unwrap();
+        let weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "weight",
+            vec![1, 32],
+            vec![1.25; 32],
+            vec![Q8_0Block {
+                scale: 1.0,
+                quants: [1; 32],
+            }],
+        )
+        .unwrap();
+        let plan = ResolvedRuntimePlan {
+            linear_accumulation_precision: LinearAccumulationPrecision::F32,
+            q8: Q8RuntimeFlags {
+                block_dot: true,
+                file_reader_block_dot: false,
+                metal: false,
+                metal_retained: false,
+                hybrid_retained: false,
+                hybrid_gpu_rows: None,
+                hybrid_gpu_percent: 10,
+            },
+        };
+
+        let actual = matmul_rhs_transposed_with_precision_with_plan(
+            &input,
+            &weight,
+            "resolved_plan_out",
+            &plan,
+        )
+        .unwrap();
+
+        assert!(
+            (actual.data[0] - 8.0).abs() < 1.0e-3,
+            "got {}",
+            actual.data[0]
+        );
+    }
+
+    #[test]
+    fn q8_0_block_dot_uses_quantized_fast_path_when_explicitly_enabled() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
 
         let input_values = vec![0.25; 32];
         let input = CpuTensor::from_f32("input", vec![1, 32], input_values).unwrap();
@@ -12420,22 +12824,80 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_block_dot_defaults_on_with_separate_escape_hatches() {
+    fn q8_0_gates_default_off_and_require_explicit_opt_in() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
 
-        assert!(q8_0_block_dot_enabled());
-        assert!(q8_0_file_reader_block_dot_enabled());
-
-        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "off");
-        assert!(!q8_0_file_reader_block_dot_enabled());
-
-        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
         assert!(!q8_0_block_dot_enabled());
         assert!(!q8_0_file_reader_block_dot_enabled());
+        assert!(!q8_0_metal_enabled());
+        assert!(!q8_0_metal_retained_enabled());
+        assert!(!q8_0_hybrid_retained_enabled());
 
-        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "1");
+        std::env::set_var("CAMELID_METAL_Q8", "true");
+        std::env::set_var("CAMELID_METAL_Q8_RETAINED", "enabled");
+        std::env::set_var("CAMELID_HYBRID_Q8_RETAINED", "yes");
+
+        assert!(q8_0_block_dot_enabled());
         assert!(q8_0_file_reader_block_dot_enabled());
+        assert!(q8_0_metal_enabled());
+        assert!(q8_0_metal_retained_enabled());
+        assert!(q8_0_hybrid_retained_enabled());
+    }
+
+    #[test]
+    fn resolved_runtime_plan_captures_q8_env_once() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "1");
+        std::env::set_var("CAMELID_HYBRID_Q8_GPU_ROWS", "7");
+        std::env::set_var("CAMELID_HYBRID_Q8_GPU_PERCENT", "25");
+
+        let plan = ResolvedRuntimePlan::from_env().unwrap();
+
+        assert_eq!(
+            plan.linear_accumulation_precision,
+            LinearAccumulationPrecision::F32
+        );
+        assert!(plan.q8.block_dot);
+        assert!(plan.q8.file_reader_block_dot);
+        assert_eq!(plan.q8.hybrid_gpu_rows, Some(7));
+        assert_eq!(plan.q8.hybrid_gpu_percent, 25);
+        assert_eq!(plan.q8.hybrid_gpu_rows_for_output(100), 7);
+    }
+
+    #[test]
+    fn runtime_profile_defaults_keep_experimental_q8_gates_closed() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        for profile in ["safe", "auto", "experimental", "debug"] {
+            std::env::set_var("CAMELID_RUNTIME_PROFILE", profile);
+            let plan = ResolvedRuntimePlan::from_env().unwrap();
+            assert!(
+                !plan.q8.block_dot,
+                "{profile} should not enable Q8 block dot by default"
+            );
+            assert!(
+                !plan.q8.file_reader_block_dot,
+                "{profile} should not enable Q8 file-reader block dot by default"
+            );
+            assert!(
+                !plan.q8.metal,
+                "{profile} should not enable Metal Q8 by default"
+            );
+            assert!(
+                !plan.q8.metal_retained,
+                "{profile} should not enable retained Metal Q8 by default"
+            );
+            assert!(
+                !plan.q8.hybrid_retained,
+                "{profile} should not enable hybrid Q8 by default"
+            );
+        }
+        std::env::remove_var("CAMELID_RUNTIME_PROFILE");
     }
 
     #[test]
@@ -12450,6 +12912,9 @@ mod tests {
         assert!(!q8_0_file_reader_block_dot_enabled());
 
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", " dequantized ");
+        assert!(!q8_0_file_reader_block_dot_enabled());
+
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", " maybe ");
         assert!(!q8_0_file_reader_block_dot_enabled());
 
         std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
@@ -13503,6 +13968,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
@@ -13563,6 +14029,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
@@ -13679,6 +14146,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
@@ -13792,6 +14260,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
         std::env::set_var("CAMELID_Q8_0_FILE_CACHE_BYTES", "1024");
         std::env::set_var(
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
@@ -13874,6 +14343,7 @@ mod tests {
         let _env_guard = env_lock();
         let _q8_guard = crate::test_support::q8_file_state_lock();
         clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "on");
         std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
         std::env::set_var(
             "CAMELID_Q8_0_FILE_READER_CHUNK_BYTES",
