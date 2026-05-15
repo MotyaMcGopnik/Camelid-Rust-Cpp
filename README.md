@@ -75,12 +75,13 @@ Camelid claims llama.cpp parity only for exact GGUF rows and envelopes with publ
 
 ## Current execution tracks
 
-Camelid is advancing on two tracks:
+Camelid is advancing on three tracks:
 
 - **Supported-row hardening:** preserve TinyLlama as the full current gate, keep Llama 3.2 3B support wording tied to its exact-row API/WebUI/parity/runtime evidence, and continue portability/broader-context/production-throughput work without blurring support scope.
+- **Ubuntu x86 Q8 performance investigation:** default-off experimental acceleration work is improving the measured Ubuntu x86 Q8 path through packed Q8 runtime storage, matrix-level execution work, and AVX2 packed kernels while keeping the safe fallback path intact. These paths remain under validation and are not public support or default-on acceleration claims.
 - **Active next-model bring-up:** Mistral 7B Instruct is the lead exact-row bring-up lane; Qwen 2.5 7B Instruct and Gemma 2 9B Instruct remain planned exact-row candidates.
 
-For deeper row-by-row promotion rules and blocker detail, see [`COMPATIBILITY.md`](COMPATIBILITY.md#locked-next-family-readiness-language) and [`STATUS.md`](STATUS.md).
+For deeper row-by-row promotion rules and blocker detail, see [`COMPATIBILITY.md`](COMPATIBILITY.md#locked-next-family-readiness-language), [`STATUS.md`](STATUS.md), and [`docs/performance/ubuntu-x86-q8-progress-20260515.md`](docs/performance/ubuntu-x86-q8-progress-20260515.md).
 
 ## What makes it different
 
