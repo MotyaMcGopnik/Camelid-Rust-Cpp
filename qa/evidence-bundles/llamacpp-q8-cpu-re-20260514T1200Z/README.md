@@ -4,6 +4,13 @@ Generated: 2026-05-14 UTC
 LANE: `UBUNTU_X86_Q8`
 Scope: Ubuntu x86_64 dense Llama Q8_0 only.
 
+## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-15T11:08Z
+
+- Small follow-on slice widened the default-off `CAMELID_X86_Q8_REPACK=on` runtime-packed loader from `blk.*.attn_q.weight` to the dense attention projection family: `blk.*.attn_q.weight`, `blk.*.attn_k.weight`, `blk.*.attn_v.weight`, and `blk.*.attn_output.weight`.
+- The implementation still uses backend-owned `Q8_0RuntimeStorage::PackedRows4` for selected tensors and keeps `data`, `q8_0_blocks`, file backing, and debug packed sidecars empty/absent for that path.
+- Fallback is unchanged: with the x86 repack env unset/off, or for tensors outside the selected x86 allowlist, the existing safe/load paths remain in force.
+- llama.cpp grep evidence was refreshed for `q8_0`, `tinyBLAS`, `ggml_vec_dot_q8_0_q8_0`, `repack`, `MUL_MAT`, scheduling, OpenMP, AVX2, AVX512, and VNNI; selected hits are captured in `artifacts/cron-95495a91-20260515T1108Z-x86-attn-family.txt`.
+- Canonical Ubuntu x86_64 validation passed: `cargo fmt --check`, `cargo test -q x86_q8_repack_loads_dense_attention_family_as_packed_runtime --test tensor_store`, and `cargo test -q x86_q8_avx2_packed_rows4_i8_matches_scalar_dot --lib` using the installed Rust 1.90.0 toolchain because the host default cargo is too old for the lockfile/MSRV.
 
 ## CAMELID TPM UBUNTU X86 Q8 handoff — cron 0719640b, 2026-05-14T22:49Z
 
@@ -23,6 +30,7 @@ Scope: Ubuntu x86_64 dense Llama Q8_0 only.
 - Model: `/home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf`.
 
 Evidence:
+- `artifacts/cron-95495a91-20260515T1108Z-x86-attn-family.txt`
 - `artifacts/cron-0719640b-20260514T2249Z-verification.txt`
 - `artifacts/ubuntu-host-repos-models.txt`
 - `artifacts/ubuntu-llamacpp-build-symbols.txt`
@@ -146,13 +154,13 @@ Full llama.cpp-vs-Camelid API harness note: `scripts/bench-llama3-same-host.mjs`
 
 Implemented in `src/tensor/mod.rs`, `src/inference.rs`, and `tests/tensor_store.rs`:
 
-- `CAMELID_X86_Q8_REPACK=on` is a default-off GGUF load/read gate for selected Llama dense Q8 linears in this slice (`blk.*.attn_q.weight`, `blk.*.ffn_gate.weight`, `blk.*.ffn_up.weight`).
+- `CAMELID_X86_Q8_REPACK=on` is a default-off GGUF load/read gate for selected Llama dense Q8 linears in this slice (`blk.*.attn_q.weight`, `blk.*.attn_k.weight`, `blk.*.attn_v.weight`, `blk.*.attn_output.weight`, `blk.*.ffn_gate.weight`, `blk.*.ffn_up.weight`).
 - When the gate is on, `TensorStore::{load_q8_0_file_backed_linear,load_q8_0_block_backed_linear}` build `Q8_0RuntimeStorage::PackedRows4` directly from GGUF Q8_0 bytes and return a tensor with empty `data`, no `q8_0_blocks`, and no file-backed row-major sidecar for those selected tensors.
 - FFN gate/up descriptor shapes are packed in runtime output-row order so `linear_for_role_runtime` consumes the backend-owned packed storage directly.
 - `x86_q8_kernel_avx2_enabled()` reads `CAMELID_X86_Q8_KERNEL` and accepts `avx2/on/1/true` (case variants included).
 - `q8_0_i8_block_avx2()` and `q8_0_packed_4x8_block_avx2()` are `#[target_feature(enable = "avx2")]` and default-off behind both the env gate and `std::arch::is_x86_feature_detected!("avx2")`.
 - Existing path fallback is preserved when the env gates are absent/off or AVX2 is not detected.
-- Unit tests: `x86_q8_avx2_kernel_matches_scalar_dot`, `x86_q8_avx2_packed_rows4_i8_matches_scalar_dot`, `x86_q8_repack_loads_attn_q_as_packed_runtime_without_row_major_duplicate`, `x86_q8_repack_loads_ffn_gate_as_transposed_packed_runtime_without_row_major_duplicate`.
+- Unit tests: `x86_q8_avx2_kernel_matches_scalar_dot`, `x86_q8_avx2_packed_rows4_i8_matches_scalar_dot`, `x86_q8_repack_loads_attn_q_as_packed_runtime_without_row_major_duplicate`, `x86_q8_repack_loads_dense_attention_family_as_packed_runtime`, `x86_q8_repack_loads_ffn_gate_as_transposed_packed_runtime_without_row_major_duplicate`.
 
 Validation:
 
@@ -174,7 +182,7 @@ This slice intentionally avoids a performance-mode row-major+packed duplicate fo
 | Prove actual hot symbols | PASS | `artifacts/perf-bench-pp-symbols.txt` |
 | Benchmark llama.cpp same host | PASS | `benchmarks/llama-bench-t16-p128-n16.json`, `benchmarks/llama-bench-t1-p128-n16.json` |
 | Benchmark Camelid baseline/default-parallel/parallel-off | PASS (microbench) | `benchmarks/baseline.json`, `parallel_on.json`, `parallel_off.json` |
-| Implement bounded default-off x86 slice | PASS | `src/tensor/mod.rs`, `src/inference.rs`, `tests/tensor_store.rs`; env `CAMELID_X86_Q8_REPACK=on`, `CAMELID_X86_Q8_KERNEL=avx2` |
+| Implement bounded default-off x86 slice | PASS | `src/tensor/mod.rs`, `src/inference.rs`, `tests/tensor_store.rs`; env `CAMELID_X86_Q8_REPACK=on`, `CAMELID_X86_Q8_KERNEL=avx2`; follow-on attention-family loader evidence in `artifacts/cron-95495a91-20260515T1108Z-x86-attn-family.txt` |
 | Parity test on Ubuntu x86_64 | PASS | `artifacts/camelid-x86-repack-tests.txt`; microbench checksum parity; API first token `Here` in both JSON files |
 | Demonstrate performance win from bounded slice | PASS (bounded smoke) | `benchmarks/unique-chat-baseline-1tok.json` vs `unique-chat-x86-repack-avx2-1tok.json`; gate/up timings and total first-token wall time reduced in the one-request API smoke |
 | Full end-to-end Camelid API vs llama.cpp API | BLOCKED / partial | llama.cpp-vs-Camelid API harness did not complete promptly; this bundle has llama.cpp bench plus Camelid default-vs-repack API smoke, not API equivalence vs llama.cpp |

@@ -289,11 +289,28 @@ fn x86_q8_repack_enabled() -> bool {
 }
 
 fn q8_repack_tensor_enabled(name: &str) -> bool {
-    (mac_q8_repack_enabled() || x86_q8_repack_enabled())
-        && name.starts_with("blk.")
-        && (name.ends_with(".attn_q.weight")
-            || name.ends_with(".ffn_gate.weight")
-            || name.ends_with(".ffn_up.weight"))
+    name.starts_with("blk.")
+        && ((mac_q8_repack_enabled() && q8_repack_mac_tensor_enabled(name))
+            || (x86_q8_repack_enabled() && q8_repack_x86_tensor_enabled(name)))
+}
+
+fn q8_repack_mac_tensor_enabled(name: &str) -> bool {
+    name.ends_with(".attn_q.weight")
+        || name.ends_with(".ffn_gate.weight")
+        || name.ends_with(".ffn_up.weight")
+}
+
+fn q8_repack_x86_tensor_enabled(name: &str) -> bool {
+    q8_repack_attention_tensor_enabled(name)
+        || name.ends_with(".ffn_gate.weight")
+        || name.ends_with(".ffn_up.weight")
+}
+
+fn q8_repack_attention_tensor_enabled(name: &str) -> bool {
+    name.ends_with(".attn_q.weight")
+        || name.ends_with(".attn_k.weight")
+        || name.ends_with(".attn_v.weight")
+        || name.ends_with(".attn_output.weight")
 }
 
 fn q8_repack_linear_shape(name: &str, shape: &TensorShape) -> Option<(usize, usize)> {
