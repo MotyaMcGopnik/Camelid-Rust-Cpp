@@ -12538,6 +12538,61 @@ mod tests {
     }
 
     #[test]
+    fn transposed_runtime_packed_attention_k_without_row_major_data_returns_error_instead_of_panicking() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
+        std::env::set_var("CAMELID_MAC_Q8_REPACK", "on");
+
+        let input_width = Q8_0_BLOCK_VALUES;
+        let kv_width = 16;
+        let rows = input_width;
+        let blocks: Vec<Q8_0Block> = (0..rows)
+            .map(|row| Q8_0Block {
+                scale: 0.125 + row as f32 * 0.00390625,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8).wrapping_mul(3).wrapping_add(row as i8)
+                }),
+            })
+            .collect();
+        let packed_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "blk.0.attn_k.weight",
+            TensorShape {
+                dims: vec![input_width, kv_width],
+            },
+            Q8_0PackedRows4::from_rows(
+                rows,
+                1,
+                Q8_0PackedRows4Interleave::I8,
+                &blocks,
+            )
+            .unwrap(),
+        );
+        let input = CpuTensor::from_f32(
+            "input",
+            vec![1, input_width],
+            (0..input_width)
+                .map(|idx| (idx as f32 - 16.0) * 0.125)
+                .collect(),
+        )
+        .unwrap();
+
+        let outcome = std::panic::catch_unwind(|| {
+            linear_for_role_runtime(&input, &packed_weight, "actual", "attention k", false)
+        });
+        assert!(outcome.is_ok(), "runtime-packed K tensor must not panic when row-major data is empty");
+        let err = outcome.unwrap().expect_err(
+            "transposed runtime-packed attention K should be rejected unless a matching packed consumer path is available",
+        );
+        let err_text = err.to_string();
+        assert!(err_text.contains("matmul rhs-transposed rhs cannot read tensor blk.0.attn_k.weight as row-major f32"), "{err_text}");
+        assert!(err_text.contains("storage=no-row-major-data"), "{err_text}");
+
+        std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
+        std::env::remove_var("CAMELID_MAC_Q8_REPACK");
+    }
+
+    #[test]
     fn q8_0_runtime_packed_ffn_gate_transposed_view_matches_retained_blocks() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();

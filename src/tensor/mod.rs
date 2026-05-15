@@ -1141,6 +1141,7 @@ impl CpuTensor {
     pub fn matmul_rhs_transposed(&self, rhs: &Self, name: impl Into<String>) -> Result<Self> {
         require_rank(self, 2, "matmul rhs-transposed lhs")?;
         require_rank(rhs, 2, "matmul rhs-transposed rhs")?;
+        rhs.require_row_major_f32_data("matmul rhs-transposed rhs")?;
         let m = self.dim(0)?;
         let k = self.dim(1)?;
         let n = rhs.dim(0)?;
@@ -1193,6 +1194,28 @@ impl CpuTensor {
             }
         }
         Self::from_f32(name, vec![m, n], out)
+    }
+
+    fn require_row_major_f32_data(&self, context: &str) -> Result<()> {
+        let expected_len = self.shape.element_count()?;
+        if self.data.len() == expected_len {
+            return Ok(());
+        }
+        let storage = if self.q8_0_runtime_storage.is_some() {
+            "runtime-packed-q8"
+        } else if self.q8_0_blocks.is_some() {
+            "retained-q8-blocks"
+        } else if self.q8_0_file_backing.is_some() {
+            "file-backed-q8"
+        } else if self.data.is_empty() {
+            "no-row-major-data"
+        } else {
+            "invalid-row-major-f32"
+        };
+        Err(BackendError::InvalidTensorData(format!(
+            "{context} cannot read tensor {} as row-major f32: storage={storage}, shape={:?}, data_len={}, expected_len={expected_len}",
+            self.name, self.shape.dims, self.data.len()
+        )))
     }
 
     pub fn add(&self, rhs: &Self, name: impl Into<String>) -> Result<Self> {
