@@ -693,8 +693,8 @@ impl ResolvedRuntimePlan {
 impl Q8RuntimeFlags {
     fn from_env() -> Self {
         Self {
-            block_dot: q8_0_env_flag_enabled_default_off("CAMELID_Q8_0_BLOCK_DOT"),
-            file_reader_block_dot: q8_0_env_flag_enabled_default_off(
+            block_dot: q8_0_env_flag_enabled_default_on_fail_closed("CAMELID_Q8_0_BLOCK_DOT"),
+            file_reader_block_dot: q8_0_env_flag_enabled_default_on_fail_closed(
                 "CAMELID_Q8_0_FILE_READER_BLOCK_DOT",
             ),
             metal: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8"),
@@ -6892,11 +6892,16 @@ fn should_use_borrowed_q8_0_block_dot_with_plan(
 
 #[allow(dead_code)]
 fn q8_0_block_dot_enabled() -> bool {
-    q8_0_env_flag_enabled_default_off("CAMELID_Q8_0_BLOCK_DOT")
+    // Retained Q8_0 blocks should use the quantized-input block-dot path by default;
+    // keep the existing explicit dequantized-f32 escape hatch for diagnostics.
+    q8_0_env_flag_enabled_default_on_fail_closed("CAMELID_Q8_0_BLOCK_DOT")
 }
 
 fn q8_0_file_reader_block_dot_enabled() -> bool {
-    q8_0_env_flag_enabled_default_off("CAMELID_Q8_0_FILE_READER_BLOCK_DOT")
+    // Lazy/file-backed Q8 rows should also use block-dot by default. Preserving this
+    // default is required because Q8 runtime/packed tensors may not have row-major
+    // f32 backing for a safe generic fallback.
+    q8_0_env_flag_enabled_default_on_fail_closed("CAMELID_Q8_0_FILE_READER_BLOCK_DOT")
 }
 
 #[allow(dead_code)]
@@ -7042,6 +7047,33 @@ fn auto_retain_q8_0_blocks_for_fast_local_chat(binding: &LlamaTensorBinding) -> 
     }
 
     saw_q8_linear && estimated_bytes <= max_bytes
+}
+
+fn q8_0_env_flag_enabled_default_on_fail_closed(key: &str) -> bool {
+    match env::var(key) {
+        Ok(value) => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("enabled")
+                || value.eq_ignore_ascii_case("yes")
+            {
+                true
+            } else if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled")
+                || value.eq_ignore_ascii_case("dequantized")
+                || value.eq_ignore_ascii_case("f32")
+            {
+                false
+            } else {
+                false
+            }
+        }
+        Err(_) => true,
+    }
 }
 
 fn q8_0_env_flag_enabled_default_off(key: &str) -> bool {
@@ -12824,24 +12856,35 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_gates_default_off_and_require_explicit_opt_in() {
+    fn q8_0_compute_gates_preserve_default_on_and_explicit_escape_hatches() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
 
+        assert!(q8_0_block_dot_enabled());
+        assert!(q8_0_file_reader_block_dot_enabled());
+
+        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "off");
+        assert!(!q8_0_block_dot_enabled());
+        assert!(q8_0_file_reader_block_dot_enabled());
+
+        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "0");
         assert!(!q8_0_block_dot_enabled());
         assert!(!q8_0_file_reader_block_dot_enabled());
+    }
+
+    #[test]
+    fn experimental_q8_acceleration_gates_default_off_and_require_explicit_opt_in() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
         assert!(!q8_0_metal_enabled());
         assert!(!q8_0_metal_retained_enabled());
         assert!(!q8_0_hybrid_retained_enabled());
 
-        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
-        std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "1");
         std::env::set_var("CAMELID_METAL_Q8", "true");
         std::env::set_var("CAMELID_METAL_Q8_RETAINED", "enabled");
         std::env::set_var("CAMELID_HYBRID_Q8_RETAINED", "yes");
 
-        assert!(q8_0_block_dot_enabled());
-        assert!(q8_0_file_reader_block_dot_enabled());
         assert!(q8_0_metal_enabled());
         assert!(q8_0_metal_retained_enabled());
         assert!(q8_0_hybrid_retained_enabled());
@@ -12877,12 +12920,12 @@ mod tests {
             std::env::set_var("CAMELID_RUNTIME_PROFILE", profile);
             let plan = ResolvedRuntimePlan::from_env().unwrap();
             assert!(
-                !plan.q8.block_dot,
-                "{profile} should not enable Q8 block dot by default"
+                plan.q8.block_dot,
+                "{profile} should preserve Q8 block-dot default-on behavior"
             );
             assert!(
-                !plan.q8.file_reader_block_dot,
-                "{profile} should not enable Q8 file-reader block dot by default"
+                plan.q8.file_reader_block_dot,
+                "{profile} should preserve Q8 file-reader block-dot default-on behavior"
             );
             assert!(
                 !plan.q8.metal,
