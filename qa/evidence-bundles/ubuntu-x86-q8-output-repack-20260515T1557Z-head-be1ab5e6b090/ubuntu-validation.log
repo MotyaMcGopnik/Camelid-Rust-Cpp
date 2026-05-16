@@ -1,6 +1,6 @@
-Host: ubuntu@54.186.43.33
+Host: ubuntu@<validation-host>
 Kernel: Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
-Remote worktree: /home/ubuntu/work/camelid-ubuntu-x86-q8-output-repack-20260515T1557Z-head-be1ab5e6b090
+Remote worktree: <ubuntu-workdir>/camelid-ubuntu-x86-q8-output-repack-20260515T1557Z-head-be1ab5e6b090
 rustc 1.95.0 (59807616e 2026-04-14)
 cargo 1.95.0 (f2d3ce0bd 2026-03-21)
 

@@ -12,7 +12,7 @@ Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x8
 - The path is intentionally narrow: dense Llama Q8_0 `blk.*.ffn_gate.weight` plus `blk.*.ffn_up.weight`, one activation row, runtime-packed `Q8_0RuntimeStorage::PackedRows4`, I8 interleave, input width divisible by 32, matching gate/up output widths divisible by 4. If any guard fails or the env flag is unset/off, `gated_ffn_activation_with_plan` falls back to the existing safe gate/up path.
 - This avoids the failed duplicate packed-copy sidecar direction: it consumes backend-owned packed/runtime storage attached to the two FFN tensors and does not add a row-major+packed duplicate as the final design.
 - llama.cpp/Camelid grep evidence was refreshed for `q8_0`, `tinyBLAS`, `ggml_vec_dot_q8_0_q8_0`, `repack`, `MUL_MAT`, scheduling, OpenMP, AVX2, AVX512, and VNNI in `artifacts/cron-95495a91-20260516T0136Z-x86-ffn-gate-up-consumer.txt`.
-- Canonical Ubuntu x86_64 validation passed in `/home/ubuntu/work/camelid-ffngateup-consumer-20260516T0136Z` on `ubuntu@54.186.43.33`: `cargo fmt --check`, `cargo test -q q8_ffn_gate_up_consumer --lib` (`2 passed`), and `cargo test -q --lib` (`245 passed`). Output: `artifacts/cron-95495a91-20260516T0136Z-x86-ffn-gate-up-consumer-tests.txt`.
+- Canonical Ubuntu x86_64 validation passed in `<ubuntu-workdir>/camelid-ffngateup-consumer-20260516T0136Z` on `ubuntu@<validation-host>`: `cargo fmt --check`, `cargo test -q q8_ffn_gate_up_consumer --lib` (`2 passed`), and `cargo test -q --lib` (`245 passed`). Output: `artifacts/cron-95495a91-20260516T0136Z-x86-ffn-gate-up-consumer-tests.txt`.
 - No throughput/support promotion is claimed from this slice. It is parity/unit evidence for a default-off Ubuntu x86_64 experiment path only.
 
 ## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-15T19:33Z
@@ -21,7 +21,7 @@ Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x8
 - The path is intentionally narrow: dense Llama Q8_0 `output.weight`, token-major output projection, one activation row, runtime-packed `Q8_0RuntimeStorage::PackedRows4`, I8 interleave, input width divisible by 32, vocab rows divisible by 4. If any guard fails or the env flag is unset/off, `output_projection_with_layout` falls back to the existing borrowed transposed matmul path.
 - This avoids the failed duplicate packed-copy sidecar direction: it consumes the backend-owned packed/runtime storage already attached to `output.weight` by `CAMELID_X86_Q8_REPACK=on` and does not add a row-major+packed duplicate as the final design.
 - llama.cpp/Camelid grep evidence was refreshed for `q8_0`, `tinyBLAS`, `ggml_vec_dot_q8_0_q8_0`, `repack`, `MUL_MAT`, scheduling/thread/OpenMP/GOMP, AVX2, AVX512, and VNNI in `artifacts/cron-95495a91-20260515T1933Z-x86-output-decode-owner.txt`.
-- Canonical Ubuntu x86_64 validation passed in `/home/ubuntu/work/camelid-output-decode-owner-20260515T193322Z` on `ubuntu@54.186.43.33`: `cargo fmt --check`, `cargo test --lib x86_q8 -- --nocapture` (`4 passed`, including `x86_q8_output_decode_owner_path_uses_runtime_packed_storage`), and `cargo test --test tensor_store x86_q8_repack_loads_output_projection_as_token_major_packed_runtime -- --nocapture` (`1 passed`). Output: `artifacts/cron-95495a91-20260515T1933Z-x86-output-decode-owner-tests.txt`.
+- Canonical Ubuntu x86_64 validation passed in `<ubuntu-workdir>/camelid-output-decode-owner-20260515T193322Z` on `ubuntu@<validation-host>`: `cargo fmt --check`, `cargo test --lib x86_q8 -- --nocapture` (`4 passed`, including `x86_q8_output_decode_owner_path_uses_runtime_packed_storage`), and `cargo test --test tensor_store x86_q8_repack_loads_output_projection_as_token_major_packed_runtime -- --nocapture` (`1 passed`). Output: `artifacts/cron-95495a91-20260515T1933Z-x86-output-decode-owner-tests.txt`.
 - No throughput/support promotion is claimed from this slice. It is parity/unit evidence for a default-off Ubuntu x86_64 experiment path only.
 
 ## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-15T17:59Z
@@ -30,7 +30,7 @@ Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x8
 - The path is intentionally narrow: dense Llama Q8_0 `ffn_down`, one activation row, runtime-packed `Q8_0RuntimeStorage::PackedRows4`, I8 interleave, input width divisible by 32, output width divisible by 4. If any guard fails or the env flag is unset/off, `linear_for_role_runtime` falls back to the existing path.
 - This avoids the failed duplicate packed-copy sidecar direction: it consumes the backend-owned packed/runtime storage already attached to the tensor and does not add a row-major+packed duplicate as the final design.
 - llama.cpp/Camelid grep evidence was refreshed again for `q8_0`, `tinyBLAS`, `ggml_vec_dot_q8_0_q8_0`, `repack`, `MUL_MAT`, scheduling, OpenMP, AVX2, AVX512, and VNNI in `artifacts/cron-95495a91-20260515T1759Z-x86-ffn-down-decode-owner-grep.txt`.
-- Canonical Ubuntu x86_64 validation passed in `/home/ubuntu/work/camelid-ffndown-owner-20260515T1759Z` on `ubuntu@54.186.43.33`: `cargo test --lib q8_0_runtime_packed -- --nocapture` (`5 passed`) and `cargo test --lib x86_q8 -- --nocapture` (`3 passed`, including `x86_q8_ffn_down_decode_owner_path_matches_runtime_packed_baseline`). Output: `artifacts/cron-95495a91-20260515T1759Z-x86-ffn-down-decode-owner-tests.txt`.
+- Canonical Ubuntu x86_64 validation passed in `<ubuntu-workdir>/camelid-ffndown-owner-20260515T1759Z` on `ubuntu@<validation-host>`: `cargo test --lib q8_0_runtime_packed -- --nocapture` (`5 passed`) and `cargo test --lib x86_q8 -- --nocapture` (`3 passed`, including `x86_q8_ffn_down_decode_owner_path_matches_runtime_packed_baseline`). Output: `artifacts/cron-95495a91-20260515T1759Z-x86-ffn-down-decode-owner-tests.txt`.
 - No throughput/support promotion is claimed from this slice. It is parity/unit evidence for a default-off Ubuntu x86_64 experiment path only.
 
 ## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-15T12:35Z
@@ -39,7 +39,7 @@ Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x8
 - The new FFN-down case packs the GGUF descriptor shape `[ffn, hidden]` as directly consumable transposed runtime rows `[hidden, ffn]`, matching the existing `linear_for_role_runtime` hot path without retaining `data`, `q8_0_blocks`, file backing, or debug packed sidecars.
 - Fallback is unchanged: with the x86 repack env unset/off, `CAMELID_Q8_0_BLOCK_DOT=off`, unaligned shapes, or tensors outside the selected x86 allowlist, the existing safe/load paths remain in force.
 - llama.cpp grep evidence was refreshed for `q8_0`, `tinyBLAS`, `ggml_vec_dot_q8_0_q8_0`, `repack`, `MUL_MAT`, scheduling, OpenMP, AVX2, AVX512, and VNNI; selected hits plus implementation evidence are captured in `artifacts/cron-95495a91-20260515T1235Z-x86-ffn-down-runtime.txt`.
-- Canonical Ubuntu x86_64 validation passed: `/home/ubuntu/.cargo/bin/cargo test --test tensor_store x86_q8_repack_loads_dense_ffn_family_as_transposed_packed_runtime -- --nocapture` in a synchronized scratch checkout (`1 passed; 0 failed; 23 filtered out`).
+- Canonical Ubuntu x86_64 validation passed: `<ubuntu-cargo> test --test tensor_store x86_q8_repack_loads_dense_ffn_family_as_transposed_packed_runtime -- --nocapture` in a synchronized scratch checkout (`1 passed; 0 failed; 23 filtered out`).
 
 ## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-15T11:08Z
 
@@ -63,8 +63,8 @@ Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x8
 
 - Camelid local worktree: `main...origin/main [ahead 1]` with pre-existing unrelated dirty files; this active Ubuntu x86 evidence root records only the `UBUNTU_X86_Q8` findings/slice and should not be used as evidence for other platforms. This lane touched the x86 Q8 implementation files plus this evidence bundle; unrelated dirty evidence from other lanes was left unstaged.
 - llama.cpp local/remote reference: `3e037f313c2c4cfce897d9be8f43954283a61de1` (`version: 9158`, commit `HIP: RDNA3 mma FA, faster AMD transpose, tune AMD (#22880)`).
-- Canonical host: `ubuntu@54.186.43.33`, AWS Ubuntu 24.04 x86_64, Intel Xeon Platinum 8488C, 16 vCPUs.
-- Model: `/home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf`.
+- Canonical host: `ubuntu@<validation-host>`, AWS Ubuntu 24.04 x86_64, Intel Xeon Platinum 8488C, 16 vCPUs.
+- Model: `<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf`.
 
 Evidence:
 - `artifacts/cron-95495a91-20260515T1933Z-x86-output-decode-owner.txt`
@@ -160,7 +160,7 @@ Files:
 
 ### Camelid Q8 hot-path same-host microbench
 
-Command shape: `target/release/camelid bench-q8-blocks /home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf --tensor blk.0.ffn_gate.weight --swap-rank2-shape --repeats 5 --warmup 1 --all-rows-dot --single-input-row-dot`
+Command shape: `target/release/camelid bench-q8-blocks <ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf --tensor blk.0.ffn_gate.weight --swap-rank2-shape --repeats 5 --warmup 1 --all-rows-dot --single-input-row-dot`
 
 Files:
 - `benchmarks/baseline.json`
@@ -179,7 +179,7 @@ Interpretation: the bounded AVX2 scalar-block replacement is parity-clean but do
 
 ### Camelid same-host API smoke benchmark: default vs x86 runtime repack
 
-Command shape: `CAMELID_BIN=target/release/camelid node scripts/bench-unique-chat.mjs --start-backend --model /home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf --max-tokens 1 --repeats 1 --warmup 0`.
+Command shape: `CAMELID_BIN=target/release/camelid node scripts/bench-unique-chat.mjs --start-backend --model <ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf --max-tokens 1 --repeats 1 --warmup 0`.
 
 Files:
 - `benchmarks/unique-chat-baseline-1tok.json`

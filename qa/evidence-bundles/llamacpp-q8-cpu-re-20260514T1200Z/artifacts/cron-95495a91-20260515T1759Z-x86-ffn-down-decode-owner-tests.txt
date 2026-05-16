@@ -1,4 +1,4 @@
-REMOTE=/home/ubuntu/work/camelid-ffndown-owner-20260515T1759Z
+REMOTE=<ubuntu-workdir>/camelid-ffndown-owner-20260515T1759Z
 Fri May 15 17:59:42 UTC 2026
 Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 Architecture:                            x86_64

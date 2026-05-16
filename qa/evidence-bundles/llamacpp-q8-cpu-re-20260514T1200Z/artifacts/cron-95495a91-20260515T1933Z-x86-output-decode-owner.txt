@@ -692,8 +692,8 @@ tests/tensor_store.rs:432:    std::env::set_var("CAMELID_X86_Q8_REPACK", "on");
 tests/tensor_store.rs:445:    std::env::remove_var("CAMELID_X86_Q8_REPACK");
 
 ## Ubuntu x86_64 validation
-host=ubuntu@54.186.43.33
-scratch=/home/ubuntu/work/camelid-output-decode-owner-20260515T193322Z
+host=ubuntu@<validation-host>
+scratch=<ubuntu-workdir>/camelid-output-decode-owner-20260515T193322Z
 cpu=Intel Xeon Platinum 8488C; flags include avx2,avx512*,avx_vnni,avx512_vnni,amx_int8
 commands: cargo fmt --check; cargo test --lib x86_q8 -- --nocapture; cargo test --test tensor_store x86_q8_repack_loads_output_projection_as_token_major_packed_runtime -- --nocapture
 result: PASS. lib x86_q8 ran 4 tests including x86_q8_output_decode_owner_path_uses_runtime_packed_storage; tensor_store output.weight runtime-pack test passed. Warnings were pre-existing Linux cfg/dead_code warnings, no failures.

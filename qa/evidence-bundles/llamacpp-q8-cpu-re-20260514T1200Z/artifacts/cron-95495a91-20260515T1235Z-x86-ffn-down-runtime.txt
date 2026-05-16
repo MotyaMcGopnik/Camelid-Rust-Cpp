@@ -20,7 +20,7 @@ Implementation evidence:
   - The down case uses descriptor dims `[64,32]` and verifies runtime packed rows `[32,64]` (`rows=32`, `blocks_per_row=2`).
 
 Ubuntu x86_64 validation:
-- Command class: canonical Ubuntu x86_64 host, synchronized scratch checkout, `/home/ubuntu/.cargo/bin/cargo test --test tensor_store x86_q8_repack_loads_dense_ffn_family_as_transposed_packed_runtime -- --nocapture`.
+- Command class: canonical Ubuntu x86_64 host, synchronized scratch checkout, `<ubuntu-cargo> test --test tensor_store x86_q8_repack_loads_dense_ffn_family_as_transposed_packed_runtime -- --nocapture`.
 - Result: PASS, 1 test passed, 0 failed, 23 filtered out.
 - Host architecture observed by the validation shell: `x86_64`.
 - Build warning observed: three pre-existing dead-code warnings for q8 schedule helpers; no test failure.

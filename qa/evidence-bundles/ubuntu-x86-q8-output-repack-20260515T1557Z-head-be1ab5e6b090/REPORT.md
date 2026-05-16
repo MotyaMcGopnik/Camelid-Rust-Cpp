@@ -18,8 +18,8 @@
 - ggml/src/CMakeLists.txt and ggml/src/ggml-cpu/CMakeLists.txt enumerate AVX2/AVX512/VNNI and OpenMP CPU backend variants.
 
 ## Ubuntu validation
-- Host: ubuntu@54.186.43.33 via /Users/timtoole/Documents/cert/ubuntu.pem
-- Remote worktree: /home/ubuntu/work/camelid-ubuntu-x86-q8-output-repack-20260515T1557Z-head-be1ab5e6b090
+- Host: ubuntu@<validation-host> via <operator-key-path>
+- Remote worktree: <ubuntu-workdir>/camelid-ubuntu-x86-q8-output-repack-20260515T1557Z-head-be1ab5e6b090
 - rustc: 1.95.0; cargo: 1.95.0
 - cargo test -q q8_x86_repack: PASS (2 tests)
 - cargo test -q x86_q8_repack_loads_output_projection_as_token_major_packed_runtime: PASS (1 integration test)

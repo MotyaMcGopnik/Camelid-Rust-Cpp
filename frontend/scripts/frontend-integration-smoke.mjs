@@ -40,7 +40,7 @@ try {
     generation_ready: true,
     status: 'ready',
     quant: 'Q8_0',
-    model_path: '/home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf',
+    model_path: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf',
     runtime_model_name: 'llama32_3b_instruct_q8_0',
   }
   const capabilities = {
@@ -362,7 +362,7 @@ try {
   assert.equal(
     resolveLoadedModelDisplayName({
       fallbackName: 'scalar_default_rerun',
-      modelPath: '/home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf',
+      modelPath: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf',
       quantLabel: 'Q8_0',
     }),
     'Llama 3.2 3B Instruct Q8_0',
@@ -371,7 +371,7 @@ try {
   assert.equal(
     resolveLoadedModelDisplayName({
       fallbackName: 'scalar_default_rerun',
-      modelPath: '/home/ubuntu/models/Llama-3.2-3B-Instruct-Q4_0.gguf',
+      modelPath: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q4_0.gguf',
       quantLabel: 'Q4_0',
     }),
     'scalar_default_rerun',
