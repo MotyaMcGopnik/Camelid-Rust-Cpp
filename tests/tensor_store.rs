@@ -351,6 +351,55 @@ fn x86_q8_repack_loads_dense_attention_family_as_packed_runtime() {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[test]
+fn x86_q8_repack_loads_attention_qkv_as_output_row_packed_runtime() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    std::env::set_var("CAMELID_X86_Q8_REPACK", "on");
+    std::env::remove_var("CAMELID_MAC_Q8_REPACK");
+    std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
+    std::env::remove_var("CAMELID_Q8_0_PACKED_4X8_DOT");
+
+    for (tensor_name, dims, expected_rows, expected_blocks_per_row) in [
+        ("blk.0.attn_q.weight", [32_i64, 32_i64], 32_usize, 1_usize),
+        ("blk.0.attn_k.weight", [64_i64, 32_i64], 32_usize, 2_usize),
+        ("blk.0.attn_v.weight", [64_i64, 32_i64], 32_usize, 2_usize),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tensor.gguf");
+        let block_count = (dims[0] as usize * dims[1] as usize) / 32;
+        let mut payload = Vec::new();
+        for block_idx in 0..block_count {
+            payload.extend_from_slice(&0x3c00u16.to_le_bytes());
+            payload.extend((0..32).map(|v| (v as i8).wrapping_add(block_idx as i8) as u8));
+        }
+        write_named_tensor_gguf_with_dims(&path, tensor_name, 8, &dims, &payload);
+
+        let gguf = read_metadata(&path).unwrap();
+        let store = TensorStore::open(&path, &gguf);
+        let tensor = store.load_q8_0_file_backed_linear(tensor_name).unwrap();
+
+        assert_eq!(tensor.shape.dims, vec![dims[0] as usize, dims[1] as usize]);
+        assert!(
+            tensor.data.is_empty(),
+            "{tensor_name} materialized f32 data"
+        );
+        assert!(tensor.q8_0_blocks.is_none(), "{tensor_name} kept q8 blocks");
+        assert!(
+            tensor.q8_0_file_backing.is_none(),
+            "{tensor_name} kept file backing"
+        );
+        let Q8_0RuntimeStorage::PackedRows4(packed) = tensor.q8_0_runtime_storage.unwrap();
+        assert_eq!(packed.rows, expected_rows, "{tensor_name} packed row count");
+        assert_eq!(
+            packed.blocks_per_row, expected_blocks_per_row,
+            "{tensor_name} packed blocks per output row"
+        );
+    }
+
+    std::env::remove_var("CAMELID_X86_Q8_REPACK");
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[test]
 fn x86_q8_repack_loads_dense_ffn_family_as_transposed_packed_runtime() {
     let _guard = ENV_LOCK.lock().unwrap();
     std::env::set_var("CAMELID_X86_Q8_REPACK", "on");

@@ -334,12 +334,15 @@ fn q8_repack_linear_shape(name: &str, shape: &TensorShape) -> Option<(usize, usi
     } else if name.ends_with(".ffn_gate.weight")
         || name.ends_with(".ffn_up.weight")
         || name.ends_with(".ffn_down.weight")
+        || name.ends_with(".attn_q.weight")
+        || name.ends_with(".attn_k.weight")
+        || name.ends_with(".attn_v.weight")
     {
-        // Llama FFN descriptors are stored as [input, output], while the runtime
-        // linear path consumes transposed rows [output, input]. Pack the
-        // backend-owned storage in the same output-row order used by the existing
-        // file-backed Q8 reader instead of packing descriptor rows that the hot
-        // matmul path cannot consume directly.
+        // Llama FFN and attention Q/K/V descriptors are stored as [input, output],
+        // while Camelid's hot linear path consumes rows as [output, input]. Pack
+        // backend-owned runtime storage in output-row order so optimized consumers
+        // do not have to fall back to row-major f32 data that runtime-packed tensors
+        // intentionally do not retain.
         Some((cols, rows))
     } else {
         Some((rows, cols))

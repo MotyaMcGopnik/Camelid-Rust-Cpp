@@ -668,6 +668,7 @@ fn diagnostic_rectangular_linear_layout_env(key: &str) -> Result<RectangularLine
 struct Q8RuntimeFlags {
     block_dot: bool,
     file_reader_block_dot: bool,
+    attention_projection_decode_consumer: bool,
     metal: bool,
     metal_retained: bool,
     hybrid_retained: bool,
@@ -696,6 +697,9 @@ impl Q8RuntimeFlags {
             block_dot: q8_0_env_flag_enabled_default_on_fail_closed("CAMELID_Q8_0_BLOCK_DOT"),
             file_reader_block_dot: q8_0_env_flag_enabled_default_on_fail_closed(
                 "CAMELID_Q8_0_FILE_READER_BLOCK_DOT",
+            ),
+            attention_projection_decode_consumer: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
             ),
             metal: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8"),
             metal_retained: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8_RETAINED"),
@@ -4667,6 +4671,15 @@ fn linear_for_role_runtime_with_plan(
         linear_for_role(input, weight, name, rectangular_role)
     } else {
         let name = name.into();
+        if let Some(output) = try_x86_q8_attention_projection_decode_consumer_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
+            return Ok(output);
+        }
         if let Some(output) =
             try_x86_q8_ffn_down_decode_owner_path(input, weight, &name, rectangular_role)?
         {
@@ -7203,6 +7216,76 @@ fn try_x86_q8_output_decode_owner_path(
     Ok(Some(CpuTensor::from_f32(
         name,
         vec![1, borrowed.rows],
+        output,
+    )?))
+}
+
+fn try_x86_q8_attention_projection_decode_consumer_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+    rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<CpuTensor>> {
+    if !runtime_plan.q8.attention_projection_decode_consumer
+        || !matches!(
+            rectangular_role,
+            "attention_q"
+                | "attention_k"
+                | "attention_v"
+                | "attention q"
+                | "attention k"
+                | "attention v"
+        )
+        || input.rank() != 2
+        || input.dim(0)? != 1
+        || weight.source_type != Some(GgufTensorType::Q8_0)
+    {
+        return Ok(None);
+    }
+
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+    let weight_rows = weight.dim(0)?;
+    let weight_cols = weight.dim(1)?;
+    let output_width = if weight_rows == input_width && weight_cols == input_width {
+        weight_cols
+    } else if weight_rows == input_width {
+        weight_cols
+    } else if weight_cols == input_width {
+        weight_rows
+    } else {
+        return Ok(None);
+    };
+    let Some(Q8_0RuntimeStorage::PackedRows4(packed)) = weight.q8_0_runtime_storage.as_ref() else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8
+        || packed.rows != output_width
+        || packed.blocks_per_row != input_width / Q8_0_BLOCK_VALUES
+        || !output_width.is_multiple_of(4)
+    {
+        return Ok(None);
+    }
+
+    let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
+    let mut output = vec![0.0_f32; output_width];
+    let blocks_per_row = packed.blocks_per_row;
+    for (group_idx, output_chunk) in output.chunks_exact_mut(4).enumerate() {
+        let group_blocks =
+            &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
+        let sums = q8_0_packed_rows4_dot(
+            group_blocks,
+            &quantized_input.blocks,
+            Q8_0PackedRows4Interleave::I8,
+        );
+        output_chunk.copy_from_slice(&sums);
+    }
+    Ok(Some(CpuTensor::from_f32(
+        name,
+        vec![1, output_width],
         output,
     )?))
 }
@@ -12507,6 +12590,7 @@ mod tests {
             "CAMELID_ROPE_POSITION_MODE",
             "CAMELID_RUNTIME_PROFILE",
             "CAMELID_SQUARE_LINEAR_LAYOUT",
+            "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
             std::env::remove_var(key);
@@ -12818,6 +12902,7 @@ mod tests {
             q8: Q8RuntimeFlags {
                 block_dot: true,
                 file_reader_block_dot: false,
+                attention_projection_decode_consumer: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -12909,6 +12994,7 @@ mod tests {
         clear_dense_diagnostic_env();
         std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "1");
+        std::env::set_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER", "on");
         std::env::set_var("CAMELID_HYBRID_Q8_GPU_ROWS", "7");
         std::env::set_var("CAMELID_HYBRID_Q8_GPU_PERCENT", "25");
 
@@ -12920,6 +13006,12 @@ mod tests {
         );
         assert!(plan.q8.block_dot);
         assert!(plan.q8.file_reader_block_dot);
+        assert!(plan.q8.attention_projection_decode_consumer);
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER");
+        assert!(
+            plan.q8.attention_projection_decode_consumer,
+            "resolved plan should cache the attention projection consumer gate"
+        );
         assert_eq!(plan.q8.hybrid_gpu_rows, Some(7));
         assert_eq!(plan.q8.hybrid_gpu_percent, 25);
         assert_eq!(plan.q8.hybrid_gpu_rows_for_output(100), 7);
@@ -12939,6 +13031,10 @@ mod tests {
             assert!(
                 plan.q8.file_reader_block_dot,
                 "{profile} should preserve Q8 file-reader block-dot default-on behavior"
+            );
+            assert!(
+                !plan.q8.attention_projection_decode_consumer,
+                "{profile} should not enable attention projection consumer by default"
             );
             assert!(
                 !plan.q8.metal,
@@ -13443,6 +13539,140 @@ mod tests {
             (0..input_width)
                 .map(|idx| (idx as f32 - 16.0) * 0.1875)
                 .collect(),
+        );
+    }
+
+    fn attention_projection_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
+        ResolvedRuntimePlan {
+            linear_accumulation_precision: LinearAccumulationPrecision::F32,
+            q8: Q8RuntimeFlags {
+                block_dot: false,
+                file_reader_block_dot: false,
+                attention_projection_decode_consumer: enabled,
+                metal: false,
+                metal_retained: false,
+                hybrid_retained: false,
+                hybrid_gpu_rows: None,
+                hybrid_gpu_percent: 10,
+            },
+        }
+    }
+
+    fn runtime_packed_attention_projection_case(
+        role_name: &str,
+        tensor_name: &str,
+    ) -> (CpuTensor, CpuTensor, CpuTensor) {
+        let rows = 12;
+        let input_width = Q8_0_BLOCK_VALUES * 2;
+        let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+        let row_blocks: Vec<Q8_0Block> = (0..rows * blocks_per_row)
+            .map(|row| Q8_0Block {
+                scale: 0.125 + row as f32 * 0.004,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8).wrapping_mul(5).wrapping_sub(row as i8)
+                }),
+            })
+            .collect();
+        let input = CpuTensor::from_f32(
+            "input",
+            vec![1, input_width],
+            (0..input_width)
+                .map(|idx| (idx as f32 - 20.0) * 0.15625)
+                .collect(),
+        )
+        .unwrap();
+        let retained_weight = CpuTensor::from_f32_with_q8_0_blocks(
+            format!("retained_{role_name}"),
+            vec![rows, input_width],
+            dequantized_q8_0_rows(&row_blocks),
+            row_blocks.clone(),
+        )
+        .unwrap();
+        let expected =
+            matmul_rhs_transposed_with_precision(&input, &retained_weight, "expected").unwrap();
+        let packed_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            tensor_name,
+            TensorShape {
+                dims: vec![input_width, rows],
+            },
+            Q8_0PackedRows4::from_rows(
+                rows,
+                blocks_per_row,
+                Q8_0PackedRows4Interleave::I8,
+                &row_blocks,
+            )
+            .unwrap(),
+        );
+        assert!(packed_weight.data.is_empty());
+        assert!(packed_weight.q8_0_blocks.is_none());
+        assert!(packed_weight.q8_0_file_backing.is_none());
+        assert!(matches!(
+            packed_weight.q8_0_runtime_storage.as_ref(),
+            Some(Q8_0RuntimeStorage::PackedRows4(_))
+        ));
+        (input, packed_weight, expected)
+    }
+
+    #[test]
+    fn q8_attention_projection_consumer_matches_runtime_packed_baseline_for_qkv() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let plan = attention_projection_consumer_plan(true);
+
+        for (role, tensor_name) in [
+            ("attention_q", "blk.0.attn_q.weight"),
+            ("attention_k", "blk.0.attn_k.weight"),
+            ("attention_v", "blk.0.attn_v.weight"),
+        ] {
+            let (input, packed_weight, expected) =
+                runtime_packed_attention_projection_case(role, tensor_name);
+            let actual = linear_for_role_runtime_with_plan(
+                &input,
+                &packed_weight,
+                format!("actual_{role}"),
+                role,
+                &plan,
+                false,
+            )
+            .unwrap();
+            assert_eq!(actual.shape.dims, expected.shape.dims, "{role}");
+            assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+        }
+    }
+
+    #[test]
+    fn q8_attention_projection_consumer_is_plan_gated_and_role_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, _expected) =
+            runtime_packed_attention_projection_case("attention_k", "blk.0.attn_k.weight");
+
+        let disabled = attention_projection_consumer_plan(false);
+        assert!(
+            try_x86_q8_attention_projection_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "disabled",
+                "attention_k",
+                &disabled,
+            )
+            .unwrap()
+            .is_none(),
+            "default-off plan should not enter the Q/K/V consumer"
+        );
+
+        let enabled = attention_projection_consumer_plan(true);
+        assert!(
+            try_x86_q8_attention_projection_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "wrong_role",
+                "attention_output",
+                &enabled,
+            )
+            .unwrap()
+            .is_none(),
+            "attention_output must not use the Q/K/V consumer slice"
         );
     }
 

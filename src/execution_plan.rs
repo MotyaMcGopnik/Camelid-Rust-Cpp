@@ -282,7 +282,7 @@ fn select_macos_q8_plan(
 
 fn select_linux_x86_q8_plan(
     profile: &ExecutionProfile,
-    _platform: &PlanPlatform,
+    platform: &PlanPlatform,
     env_updates: &mut BTreeMap<&'static str, Option<&'static str>>,
     reasons: &mut Vec<String>,
 ) -> (
@@ -293,8 +293,11 @@ fn select_linux_x86_q8_plan(
     &'static str,
     &'static str,
 ) {
-    if matches!(profile, ExecutionProfile::Safe) {
-        reasons.push("safe profile selected; optimized x86 Q8 paths disabled".into());
+    if !matches!(profile, ExecutionProfile::Experimental) {
+        reasons.push(
+            "Ubuntu/Linux x86_64 optimized Q8 path requires profile=experimental; failing closed to safe path"
+                .into(),
+        );
         return safe_q8_plan();
     }
     if env_flag_disabled("CAMELID_X86_Q8_REPACK") || env_flag_disabled("CAMELID_X86_Q8_KERNEL") {
@@ -316,11 +319,40 @@ fn select_linux_x86_q8_plan(
         env_updates.insert("CAMELID_X86_Q8_KERNEL", Some("off"));
         return safe_q8_plan();
     }
+    if !env_flag_enabled("CAMELID_X86_Q8_REPACK") || !x86_kernel_avx2_explicitly_requested() {
+        reasons.push(
+            "Ubuntu/Linux x86_64 optimized Q8 path requires explicit CAMELID_X86_Q8_REPACK=on and CAMELID_X86_Q8_KERNEL=avx2 gates; failing closed to safe path"
+                .into(),
+        );
+        return safe_q8_plan();
+    }
+    if !has_feature(&platform.cpu_features, "avx2") {
+        reasons.push(
+            "AVX2 feature not detected for x86 Q8 kernel; failing closed to safe path".into(),
+        );
+        return safe_q8_plan();
+    }
+
+    env_updates.insert("CAMELID_PARALLEL_LINEAR", Some("on"));
+    env_updates.insert("CAMELID_X86_Q8_REPACK", Some("on"));
+    env_updates.insert("CAMELID_X86_Q8_KERNEL", Some("avx2"));
+    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", Some("off"));
+    env_updates.insert("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER", Some("off"));
+    reasons.push("validated Ubuntu/Linux x86_64 Rust Q8 runtime repack enabled".into());
+    reasons.push("validated Rust AVX2 Q8 packed rows4 kernel selected".into());
     reasons.push(
-        "Ubuntu/Linux x86_64 Q8 experiment flags are default-off and not selected by the appliance planner yet; use manual developer overrides only with fresh evidence"
-            .into(),
+        "FFN-down and attention-output owner experiments remain disabled by execution plan".into(),
     );
-    safe_q8_plan()
+    reasons.push("experimental profile active; support claims remain unchanged".into());
+
+    (
+        "cpu_q8_runtime_repack",
+        "x86_experimental_q8_0_avx2_rust",
+        "q8_0_runtime_packed_rows4_prefill_avx2_available",
+        "enabled_when_q8_runtime_storage_active",
+        "q8_0_decode_packed_rows4_avx2",
+        "retained_q8_reference_path",
+    )
 }
 
 fn safe_q8_plan() -> (
@@ -576,6 +608,24 @@ fn env_flag_disabled(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn env_flag_enabled(key: &str) -> bool {
+    env::var(key)
+        .map(|value| {
+            let value = value.trim();
+            value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("enabled")
+        })
+        .unwrap_or(false)
+}
+
+fn x86_kernel_avx2_explicitly_requested() -> bool {
+    env::var("CAMELID_X86_Q8_KERNEL")
+        .map(|value| value.trim().eq_ignore_ascii_case("avx2"))
+        .unwrap_or(false)
+}
+
 fn invalid_x86_kernel_override() -> Option<String> {
     let value = env::var("CAMELID_X86_Q8_KERNEL").ok()?;
     let trimmed = value.trim();
@@ -817,7 +867,93 @@ mod tests {
             .plan
             .reasons
             .iter()
-            .any(|reason| reason.contains("default-off")));
+            .any(|reason| reason.contains("requires profile=experimental")));
+        clear_profile_env();
+    }
+
+    #[test]
+    fn ubuntu_experimental_validated_gates_select_rust_avx2_q8_path() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_PROFILE", "experimental");
+        env::set_var("CAMELID_X86_Q8_REPACK", "on");
+        env::set_var("CAMELID_X86_Q8_KERNEL", "avx2");
+        let outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(16),
+            platform("linux", "x86_64", &["avx2", "avx512f"]),
+        );
+        assert_eq!(outcome.plan.profile, ExecutionProfile::Experimental);
+        assert_eq!(outcome.plan.selected_backend, "cpu_q8_runtime_repack");
+        assert_eq!(
+            outcome.plan.selected_q8_path,
+            "x86_experimental_q8_0_avx2_rust"
+        );
+        assert_eq!(
+            outcome.plan.prefill_runtime_policy,
+            "enabled_when_q8_runtime_storage_active"
+        );
+        assert_eq!(
+            outcome.env_updates.get("CAMELID_PARALLEL_LINEAR"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome.env_updates.get("CAMELID_X86_Q8_REPACK"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome.env_updates.get("CAMELID_X86_Q8_KERNEL"),
+            Some(&Some("avx2"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
+            Some(&Some("off"))
+        );
+        clear_profile_env();
+    }
+
+    #[test]
+    fn ubuntu_experimental_missing_x86_gate_fails_closed() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_PROFILE", "experimental");
+        env::set_var("CAMELID_X86_Q8_KERNEL", "avx2");
+        let outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(16),
+            platform("linux", "x86_64", &["avx2"]),
+        );
+        assert_eq!(outcome.plan.selected_backend, "cpu_reference");
+        assert_eq!(outcome.plan.selected_q8_path, "safe_q8_0_block_dot");
+        assert!(!outcome.env_updates.contains_key("CAMELID_X86_Q8_REPACK"));
+        clear_profile_env();
+    }
+
+    #[test]
+    fn ubuntu_experimental_without_avx2_feature_fails_closed() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_PROFILE", "experimental");
+        env::set_var("CAMELID_X86_Q8_REPACK", "on");
+        env::set_var("CAMELID_X86_Q8_KERNEL", "avx2");
+        let outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(16),
+            platform("linux", "x86_64", &["sse4_2"]),
+        );
+        assert_eq!(outcome.plan.selected_backend, "cpu_reference");
+        assert_eq!(outcome.plan.selected_q8_path, "safe_q8_0_block_dot");
         clear_profile_env();
     }
 
@@ -866,6 +1002,7 @@ mod tests {
     fn invalid_x86_kernel_override_fails_closed() {
         let _guard = env_lock();
         clear_profile_env();
+        env::set_var("CAMELID_PROFILE", "experimental");
         env::set_var("CAMELID_X86_Q8_KERNEL", "amx_now_please");
         let outcome = plan_for_model_with_platform(
             &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
