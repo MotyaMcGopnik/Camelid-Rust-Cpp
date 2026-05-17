@@ -31,6 +31,7 @@ Only list the paths that are currently evidence-backed and default-off:
 - AVX2 packed-kernel work in the measured Ubuntu x86 lane where parity and bounded timing evidence support keeping the path under default-off gating.
 - Packed Q8 runtime storage for the dense attention projection family plus dense FFN gate/up/down rows in the measured lane.
 - Default-off decode consumers that directly use backend-owned packed runtime storage for narrow one-row dense projection families, including output, attention QKV/projection, FFN down, and the FFN gate/up activation slice while validation remains opt-in.
+- ExecutionPlan now treats the x86 attention QKV/projection and FFN gate/up decode-consumer flags as managed default-off knobs, so appliance planning clears stale owner experiments instead of inheriting them accidentally.
 
 ## Active experimental direction
 

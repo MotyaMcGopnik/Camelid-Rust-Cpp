@@ -12,6 +12,9 @@ const MANAGED_ENV_KEYS: &[&str] = &[
     "CAMELID_FORWARD_RSS_TIMINGS",
     "CAMELID_X86_Q8_REPACK",
     "CAMELID_X86_Q8_KERNEL",
+    "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
     "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
     "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
 ];
@@ -336,12 +339,19 @@ fn select_linux_x86_q8_plan(
     env_updates.insert("CAMELID_PARALLEL_LINEAR", Some("on"));
     env_updates.insert("CAMELID_X86_Q8_REPACK", Some("on"));
     env_updates.insert("CAMELID_X86_Q8_KERNEL", Some("avx2"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+        Some("off"),
+    );
+    env_updates.insert("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", Some("off"));
+    env_updates.insert("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", Some("off"));
     env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", Some("off"));
     env_updates.insert("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER", Some("off"));
     reasons.push("validated Ubuntu/Linux x86_64 Rust Q8 runtime repack enabled".into());
     reasons.push("validated Rust AVX2 Q8 packed rows4 kernel selected".into());
     reasons.push(
-        "FFN-down and attention-output owner experiments remain disabled by execution plan".into(),
+        "attention, FFN, and output decode-consumer experiments remain disabled by execution plan"
+            .into(),
     );
     reasons.push("experimental profile active; support claims remain unchanged".into());
 
@@ -701,6 +711,9 @@ mod tests {
             "CAMELID_MAC_Q8_SCHED",
             "CAMELID_X86_Q8_REPACK",
             "CAMELID_X86_Q8_KERNEL",
+            "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
             "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
@@ -909,6 +922,24 @@ mod tests {
         assert_eq!(
             outcome
                 .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
                 .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER"),
             Some(&Some("off"))
         );
@@ -918,6 +949,22 @@ mod tests {
                 .get("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
             Some(&Some("off"))
         );
+        clear_profile_env();
+    }
+
+    #[test]
+    fn planner_env_apply_clears_stale_x86_q8_decode_consumer_flags() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", "on");
+
+        PlannerEnv::capture().apply(&BTreeMap::new());
+
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER").is_err());
         clear_profile_env();
     }
 

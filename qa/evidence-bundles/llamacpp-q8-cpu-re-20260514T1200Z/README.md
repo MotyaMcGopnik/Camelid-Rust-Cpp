@@ -6,6 +6,15 @@ Scope: Ubuntu x86_64 dense Llama Q8_0 only.
 
 Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x86_64 experiment lane only. It is not Mac, Apple Silicon, Metal, Mixtral, portability, production-throughput, or support-contract evidence. All Camelid x86 Q8 runtime changes described here are default-off developer experiments unless explicitly promoted by separate support evidence.
 
+## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-17T00:35Z
+
+- Small technical slice hardened ExecutionPlan ownership of the default-off Ubuntu x86 Q8 decode-consumer gates: `CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER`, `CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER`, and `CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER` are now managed alongside the existing x86 repack/kernel/output/FFN-down gates.
+- The current validated Ubuntu x86 experimental plan still requires explicit `CAMELID_X86_Q8_REPACK=on CAMELID_X86_Q8_KERNEL=avx2`, preserves safe fallback otherwise, and now pins attention QKV/projection plus FFN gate/up decode consumers to `off` so stale opt-in owner experiments cannot leak into planned runs.
+- This avoids the failed duplicate packed-copy sidecar direction: it does not add a new sidecar and leaves the directly usable x86 paths consuming backend-owned `Q8_0RuntimeStorage::PackedRows4` when separately opted in.
+- llama.cpp/Camelid grep evidence was refreshed for `q8_0`, `ggml_vec_dot_q8_0_q8_0`, `repack`, `MUL_MAT`, scheduling, OpenMP, AVX2, AVX512, and VNNI in `artifacts/cron-95495a91-20260517T0035Z-x86-managed-decode-consumer-flags.txt`.
+- Local validation passed: `cargo fmt --all -- --check`, targeted runtime/plan tests, and `./scripts/with-rustup-cargo.sh test execution_plan::tests --lib -- --nocapture` (`13 passed`).
+- No throughput/support promotion is claimed from this slice. It is planner/runtime-gate evidence for the default-off Ubuntu x86_64 experiment lane only.
+
 ## CAMELID BACKEND ENGINEER UBUNTU X86 Q8 — cron 95495a91, 2026-05-16T01:36Z
 
 - Small technical slice added a directly usable one-row dense FFN gate/up decode consumer for backend-owned packed Q8_0 runtime storage, gated by the new default-off x86 flag `CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER`.
