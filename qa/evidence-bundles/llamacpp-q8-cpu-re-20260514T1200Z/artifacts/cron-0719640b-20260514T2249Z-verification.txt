@@ -1,14 +1,14 @@
 cron=0719640b-b612-42e5-a335-f8f5d87fd3e7
 LANE=UBUNTU_X86_Q8
 timestamp_utc=2026-05-14T22:49Z
-canonical_host=ssh -i /Users/timtoole/Documents/cert/ubuntu.pem ubuntu@54.186.43.33
+canonical_host=ssh [identity omitted] <operator-key-path> ubuntu@<validation-host>
 --- local commit/status ---
 80f6271 Add default-off Ubuntu x86 Q8 repack path
 ?? qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-0719640b-20260514T2249Z-verification.txt
 --- canonical host recheck and x86 q8 tests ---
 2026-05-14T22:48:45Z
-ip-172-31-19-175
-Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+canonical-private-ubuntu-validation-host
+Linux canonical-private-ubuntu-validation-host 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 Architecture:                            x86_64
 CPU(s):                                  16
 On-line CPU(s) list:                     0-15

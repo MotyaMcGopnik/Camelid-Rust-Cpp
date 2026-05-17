@@ -12,6 +12,16 @@ const MANAGED_ENV_KEYS: &[&str] = &[
     "CAMELID_FORWARD_RSS_TIMINGS",
     "CAMELID_X86_Q8_REPACK",
     "CAMELID_X86_Q8_KERNEL",
+    "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL",
+    "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL",
+    "CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL",
+    "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
+    "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
+    "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
     "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
     "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
 ];
@@ -228,9 +238,10 @@ fn select_macos_q8_plan(
     reasons.push("validated macOS Apple Silicon Q8_0 runtime repack enabled".into());
     reasons.push("parallel linear enabled by execution plan".into());
 
-    let prefill_path = if i8mm && !env_flag_disabled("CAMELID_MAC_Q8_PREFILL_I8MM") {
+    let prefill_i8mm_requested = env_flag_enabled("CAMELID_MAC_Q8_PREFILL_I8MM");
+    let prefill_path = if i8mm && prefill_i8mm_requested {
         env_updates.insert("CAMELID_MAC_Q8_PREFILL_I8MM", Some("on"));
-        reasons.push("validated direct-pack prefill I8MM enabled".into());
+        reasons.push("explicit direct-pack prefill I8MM gate enabled".into());
         reasons.push(format!(
             "direct-pack I8MM dispatch engages only when prefill rows >= {}",
             MAC_Q8_PREFILL_I8MM_MIN_ROWS
@@ -251,9 +262,15 @@ fn select_macos_q8_plan(
             "q8_0_direct_pack_prefill_i8mm_available"
         }
     } else {
+        env_updates.insert("CAMELID_MAC_Q8_PREFILL_I8MM", Some("off"));
+        env_updates.insert("CAMELID_MAC_Q8_SCHED", Some("off"));
         if env_flag_disabled("CAMELID_MAC_Q8_PREFILL_I8MM") {
-            env_updates.insert("CAMELID_MAC_Q8_PREFILL_I8MM", Some("off"));
             reasons.push("CAMELID_MAC_Q8_PREFILL_I8MM disables I8MM prefill".into());
+        } else if !prefill_i8mm_requested {
+            reasons.push(
+                "CAMELID_MAC_Q8_PREFILL_I8MM remains default-off pending longer decode parity evidence"
+                    .into(),
+            );
         } else {
             reasons
                 .push("I8MM/MATMUL_INT8 unavailable; using packed Q8 CPU prefill fallback".into());
@@ -336,12 +353,38 @@ fn select_linux_x86_q8_plan(
     env_updates.insert("CAMELID_PARALLEL_LINEAR", Some("on"));
     env_updates.insert("CAMELID_X86_Q8_REPACK", Some("on"));
     env_updates.insert("CAMELID_X86_Q8_KERNEL", Some("avx2"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+        Some("off"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER",
+        Some("off"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL",
+        Some("off"),
+    );
+    env_updates.insert("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", Some("off"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL",
+        Some("off"),
+    );
+    env_updates.insert("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", Some("off"));
+    env_updates.insert("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", Some("off"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
+        Some("off"),
+    );
+    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER", Some("off"));
+    env_updates.insert("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL", Some("off"));
     env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", Some("off"));
     env_updates.insert("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER", Some("off"));
     reasons.push("validated Ubuntu/Linux x86_64 Rust Q8 runtime repack enabled".into());
     reasons.push("validated Rust AVX2 Q8 packed rows4 kernel selected".into());
     reasons.push(
-        "FFN-down and attention-output owner experiments remain disabled by execution plan".into(),
+        "attention, FFN, and output decode-consumer experiments remain disabled by execution plan"
+            .into(),
     );
     reasons.push("experimental profile active; support claims remain unchanged".into());
 
@@ -701,6 +744,16 @@ mod tests {
             "CAMELID_MAC_Q8_SCHED",
             "CAMELID_X86_Q8_REPACK",
             "CAMELID_X86_Q8_KERNEL",
+            "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL",
+            "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL",
+            "CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL",
+            "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
+            "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
             "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
@@ -743,7 +796,7 @@ mod tests {
         assert_eq!(outcome.plan.selected_q8_path, "mac_validated_q8_0_repack");
         assert_eq!(
             outcome.plan.prefill_path,
-            "q8_0_direct_pack_prefill_i8mm_available"
+            "q8_0_cpu_packed_prefill_fallback_available"
         );
         assert_eq!(
             outcome.plan.prefill_runtime_policy,
@@ -759,7 +812,7 @@ mod tests {
         );
         assert_eq!(
             outcome.env_updates.get("CAMELID_MAC_Q8_PREFILL_I8MM"),
-            Some(&Some("on"))
+            Some(&Some("off"))
         );
         assert_eq!(
             outcome.env_updates.get("CAMELID_MAC_Q8_SCHED"),
@@ -774,6 +827,7 @@ mod tests {
         let _guard = env_lock();
         clear_profile_env();
         env::set_var("CAMELID_PROFILE", "experimental");
+        env::set_var("CAMELID_MAC_Q8_PREFILL_I8MM", "on");
         let outcome = plan_for_model_with_platform(
             &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
             &fixture("Llama 3.2 3B Instruct"),
@@ -909,6 +963,66 @@ mod tests {
         assert_eq!(
             outcome
                 .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
                 .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER"),
             Some(&Some("off"))
         );
@@ -918,6 +1032,36 @@ mod tests {
                 .get("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
             Some(&Some("off"))
         );
+        clear_profile_env();
+    }
+
+    #[test]
+    fn planner_env_apply_clears_stale_x86_q8_decode_consumer_flags() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL", "on");
+        env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL", "on");
+        env::set_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL", "on");
+
+        PlannerEnv::capture().apply(&BTreeMap::new());
+
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL").is_err());
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL").is_err());
+        assert!(env::var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL").is_err());
+        assert!(env::var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL").is_err());
+        assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL").is_err());
         clear_profile_env();
     }
 

@@ -30,7 +30,7 @@ const patterns = [
   {
     id: 'ipv4_literal',
     description: 'Literal IPv4 address leaked into durable bundle content',
-    regex: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
+    regex: /\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d?)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g,
   },
   {
     id: 'ec2_hostname',

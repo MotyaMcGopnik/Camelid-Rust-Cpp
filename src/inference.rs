@@ -17,6 +17,7 @@ use std::{
 use rayon::prelude::*;
 use serde::Serialize;
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::execution_plan::MAC_Q8_PREFILL_I8MM_MIN_ROWS;
 use crate::metal;
 
@@ -669,6 +670,15 @@ struct Q8RuntimeFlags {
     block_dot: bool,
     file_reader_block_dot: bool,
     attention_projection_decode_consumer: bool,
+    attention_output_decode_consumer: bool,
+    attention_output_packed_rows4_matmul: bool,
+    attention_qkv_decode_consumer: bool,
+    attention_qkv_packed_rows4_matmul: bool,
+    output_packed_rows4_matmul: bool,
+    ffn_gate_up_decode_consumer: bool,
+    ffn_gate_up_packed_rows4_matmul: bool,
+    ffn_down_decode_consumer: bool,
+    ffn_down_packed_rows4_matmul: bool,
     metal: bool,
     metal_retained: bool,
     hybrid_retained: bool,
@@ -700,6 +710,33 @@ impl Q8RuntimeFlags {
             ),
             attention_projection_decode_consumer: q8_0_env_flag_enabled_default_off(
                 "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+            ),
+            attention_output_decode_consumer: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER",
+            ),
+            attention_output_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL",
+            ),
+            attention_qkv_decode_consumer: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+            ),
+            attention_qkv_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL",
+            ),
+            output_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL",
+            ),
+            ffn_gate_up_decode_consumer: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
+            ),
+            ffn_gate_up_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
+            ),
+            ffn_down_decode_consumer: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
+            ),
+            ffn_down_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
             ),
             metal: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8"),
             metal_retained: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8_RETAINED"),
@@ -1457,12 +1494,14 @@ pub fn snapshot_q8_schedule_telemetry() -> LlamaQ8ScheduleTelemetry {
     }
 }
 
+#[allow(dead_code)]
 fn add_q8_schedule_counter(counter: &AtomicU64, value: u64) {
     if q8_schedule_telemetry_enabled() && value > 0 {
         counter.fetch_add(value, Ordering::Relaxed);
     }
 }
 
+#[allow(dead_code)]
 fn update_q8_schedule_peak(counter: &AtomicU64, value: u64) {
     if !q8_schedule_telemetry_enabled() {
         return;
@@ -1476,6 +1515,7 @@ fn update_q8_schedule_peak(counter: &AtomicU64, value: u64) {
     }
 }
 
+#[allow(dead_code)]
 fn record_q8_schedule_activation_pack(
     packed_inputs: &mut Vec<Q8_0PackedRows4Block>,
     before_capacity: usize,
@@ -3481,6 +3521,22 @@ fn forward_layer_timed(
     let qkv_started = Instant::now();
     let shared_qkv = if collect_diagnostics {
         None
+    } else if let Some(qkv) = try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+        &attn_norm,
+        &layer.attention_q,
+        &layer.attention_k,
+        &layer.attention_v,
+        runtime_plan,
+    )? {
+        Some(qkv)
+    } else if let Some(qkv) = try_x86_q8_attention_qkv_decode_consumer_path(
+        &attn_norm,
+        &layer.attention_q,
+        &layer.attention_k,
+        &layer.attention_v,
+        runtime_plan,
+    )? {
+        Some(qkv)
     } else {
         try_attention_qkv_shared_q8_0_block_dot(
             &attn_norm,
@@ -3777,41 +3833,15 @@ fn forward_layer_timed(
         }
         trace_forward_layer_memory(layer_idx, "ffn_gate_up_activation_done");
         let started = Instant::now();
-        let (ffn_out, ffn_out_already_residual) = if !collect_diagnostics {
-            if let Some(output) = try_x86_q8_ffn_down_decode_owner_residual_path(
-                &activated,
-                &layer.ffn_down,
-                &residual,
-                format!("layer_{layer_idx}_ffn_residual"),
-                "ffn_down",
-            )? {
-                (output, true)
-            } else {
-                (
-                    linear_for_role_runtime_with_plan(
-                        &activated,
-                        &layer.ffn_down,
-                        format!("layer_{layer_idx}_ffn_down"),
-                        "ffn_down",
-                        runtime_plan,
-                        collect_diagnostics,
-                    )?,
-                    false,
-                )
-            }
-        } else {
-            (
-                linear_for_role_runtime_with_plan(
-                    &activated,
-                    &layer.ffn_down,
-                    format!("layer_{layer_idx}_ffn_down"),
-                    "ffn_down",
-                    runtime_plan,
-                    collect_diagnostics,
-                )?,
-                false,
-            )
-        };
+        let ffn_out = linear_for_role_runtime_with_plan(
+            &activated,
+            &layer.ffn_down,
+            format!("layer_{layer_idx}_ffn_down"),
+            "ffn_down",
+            runtime_plan,
+            collect_diagnostics,
+        )?;
+        let ffn_out_already_residual = false;
         let ffn_output_stats = collect_diagnostics
             .then(|| LlamaTensorStats::from_tensor(&ffn_out))
             .transpose()?;
@@ -4671,6 +4701,24 @@ fn linear_for_role_runtime_with_plan(
         linear_for_role(input, weight, name, rectangular_role)
     } else {
         let name = name.into();
+        if let Some(output) = try_x86_q8_attention_output_decode_consumer_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
+            return Ok(output);
+        }
+        if let Some(output) = try_x86_q8_attention_output_packed_rows4_matmul_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
+            return Ok(output);
+        }
         if let Some(output) = try_x86_q8_attention_projection_decode_consumer_path(
             input,
             weight,
@@ -4680,9 +4728,22 @@ fn linear_for_role_runtime_with_plan(
         )? {
             return Ok(output);
         }
-        if let Some(output) =
-            try_x86_q8_ffn_down_decode_owner_path(input, weight, &name, rectangular_role)?
-        {
+        if let Some(output) = try_x86_q8_ffn_down_decode_consumer_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
+            return Ok(output);
+        }
+        if let Some(output) = try_x86_q8_ffn_down_packed_rows4_matmul_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
             return Ok(output);
         }
         linear_with_diagnostic_layouts_with_plan(
@@ -5222,6 +5283,11 @@ fn output_projection_with_layout_with_plan(
                 )));
             }
             let name = name.into();
+            if let Some(output) =
+                try_x86_q8_output_packed_rows4_matmul_path(input, weight, &name, runtime_plan)?
+            {
+                return Ok(output);
+            }
             if let Some(output) = try_x86_q8_output_decode_owner_path(input, weight, &name)? {
                 return Ok(output);
             }
@@ -6060,7 +6126,20 @@ fn gated_ffn_activation_with_plan(
     let mut gate = vec![0.0; gate_width];
     let mut up = vec![0.0; up_width];
 
-    let shared_q8_gate_up = if collect_diagnostics {
+    let ffn_gate_up_decode_consumer = if collect_diagnostics {
+        None
+    } else {
+        try_x86_q8_ffn_gate_up_decode_consumer_path(
+            input,
+            gate_weight,
+            up_weight,
+            &mut gate,
+            &mut up,
+            runtime_plan,
+        )?
+    };
+
+    let shared_q8_gate_up = if collect_diagnostics || ffn_gate_up_decode_consumer.is_some() {
         None
     } else {
         match (
@@ -6087,65 +6166,66 @@ fn gated_ffn_activation_with_plan(
         }
     };
 
-    let (gate_elapsed, up_elapsed) =
-        if let Some((gate_transposed, up_transposed)) = shared_q8_gate_up {
-            let started = Instant::now();
-            let quantized_input = quantize_q8_0_row(input_row);
-            if let Some(total_elapsed) = try_gated_ffn_gate_up_hybrid_q8_0(
+    let (gate_elapsed, up_elapsed) = if let Some(elapsed) = ffn_gate_up_decode_consumer {
+        elapsed
+    } else if let Some((gate_transposed, up_transposed)) = shared_q8_gate_up {
+        let started = Instant::now();
+        let quantized_input = quantize_q8_0_row(input_row);
+        if let Some(total_elapsed) = try_gated_ffn_gate_up_hybrid_q8_0(
+            &quantized_input.blocks,
+            gate_transposed,
+            up_transposed,
+            &mut gate,
+            &mut up,
+            &runtime_plan.q8,
+        ) {
+            // Gate/up are submitted as one hybrid CPU+Metal batch, so split the measured
+            // elapsed time across the two existing timing fields while preserving the total.
+            let gate_elapsed = total_elapsed / 2;
+            (gate_elapsed, total_elapsed - gate_elapsed)
+        } else if let (Some(gate_blocks), Some(up_blocks)) =
+            (gate_transposed.q8_0_blocks, up_transposed.q8_0_blocks)
+        {
+            accumulate_two_q8_0_block_dot_quantized_cpu(
+                &quantized_input.blocks,
+                gate_blocks,
+                &mut gate,
+                up_blocks,
+                &mut up,
+            );
+            let total_elapsed = started.elapsed().as_micros();
+            let gate_elapsed = total_elapsed / 2;
+            (gate_elapsed, total_elapsed - gate_elapsed)
+        } else {
+            accumulate_transposed_linear_row_q8_0_block_dot_quantized(
                 &quantized_input.blocks,
                 gate_transposed,
+                &mut gate,
+            );
+            accumulate_transposed_linear_row_q8_0_block_dot_quantized(
+                &quantized_input.blocks,
                 up_transposed,
-                &mut gate,
                 &mut up,
-                &runtime_plan.q8,
-            ) {
-                // Gate/up are submitted as one hybrid CPU+Metal batch, so split the measured
-                // elapsed time across the two existing timing fields while preserving the total.
-                let gate_elapsed = total_elapsed / 2;
-                (gate_elapsed, total_elapsed - gate_elapsed)
-            } else if let (Some(gate_blocks), Some(up_blocks)) =
-                (gate_transposed.q8_0_blocks, up_transposed.q8_0_blocks)
-            {
-                accumulate_two_q8_0_block_dot_quantized_cpu(
-                    &quantized_input.blocks,
-                    gate_blocks,
-                    &mut gate,
-                    up_blocks,
-                    &mut up,
-                );
-                let total_elapsed = started.elapsed().as_micros();
-                let gate_elapsed = total_elapsed / 2;
-                (gate_elapsed, total_elapsed - gate_elapsed)
-            } else {
-                accumulate_transposed_linear_row_q8_0_block_dot_quantized(
-                    &quantized_input.blocks,
-                    gate_transposed,
-                    &mut gate,
-                );
-                accumulate_transposed_linear_row_q8_0_block_dot_quantized(
-                    &quantized_input.blocks,
-                    up_transposed,
-                    &mut up,
-                );
-                let total_elapsed = started.elapsed().as_micros();
-                let gate_elapsed = total_elapsed / 2;
-                (gate_elapsed, total_elapsed - gate_elapsed)
-            }
-        } else {
-            let started = Instant::now();
-            accumulate_linear_row(
-                input_row,
-                gate_weight,
-                &mut gate,
-                "ffn gate",
-                collect_diagnostics,
-            )?;
-            let gate_elapsed = started.elapsed().as_micros();
+            );
+            let total_elapsed = started.elapsed().as_micros();
+            let gate_elapsed = total_elapsed / 2;
+            (gate_elapsed, total_elapsed - gate_elapsed)
+        }
+    } else {
+        let started = Instant::now();
+        accumulate_linear_row(
+            input_row,
+            gate_weight,
+            &mut gate,
+            "ffn gate",
+            collect_diagnostics,
+        )?;
+        let gate_elapsed = started.elapsed().as_micros();
 
-            let started = Instant::now();
-            accumulate_linear_row(input_row, up_weight, &mut up, "ffn up", collect_diagnostics)?;
-            (gate_elapsed, started.elapsed().as_micros())
-        };
+        let started = Instant::now();
+        accumulate_linear_row(input_row, up_weight, &mut up, "ffn up", collect_diagnostics)?;
+        (gate_elapsed, started.elapsed().as_micros())
+    };
 
     let gate_projection = collect_diagnostics
         .then(|| CpuTensor::from_f32("ffn_gate_diagnostic", vec![1, gate_width], gate.clone()))
@@ -6280,6 +6360,17 @@ fn gated_ffn_activation_batch(
         )));
     }
 
+    let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    if let Some(activated) = try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+        input,
+        gate_weight,
+        up_weight,
+        &name,
+        &runtime_plan,
+    )? {
+        return Ok(activated);
+    }
+
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     if let Some(activated) =
         try_gated_ffn_activation_batch_packed_prefill_i8mm(input, gate_weight, up_weight, &name)?
@@ -6321,6 +6412,102 @@ fn gated_ffn_activation_batch(
     })
 }
 
+fn try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+    input: &CpuTensor,
+    gate_weight: &CpuTensor,
+    up_weight: &CpuTensor,
+    name: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<GatedFfnActivation>> {
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        let _ = (input, gate_weight, up_weight, name, runtime_plan);
+        Ok(None)
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        let rows = input.dim(0)?;
+        if !runtime_plan.q8.ffn_gate_up_packed_rows4_matmul || input.rank() != 2 || rows <= 1 {
+            return Ok(None);
+        }
+        let input_width = input.dim(1)?;
+        if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+            return Ok(None);
+        }
+
+        let gate_width = linear_output_width(input, gate_weight, "ffn gate")?;
+        let up_width = linear_output_width(input, up_weight, "ffn up")?;
+        if gate_width != up_width {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "gated FFN gate/up width mismatch: gate output {gate_width}, up output {up_width}"
+            )));
+        }
+
+        let Some((gate_packed, packed_gate_width)) =
+            q8_0_runtime_packed_projection(gate_weight, input_width)?
+        else {
+            return Ok(None);
+        };
+        let Some((up_packed, packed_up_width)) =
+            q8_0_runtime_packed_projection(up_weight, input_width)?
+        else {
+            return Ok(None);
+        };
+        if packed_gate_width != gate_width
+            || packed_up_width != up_width
+            || gate_packed.interleave != Q8_0PackedRows4Interleave::I8
+            || up_packed.interleave != Q8_0PackedRows4Interleave::I8
+            || gate_packed.blocks_per_row != up_packed.blocks_per_row
+        {
+            return Ok(None);
+        }
+
+        let projection_started = Instant::now();
+        let (mut gate, up) = with_q8_0_quantized_matmul_input_rows(
+            input,
+            gate_packed.blocks_per_row,
+            |rows, quantized_inputs| {
+                q8_0_packed_rows4_matmul_projection_pair_from_quantized(
+                    rows,
+                    gate_packed,
+                    up_packed,
+                    gate_width,
+                    up_width,
+                    "ffn_gate_x86_q8_gate_up_packed_rows4_matmul",
+                    "ffn_up_x86_q8_gate_up_packed_rows4_matmul",
+                    quantized_inputs,
+                )
+            },
+        )?;
+        let projection_elapsed = projection_started.elapsed().as_micros();
+        let gate_elapsed = projection_elapsed / 2;
+        let up_elapsed = projection_elapsed - gate_elapsed;
+
+        let order = diagnostic_ffn_gate_up_order()?;
+        let activation_started = Instant::now();
+        for (gate_value, up_value) in gate.data.iter_mut().zip(up.data) {
+            *gate_value = match order {
+                FfnGateUpOrder::GateUp => (*gate_value / (1.0 + (-*gate_value).exp())) * up_value,
+                FfnGateUpOrder::UpGate => (up_value / (1.0 + (-up_value).exp())) * *gate_value,
+            };
+        }
+        gate.name = name.to_string();
+
+        Ok(Some(GatedFfnActivation {
+            tensor: gate,
+            gate: gate_elapsed,
+            up: up_elapsed,
+            activation: activation_started.elapsed().as_micros(),
+            gate_stats: None,
+            up_stats: None,
+            gate_diagnostic: None,
+            up_diagnostic: None,
+            activation_diagnostic: None,
+        }))
+    }
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn try_gated_ffn_activation_batch_packed_prefill_i8mm(
     input: &CpuTensor,
@@ -6328,11 +6515,11 @@ fn try_gated_ffn_activation_batch_packed_prefill_i8mm(
     up_weight: &CpuTensor,
     name: &str,
 ) -> Result<Option<GatedFfnActivation>> {
-    if !mac_q8_sched_packed_prefill_enabled() || !mac_q8_prefill_i8mm_enabled() {
+    if !mac_q8_sched_packed_prefill_enabled() {
         return Ok(None);
     }
     let rows = input.dim(0)?;
-    if rows < 4 {
+    if rows < 2 {
         return Ok(None);
     }
     let input_width = input.dim(1)?;
@@ -6364,86 +6551,107 @@ fn try_gated_ffn_activation_batch_packed_prefill_i8mm(
         return Ok(None);
     }
 
-    let mut gate = vec![0.0_f32; rows * gate_width];
-    let mut up = vec![0.0_f32; rows * up_width];
-    let packed_rows = rows / 4 * 4;
     let collect_q8_schedule = q8_schedule_telemetry_enabled();
-    if collect_q8_schedule {
-        add_q8_schedule_counter(&Q8_SCHED_I8MM_FUSED_GATE_UP_CALLS, 1);
-    }
     let projection_started = Instant::now();
-    with_q8_0_file_reader_quantized_inputs(|quantized_inputs| {
-        quantized_inputs.clear();
-        Q8_0_PREFILL_PACKED_INPUTS.with(|cell| {
-            let mut packed_inputs = cell.borrow_mut();
-            packed_inputs.clear();
-            let before_capacity = packed_inputs.capacity();
-            let pack_started = collect_q8_schedule.then(Instant::now);
-            quantize_pack_q8_0_rows4_i8_direct_into(
-                &input.data[..packed_rows * input_width],
-                packed_rows,
-                input_width,
-                blocks_per_row,
-                &mut packed_inputs,
-            );
-            if let Some(pack_started) = pack_started {
-                record_q8_schedule_activation_pack(
-                    &mut packed_inputs,
-                    before_capacity,
-                    packed_rows,
-                    blocks_per_row,
-                    pack_started.elapsed().as_micros(),
-                );
-            }
-            let gemm_started = collect_q8_schedule.then(Instant::now);
-            run_q8_0_packed_rows4_prefill_i8mm_two_kernel(
-                gate_packed,
-                up_packed,
-                &packed_inputs,
-                packed_rows / 4,
-                &mut gate,
-                &mut up,
-                collect_q8_schedule,
-            );
-            if let Some(gemm_started) = gemm_started {
-                add_q8_schedule_counter(
-                    &Q8_SCHED_Q8_GEMM_COMPUTE_US,
-                    gemm_started.elapsed().as_micros() as u64,
-                );
-            }
-            packed_inputs.clear();
-            cap_q8_0_file_reader_scratch(&mut packed_inputs, 0);
-        });
-
-        let tail_rows = rows - packed_rows;
+    let (mut gate, up) = if mac_q8_prefill_i8mm_enabled() && rows >= 4 {
+        let mut gate = vec![0.0_f32; rows * gate_width];
+        let mut up = vec![0.0_f32; rows * up_width];
+        let packed_rows = rows / 4 * 4;
         if collect_q8_schedule {
-            add_q8_schedule_counter(&Q8_SCHED_CONSERVATIVE_TAIL_ROWS, tail_rows as u64);
+            add_q8_schedule_counter(&Q8_SCHED_I8MM_FUSED_GATE_UP_CALLS, 1);
         }
-        if tail_rows > 0 {
-            quantized_inputs.reserve(tail_rows * blocks_per_row);
-            for row in input.data[packed_rows * input_width..].chunks_exact(input_width) {
-                quantize_q8_0_blocks_into(row, quantized_inputs);
+        with_q8_0_file_reader_quantized_inputs(|quantized_inputs| {
+            quantized_inputs.clear();
+            Q8_0_PREFILL_PACKED_INPUTS.with(|cell| {
+                let mut packed_inputs = cell.borrow_mut();
+                packed_inputs.clear();
+                let before_capacity = packed_inputs.capacity();
+                let pack_started = collect_q8_schedule.then(Instant::now);
+                quantize_pack_q8_0_rows4_i8_direct_into(
+                    &input.data[..packed_rows * input_width],
+                    packed_rows,
+                    input_width,
+                    blocks_per_row,
+                    &mut packed_inputs,
+                );
+                if let Some(pack_started) = pack_started {
+                    record_q8_schedule_activation_pack(
+                        &mut packed_inputs,
+                        before_capacity,
+                        packed_rows,
+                        blocks_per_row,
+                        pack_started.elapsed().as_micros(),
+                    );
+                }
+                let gemm_started = collect_q8_schedule.then(Instant::now);
+                run_q8_0_packed_rows4_prefill_i8mm_two_kernel(
+                    gate_packed,
+                    up_packed,
+                    &packed_inputs,
+                    packed_rows / 4,
+                    &mut gate,
+                    &mut up,
+                    collect_q8_schedule,
+                );
+                if let Some(gemm_started) = gemm_started {
+                    add_q8_schedule_counter(
+                        &Q8_SCHED_Q8_GEMM_COMPUTE_US,
+                        gemm_started.elapsed().as_micros() as u64,
+                    );
+                }
+                packed_inputs.clear();
+                cap_q8_0_file_reader_scratch(&mut packed_inputs, 0);
+            });
+
+            let tail_rows = rows - packed_rows;
+            if collect_q8_schedule {
+                add_q8_schedule_counter(&Q8_SCHED_CONSERVATIVE_TAIL_ROWS, tail_rows as u64);
             }
-        }
-        for tail_row in 0..tail_rows {
-            let input_start = tail_row * blocks_per_row;
-            let row_blocks = &quantized_inputs[input_start..input_start + blocks_per_row];
-            let output_start = (packed_rows + tail_row) * gate_width;
-            accumulate_q8_0_packed_rows4_dot_quantized_cpu(
-                row_blocks,
-                gate_packed,
-                Q8_0PackedRows4Interleave::I8,
-                &mut gate[output_start..output_start + gate_width],
-            );
-            accumulate_q8_0_packed_rows4_dot_quantized_cpu(
-                row_blocks,
-                up_packed,
-                Q8_0PackedRows4Interleave::I8,
-                &mut up[output_start..output_start + up_width],
-            );
-        }
-        Ok(())
-    })?;
+            if tail_rows > 0 {
+                quantized_inputs.reserve(tail_rows * blocks_per_row);
+                for row in input.data[packed_rows * input_width..].chunks_exact(input_width) {
+                    quantize_q8_0_blocks_into(row, quantized_inputs);
+                }
+            }
+            for tail_row in 0..tail_rows {
+                let input_start = tail_row * blocks_per_row;
+                let row_blocks = &quantized_inputs[input_start..input_start + blocks_per_row];
+                let output_start = (packed_rows + tail_row) * gate_width;
+                accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                    row_blocks,
+                    gate_packed,
+                    Q8_0PackedRows4Interleave::I8,
+                    &mut gate[output_start..output_start + gate_width],
+                );
+                accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                    row_blocks,
+                    up_packed,
+                    Q8_0PackedRows4Interleave::I8,
+                    &mut up[output_start..output_start + up_width],
+                );
+            }
+            Ok(())
+        })?;
+        (gate, up)
+    } else {
+        let (gate, up) = with_q8_0_quantized_matmul_input_rows(
+            input,
+            blocks_per_row,
+            |rows, quantized_inputs| {
+                q8_0_packed_rows4_matmul_projection_pair_from_quantized(
+                    rows,
+                    gate_packed,
+                    up_packed,
+                    gate_width,
+                    up_width,
+                    "ffn_gate_mac_q8_gate_up_packed_prefill",
+                    "ffn_up_mac_q8_gate_up_packed_prefill",
+                    quantized_inputs,
+                )
+            },
+        )?;
+        (gate.data, up.data)
+    };
     let projection_elapsed = projection_started.elapsed().as_micros();
     let gate_elapsed = projection_elapsed / 2;
     let up_elapsed = projection_elapsed - gate_elapsed;
@@ -7066,24 +7274,11 @@ fn q8_0_env_flag_enabled_default_on_fail_closed(key: &str) -> bool {
     match env::var(key) {
         Ok(value) => {
             let value = value.trim();
-            if value.eq_ignore_ascii_case("1")
+            value.eq_ignore_ascii_case("1")
                 || value.eq_ignore_ascii_case("true")
                 || value.eq_ignore_ascii_case("on")
                 || value.eq_ignore_ascii_case("enabled")
                 || value.eq_ignore_ascii_case("yes")
-            {
-                true
-            } else if value.eq_ignore_ascii_case("0")
-                || value.eq_ignore_ascii_case("false")
-                || value.eq_ignore_ascii_case("off")
-                || value.eq_ignore_ascii_case("disabled")
-                || value.eq_ignore_ascii_case("dequantized")
-                || value.eq_ignore_ascii_case("f32")
-            {
-                false
-            } else {
-                false
-            }
         }
         Err(_) => true,
     }
@@ -7132,6 +7327,9 @@ fn lazy_q8_0_linear_enabled() -> bool {
 }
 
 const Q8_0_BLOCK_VALUES: usize = 32;
+const X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS: usize = 1024;
+const X86_Q8_PACKED_ROWS4_MATMUL_PARALLEL_MIN_GROUPS: usize = 64;
+const X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK: usize = 8;
 
 #[derive(Debug, Clone)]
 struct QuantizedQ8_0Row {
@@ -7156,17 +7354,6 @@ impl BorrowedQuantizedQ8_0Rows<'_> {
     }
 }
 
-fn x86_q8_ffn_down_decode_owner_enabled() -> bool {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER")
-    }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    {
-        false
-    }
-}
-
 fn x86_q8_output_decode_owner_enabled() -> bool {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -7176,6 +7363,35 @@ fn x86_q8_output_decode_owner_enabled() -> bool {
     {
         false
     }
+}
+
+fn try_x86_q8_output_packed_rows4_matmul_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<CpuTensor>> {
+    if !runtime_plan.q8.output_packed_rows4_matmul
+        || input.rank() != 2
+        || input.dim(0)? <= 1
+        || weight.name != "output.weight"
+        || weight.source_type != Some(GgufTensorType::Q8_0)
+    {
+        return Ok(None);
+    }
+
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+    let Some((packed, output_width)) = q8_0_runtime_packed_projection(weight, input_width)? else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 {
+        return Ok(None);
+    }
+
+    q8_0_packed_rows4_matmul_projection(input, packed, output_width, name).map(Some)
 }
 
 fn try_x86_q8_output_decode_owner_path(
@@ -7205,19 +7421,962 @@ fn try_x86_q8_output_decode_owner_path(
         return Ok(None);
     }
     let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
-    let mut output = vec![0.0_f32; borrowed.rows];
-    let blocks_per_row = packed.blocks_per_row;
-    for (group_idx, output_chunk) in output.chunks_exact_mut(4).enumerate() {
-        let group_blocks =
-            &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
-        let sums = q8_0_packed_rows4_dot(group_blocks, &quantized_input.blocks, interleave);
-        output_chunk.copy_from_slice(&sums);
+    q8_0_packed_rows4_single_input_projection(packed, &quantized_input.blocks, borrowed.rows, name)
+        .map(Some)
+}
+
+fn try_x86_q8_attention_qkv_decode_consumer_path(
+    input: &CpuTensor,
+    q_weight: &CpuTensor,
+    k_weight: &CpuTensor,
+    v_weight: &CpuTensor,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<(CpuTensor, CpuTensor, CpuTensor)>> {
+    if !runtime_plan.q8.attention_qkv_decode_consumer || input.rank() != 2 || input.dim(0)? != 1 {
+        return Ok(None);
     }
-    Ok(Some(CpuTensor::from_f32(
-        name,
-        vec![1, borrowed.rows],
-        output,
-    )?))
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+
+    let Some((q_packed, q_width)) = q8_0_runtime_packed_projection(q_weight, input_width)? else {
+        return Ok(None);
+    };
+    let Some((k_packed, k_width)) = q8_0_runtime_packed_projection(k_weight, input_width)? else {
+        return Ok(None);
+    };
+    let Some((v_packed, v_width)) = q8_0_runtime_packed_projection(v_weight, input_width)? else {
+        return Ok(None);
+    };
+
+    let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
+    let (q, k, v) = q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
+        q_packed,
+        k_packed,
+        v_packed,
+        q_width,
+        k_width,
+        v_width,
+        &quantized_input.blocks,
+    )?;
+    Ok(Some((q, k, v)))
+}
+
+fn try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+    input: &CpuTensor,
+    q_weight: &CpuTensor,
+    k_weight: &CpuTensor,
+    v_weight: &CpuTensor,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<(CpuTensor, CpuTensor, CpuTensor)>> {
+    if !runtime_plan.q8.attention_qkv_packed_rows4_matmul || input.rank() != 2 || input.dim(0)? <= 1
+    {
+        return Ok(None);
+    }
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+
+    let Some((q_packed, q_width)) = q8_0_runtime_packed_projection(q_weight, input_width)? else {
+        return Ok(None);
+    };
+    let Some((k_packed, k_width)) = q8_0_runtime_packed_projection(k_weight, input_width)? else {
+        return Ok(None);
+    };
+    let Some((v_packed, v_width)) = q8_0_runtime_packed_projection(v_weight, input_width)? else {
+        return Ok(None);
+    };
+    if q_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || k_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || v_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || q_packed.blocks_per_row != k_packed.blocks_per_row
+        || q_packed.blocks_per_row != v_packed.blocks_per_row
+    {
+        return Ok(None);
+    }
+
+    let (q, k, v) = with_q8_0_quantized_matmul_input_rows(
+        input,
+        q_packed.blocks_per_row,
+        |rows, quantized_inputs| {
+            q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
+                rows,
+                q_packed,
+                k_packed,
+                v_packed,
+                q_width,
+                k_width,
+                v_width,
+                quantized_inputs,
+            )
+        },
+    )?;
+    Ok(Some((q, k, v)))
+}
+
+fn try_x86_q8_ffn_gate_up_decode_consumer_path(
+    input: &CpuTensor,
+    gate_weight: &CpuTensor,
+    up_weight: &CpuTensor,
+    gate: &mut [f32],
+    up: &mut [f32],
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<(u128, u128)>> {
+    if !runtime_plan.q8.ffn_gate_up_decode_consumer
+        || input.rank() != 2
+        || input.dim(0)? != 1
+        || gate.is_empty()
+        || gate.len() != up.len()
+    {
+        return Ok(None);
+    }
+
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+
+    let Some((gate_packed, gate_width)) = q8_0_runtime_packed_projection(gate_weight, input_width)?
+    else {
+        return Ok(None);
+    };
+    let Some((up_packed, up_width)) = q8_0_runtime_packed_projection(up_weight, input_width)?
+    else {
+        return Ok(None);
+    };
+    if gate_width != gate.len()
+        || up_width != up.len()
+        || gate_width != up_width
+        || gate_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || up_packed.interleave != Q8_0PackedRows4Interleave::I8
+    {
+        return Ok(None);
+    }
+
+    let started = Instant::now();
+    let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
+    q8_0_packed_rows4_single_input_projection_pair_into(
+        gate_packed,
+        up_packed,
+        &quantized_input.blocks,
+        gate,
+        up,
+    )?;
+    let total_elapsed = started.elapsed().as_micros();
+    let gate_elapsed = total_elapsed / 2;
+    Ok(Some((gate_elapsed, total_elapsed - gate_elapsed)))
+}
+
+fn q8_0_runtime_packed_projection(
+    weight: &CpuTensor,
+    input_width: usize,
+) -> Result<Option<(&Q8_0PackedRows4, usize)>> {
+    if weight.source_type != Some(GgufTensorType::Q8_0) {
+        return Ok(None);
+    }
+    let weight_rows = weight.dim(0)?;
+    let weight_cols = weight.dim(1)?;
+    let output_width = if weight_rows == input_width {
+        weight_cols
+    } else if weight_cols == input_width {
+        weight_rows
+    } else {
+        return Ok(None);
+    };
+    let Some(Q8_0RuntimeStorage::PackedRows4(packed)) = weight.q8_0_runtime_storage.as_ref() else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8
+        || packed.rows != output_width
+        || packed.blocks_per_row != input_width / Q8_0_BLOCK_VALUES
+        || !output_width.is_multiple_of(4)
+    {
+        return Ok(None);
+    }
+    Ok(Some((packed, output_width)))
+}
+
+fn q8_0_packed_rows4_single_input_projection(
+    packed: &Q8_0PackedRows4,
+    quantized_input: &[Q8_0Block],
+    output_width: usize,
+    name: &str,
+) -> Result<CpuTensor> {
+    let mut output = vec![0.0_f32; output_width];
+    q8_0_packed_rows4_single_input_projection_into(packed, quantized_input, &mut output)?;
+    CpuTensor::from_f32(name, vec![1, output_width], output)
+}
+
+fn should_parallelize_x86_q8_packed_rows4_decode_output(output_width: usize) -> bool {
+    output_width >= X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS
+        && rayon::current_num_threads() > 1
+}
+
+fn q8_0_packed_rows4_single_input_projection_into(
+    packed: &Q8_0PackedRows4,
+    quantized_input: &[Q8_0Block],
+    output: &mut [f32],
+) -> Result<()> {
+    let output_width = output.len();
+    let output_groups = q8_0_packed_rows4_output_groups(output_width, "decode projection")?;
+    let blocks_per_row = packed.blocks_per_row;
+    if packed.interleave != Q8_0PackedRows4Interleave::I8
+        || packed.rows != output_width
+        || quantized_input.len() != blocks_per_row
+    {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 decode projection requires matching I8 packed output/input, got interleave {:?}, packed rows {}, output {}, packed blocks_per_row {}, input blocks {}",
+            packed.interleave,
+            packed.rows,
+            output_width,
+            blocks_per_row,
+            quantized_input.len()
+        )));
+    }
+
+    let compute_group = |group_idx: usize, output_chunk: &mut [f32]| {
+        let group_start = group_idx * blocks_per_row;
+        let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
+        let sums =
+            q8_0_packed_rows4_dot(group_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+        output_chunk.copy_from_slice(&sums);
+    };
+
+    if output_groups > 1 && should_parallelize_x86_q8_packed_rows4_decode_output(output_width) {
+        output
+            .par_chunks_mut(4)
+            .enumerate()
+            .for_each(|(group_idx, output_chunk)| compute_group(group_idx, output_chunk));
+    } else {
+        for (group_idx, output_chunk) in output.chunks_exact_mut(4).enumerate() {
+            compute_group(group_idx, output_chunk);
+        }
+    }
+    Ok(())
+}
+
+fn q8_0_packed_rows4_single_input_projection_pair_into(
+    left_packed: &Q8_0PackedRows4,
+    right_packed: &Q8_0PackedRows4,
+    quantized_input: &[Q8_0Block],
+    left_output: &mut [f32],
+    right_output: &mut [f32],
+) -> Result<()> {
+    let output_width = left_output.len();
+    if right_output.len() != output_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 pair decode output width mismatch: left={}, right={}",
+            left_output.len(),
+            right_output.len()
+        )));
+    }
+    let output_groups = q8_0_packed_rows4_output_groups(output_width, "pair decode projection")?;
+    let blocks_per_row = left_packed.blocks_per_row;
+    if right_packed.blocks_per_row != blocks_per_row || quantized_input.len() != blocks_per_row {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 pair decode blocks_per_row mismatch: left={}, right={}, input={}",
+            left_packed.blocks_per_row,
+            right_packed.blocks_per_row,
+            quantized_input.len()
+        )));
+    }
+    if left_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || right_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || left_packed.rows != output_width
+        || right_packed.rows != output_width
+    {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 pair decode requires matching I8 packed outputs, got left {:?}/{} and right {:?}/{} for output {output_width}",
+            left_packed.interleave, left_packed.rows, right_packed.interleave, right_packed.rows
+        )));
+    }
+
+    let compute_group = |group_idx: usize, left_chunk: &mut [f32], right_chunk: &mut [f32]| {
+        let group_start = group_idx * blocks_per_row;
+        let left_blocks = &left_packed.blocks[group_start..group_start + blocks_per_row];
+        let right_blocks = &right_packed.blocks[group_start..group_start + blocks_per_row];
+        let left_sums =
+            q8_0_packed_rows4_dot(left_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+        let right_sums =
+            q8_0_packed_rows4_dot(right_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+        left_chunk.copy_from_slice(&left_sums);
+        right_chunk.copy_from_slice(&right_sums);
+    };
+
+    if output_groups > 1 && should_parallelize_x86_q8_packed_rows4_decode_output(output_width) {
+        left_output
+            .par_chunks_mut(4)
+            .zip(right_output.par_chunks_mut(4))
+            .enumerate()
+            .for_each(|(group_idx, (left_chunk, right_chunk))| {
+                compute_group(group_idx, left_chunk, right_chunk)
+            });
+    } else {
+        for (group_idx, (left_chunk, right_chunk)) in left_output
+            .chunks_exact_mut(4)
+            .zip(right_output.chunks_exact_mut(4))
+            .enumerate()
+            .take(output_groups)
+        {
+            compute_group(group_idx, left_chunk, right_chunk);
+        }
+    }
+    Ok(())
+}
+
+fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
+    q_packed: &Q8_0PackedRows4,
+    k_packed: &Q8_0PackedRows4,
+    v_packed: &Q8_0PackedRows4,
+    q_width: usize,
+    k_width: usize,
+    v_width: usize,
+    quantized_input: &[Q8_0Block],
+) -> Result<(CpuTensor, CpuTensor, CpuTensor)> {
+    let blocks_per_row = q_packed.blocks_per_row;
+    if k_packed.blocks_per_row != blocks_per_row
+        || v_packed.blocks_per_row != blocks_per_row
+        || quantized_input.len() != blocks_per_row
+    {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 QKV decode blocks_per_row mismatch: q={}, k={}, v={}, input={}",
+            q_packed.blocks_per_row,
+            k_packed.blocks_per_row,
+            v_packed.blocks_per_row,
+            quantized_input.len()
+        )));
+    }
+    if q_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || k_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || v_packed.interleave != Q8_0PackedRows4Interleave::I8
+    {
+        return Err(BackendError::RuntimeShapeMismatch(
+            "Q8_0 packed rows4 QKV decode requires I8 interleave".to_string(),
+        ));
+    }
+    if q_packed.rows != q_width || k_packed.rows != k_width || v_packed.rows != v_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 QKV decode output width mismatch: q packed/requested={}/{}, k packed/requested={}/{}, v packed/requested={}/{}",
+            q_packed.rows, q_width, k_packed.rows, k_width, v_packed.rows, v_width
+        )));
+    }
+
+    let q_groups = q8_0_packed_rows4_output_groups(q_width, "QKV decode q projection")?;
+    let k_groups = q8_0_packed_rows4_output_groups(k_width, "QKV decode k projection")?;
+    let v_groups = q8_0_packed_rows4_output_groups(v_width, "QKV decode v projection")?;
+    let mut q_output = vec![0.0_f32; q_width];
+    let mut k_output = vec![0.0_f32; k_width];
+    let mut v_output = vec![0.0_f32; v_width];
+
+    if q_width == k_width
+        && q_width == v_width
+        && q_groups > 1
+        && should_parallelize_x86_q8_packed_rows4_decode_output(q_width)
+    {
+        q_output
+            .par_chunks_mut(4)
+            .zip(k_output.par_chunks_mut(4))
+            .zip(v_output.par_chunks_mut(4))
+            .enumerate()
+            .for_each(|(group_idx, ((q_chunk, k_chunk), v_chunk))| {
+                let group_start = group_idx * blocks_per_row;
+                q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                    &q_packed.blocks[group_start..group_start + blocks_per_row],
+                    quantized_input,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+                k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                    &k_packed.blocks[group_start..group_start + blocks_per_row],
+                    quantized_input,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+                v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                    &v_packed.blocks[group_start..group_start + blocks_per_row],
+                    quantized_input,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+            });
+    } else if q_width == k_width && q_width == v_width {
+        for (group_idx, ((q_chunk, k_chunk), v_chunk)) in q_output
+            .chunks_exact_mut(4)
+            .zip(k_output.chunks_exact_mut(4))
+            .zip(v_output.chunks_exact_mut(4))
+            .enumerate()
+        {
+            let group_start = group_idx * blocks_per_row;
+            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                &q_packed.blocks[group_start..group_start + blocks_per_row],
+                quantized_input,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                &k_packed.blocks[group_start..group_start + blocks_per_row],
+                quantized_input,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                &v_packed.blocks[group_start..group_start + blocks_per_row],
+                quantized_input,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+        }
+    } else {
+        for (group_idx, q_chunk) in q_output.chunks_exact_mut(4).enumerate().take(q_groups) {
+            let group_start = group_idx * blocks_per_row;
+            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                &q_packed.blocks[group_start..group_start + blocks_per_row],
+                quantized_input,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+        }
+        for (group_idx, k_chunk) in k_output.chunks_exact_mut(4).enumerate().take(k_groups) {
+            let group_start = group_idx * blocks_per_row;
+            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                &k_packed.blocks[group_start..group_start + blocks_per_row],
+                quantized_input,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+        }
+        for (group_idx, v_chunk) in v_output.chunks_exact_mut(4).enumerate().take(v_groups) {
+            let group_start = group_idx * blocks_per_row;
+            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                &v_packed.blocks[group_start..group_start + blocks_per_row],
+                quantized_input,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+        }
+    }
+
+    Ok((
+        CpuTensor::from_f32(
+            "attention_q_x86_q8_qkv_consumer",
+            vec![1, q_width],
+            q_output,
+        )?,
+        CpuTensor::from_f32(
+            "attention_k_x86_q8_qkv_consumer",
+            vec![1, k_width],
+            k_output,
+        )?,
+        CpuTensor::from_f32(
+            "attention_v_x86_q8_qkv_consumer",
+            vec![1, v_width],
+            v_output,
+        )?,
+    ))
+}
+
+fn q8_0_packed_rows4_matmul_projection(
+    input: &CpuTensor,
+    packed: &Q8_0PackedRows4,
+    output_width: usize,
+    name: &str,
+) -> Result<CpuTensor> {
+    with_q8_0_quantized_matmul_input_rows(input, packed.blocks_per_row, |rows, quantized_inputs| {
+        q8_0_packed_rows4_matmul_projection_from_quantized(
+            rows,
+            packed,
+            output_width,
+            name,
+            quantized_inputs,
+        )
+    })
+}
+
+fn q8_0_packed_rows4_output_groups(output_width: usize, context: &str) -> Result<usize> {
+    if !output_width.is_multiple_of(4) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 {context} output width {output_width} is not divisible by 4"
+        )));
+    }
+    Ok(output_width / 4)
+}
+
+fn should_parallelize_q8_packed_rows4_matmul(total_output_groups: usize) -> bool {
+    total_output_groups >= X86_Q8_PACKED_ROWS4_MATMUL_PARALLEL_MIN_GROUPS
+        && rayon::current_num_threads() > 1
+}
+
+fn q8_packed_rows4_matmul_parallel_chunk_floats(total_output_groups: usize) -> usize {
+    let groups_per_chunk =
+        total_output_groups.clamp(1, X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK);
+    groups_per_chunk * 4
+}
+
+#[cfg(test)]
+fn q8_0_quantized_matmul_input_rows(
+    input: &CpuTensor,
+    blocks_per_row: usize,
+) -> Result<Vec<Q8_0Block>> {
+    let rows = input.dim(0)?;
+    let mut quantized_inputs = Vec::with_capacity(rows * blocks_per_row);
+    q8_0_fill_quantized_matmul_input_rows(input, blocks_per_row, &mut quantized_inputs)?;
+    Ok(quantized_inputs)
+}
+
+fn with_q8_0_quantized_matmul_input_rows<T>(
+    input: &CpuTensor,
+    blocks_per_row: usize,
+    f: impl FnOnce(usize, &[Q8_0Block]) -> Result<T>,
+) -> Result<T> {
+    with_q8_0_file_reader_quantized_inputs(|quantized_inputs| {
+        let rows = q8_0_fill_quantized_matmul_input_rows(input, blocks_per_row, quantized_inputs)?;
+        f(rows, quantized_inputs)
+    })
+}
+
+fn q8_0_fill_quantized_matmul_input_rows(
+    input: &CpuTensor,
+    blocks_per_row: usize,
+    quantized_inputs: &mut Vec<Q8_0Block>,
+) -> Result<usize> {
+    let rows = input.dim(0)?;
+    let input_width = input.dim(1)?;
+    let expected_blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    if blocks_per_row != expected_blocks_per_row {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 matmul expected {expected_blocks_per_row} input blocks per row, got {blocks_per_row}"
+        )));
+    }
+
+    quantized_inputs.clear();
+    quantized_inputs.reserve(rows * blocks_per_row);
+    for row in input.data.chunks_exact(input_width) {
+        quantize_q8_0_blocks_into(row, quantized_inputs);
+    }
+    Ok(rows)
+}
+
+fn q8_0_packed_rows4_matmul_projection_from_quantized(
+    rows: usize,
+    packed: &Q8_0PackedRows4,
+    output_width: usize,
+    name: &str,
+    quantized_inputs: &[Q8_0Block],
+) -> Result<CpuTensor> {
+    let blocks_per_row = packed.blocks_per_row;
+    let expected_quantized_blocks = rows.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "Q8_0 packed rows4 matmul input block count overflow".to_string(),
+        )
+    })?;
+    if quantized_inputs.len() != expected_quantized_blocks {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 matmul expected {expected_quantized_blocks} quantized input blocks, got {}",
+            quantized_inputs.len()
+        )));
+    }
+
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 || packed.rows != output_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 matmul requires matching I8 packed output, got interleave {:?}, packed rows {}, output {}",
+            packed.interleave, packed.rows, output_width
+        )));
+    }
+
+    let output_groups_per_row = q8_0_packed_rows4_output_groups(output_width, "matmul projection")?;
+    let total_output_groups = rows * output_groups_per_row;
+    let mut output = vec![0.0_f32; rows * output_width];
+    if should_parallelize_q8_packed_rows4_matmul(total_output_groups) {
+        let chunk_floats = q8_packed_rows4_matmul_parallel_chunk_floats(total_output_groups);
+        output
+            .par_chunks_mut(chunk_floats)
+            .enumerate()
+            .for_each(|(chunk_idx, output_chunk)| {
+                let first_group_idx = chunk_idx * (chunk_floats / 4);
+                for (local_group_idx, output_group) in output_chunk.chunks_exact_mut(4).enumerate()
+                {
+                    let flat_group_idx = first_group_idx + local_group_idx;
+                    let row_idx = flat_group_idx / output_groups_per_row;
+                    let group_idx = flat_group_idx % output_groups_per_row;
+                    let input_start = row_idx * blocks_per_row;
+                    let group_start = group_idx * blocks_per_row;
+                    let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
+                    let sums = q8_0_packed_rows4_dot(
+                        group_blocks,
+                        &quantized_inputs[input_start..input_start + blocks_per_row],
+                        Q8_0PackedRows4Interleave::I8,
+                    );
+                    output_group.copy_from_slice(&sums);
+                }
+            });
+    } else {
+        for row_idx in 0..rows {
+            let input_start = row_idx * blocks_per_row;
+            let quantized_row = &quantized_inputs[input_start..input_start + blocks_per_row];
+            let output_start = row_idx * output_width;
+            for (group_idx, output_chunk) in output[output_start..output_start + output_width]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
+                let sums = q8_0_packed_rows4_dot(
+                    group_blocks,
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                );
+                output_chunk.copy_from_slice(&sums);
+            }
+        }
+    }
+
+    CpuTensor::from_f32(name, vec![rows, output_width], output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
+    rows: usize,
+    left_packed: &Q8_0PackedRows4,
+    right_packed: &Q8_0PackedRows4,
+    left_output_width: usize,
+    right_output_width: usize,
+    left_name: &str,
+    right_name: &str,
+    quantized_inputs: &[Q8_0Block],
+) -> Result<(CpuTensor, CpuTensor)> {
+    let blocks_per_row = left_packed.blocks_per_row;
+    if right_packed.blocks_per_row != blocks_per_row {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 pair matmul blocks_per_row mismatch: left={}, right={}",
+            left_packed.blocks_per_row, right_packed.blocks_per_row
+        )));
+    }
+    if left_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || right_packed.interleave != Q8_0PackedRows4Interleave::I8
+    {
+        return Err(BackendError::RuntimeShapeMismatch(
+            "Q8_0 packed rows4 pair matmul requires I8 interleave".to_string(),
+        ));
+    }
+    let expected_quantized_blocks = rows.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "Q8_0 packed rows4 pair matmul input block count overflow".to_string(),
+        )
+    })?;
+    if quantized_inputs.len() != expected_quantized_blocks {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 pair matmul expected {expected_quantized_blocks} quantized input blocks, got {}",
+            quantized_inputs.len()
+        )));
+    }
+    if left_packed.rows != left_output_width || right_packed.rows != right_output_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 pair matmul output width mismatch: left packed rows={}, left requested={}, right packed rows={}, right requested={}",
+            left_packed.rows, left_output_width, right_packed.rows, right_output_width
+        )));
+    }
+
+    let left_output_groups_per_row =
+        q8_0_packed_rows4_output_groups(left_output_width, "pair matmul left projection")?;
+    let right_output_groups_per_row =
+        q8_0_packed_rows4_output_groups(right_output_width, "pair matmul right projection")?;
+    let mut left_output = vec![0.0_f32; rows * left_output_width];
+    let mut right_output = vec![0.0_f32; rows * right_output_width];
+
+    let total_left_output_groups = rows * left_output_groups_per_row;
+    if left_output_width == right_output_width
+        && should_parallelize_q8_packed_rows4_matmul(total_left_output_groups)
+    {
+        let chunk_floats = q8_packed_rows4_matmul_parallel_chunk_floats(total_left_output_groups);
+        left_output
+            .par_chunks_mut(chunk_floats)
+            .zip(right_output.par_chunks_mut(chunk_floats))
+            .enumerate()
+            .for_each(|(chunk_idx, (left_chunk, right_chunk))| {
+                let first_group_idx = chunk_idx * (chunk_floats / 4);
+                for (local_group_idx, (left_group, right_group)) in left_chunk
+                    .chunks_exact_mut(4)
+                    .zip(right_chunk.chunks_exact_mut(4))
+                    .enumerate()
+                {
+                    let flat_group_idx = first_group_idx + local_group_idx;
+                    let row_idx = flat_group_idx / left_output_groups_per_row;
+                    let group_idx = flat_group_idx % left_output_groups_per_row;
+                    let input_start = row_idx * blocks_per_row;
+                    let group_start = group_idx * blocks_per_row;
+                    let quantized_row =
+                        &quantized_inputs[input_start..input_start + blocks_per_row];
+                    let left_blocks =
+                        &left_packed.blocks[group_start..group_start + blocks_per_row];
+                    let right_blocks =
+                        &right_packed.blocks[group_start..group_start + blocks_per_row];
+                    let left_sums = q8_0_packed_rows4_dot(
+                        left_blocks,
+                        quantized_row,
+                        Q8_0PackedRows4Interleave::I8,
+                    );
+                    let right_sums = q8_0_packed_rows4_dot(
+                        right_blocks,
+                        quantized_row,
+                        Q8_0PackedRows4Interleave::I8,
+                    );
+                    left_group.copy_from_slice(&left_sums);
+                    right_group.copy_from_slice(&right_sums);
+                }
+            });
+    } else {
+        for row_idx in 0..rows {
+            let input_start = row_idx * blocks_per_row;
+            let quantized_row = &quantized_inputs[input_start..input_start + blocks_per_row];
+            let left_output_start = row_idx * left_output_width;
+            for (group_idx, output_chunk) in left_output
+                [left_output_start..left_output_start + left_output_width]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                let group_blocks = &left_packed.blocks[group_start..group_start + blocks_per_row];
+                let sums = q8_0_packed_rows4_dot(
+                    group_blocks,
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                );
+                output_chunk.copy_from_slice(&sums);
+            }
+            let right_output_start = row_idx * right_output_width;
+            for (group_idx, output_chunk) in right_output
+                [right_output_start..right_output_start + right_output_groups_per_row * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                let group_blocks = &right_packed.blocks[group_start..group_start + blocks_per_row];
+                let sums = q8_0_packed_rows4_dot(
+                    group_blocks,
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                );
+                output_chunk.copy_from_slice(&sums);
+            }
+        }
+    }
+
+    Ok((
+        CpuTensor::from_f32(left_name, vec![rows, left_output_width], left_output)?,
+        CpuTensor::from_f32(right_name, vec![rows, right_output_width], right_output)?,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
+    rows: usize,
+    q_packed: &Q8_0PackedRows4,
+    k_packed: &Q8_0PackedRows4,
+    v_packed: &Q8_0PackedRows4,
+    q_width: usize,
+    k_width: usize,
+    v_width: usize,
+    quantized_inputs: &[Q8_0Block],
+) -> Result<(CpuTensor, CpuTensor, CpuTensor)> {
+    let blocks_per_row = q_packed.blocks_per_row;
+    if k_packed.blocks_per_row != blocks_per_row || v_packed.blocks_per_row != blocks_per_row {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 QKV matmul blocks_per_row mismatch: q={}, k={}, v={}",
+            q_packed.blocks_per_row, k_packed.blocks_per_row, v_packed.blocks_per_row
+        )));
+    }
+    if q_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || k_packed.interleave != Q8_0PackedRows4Interleave::I8
+        || v_packed.interleave != Q8_0PackedRows4Interleave::I8
+    {
+        return Err(BackendError::RuntimeShapeMismatch(
+            "Q8_0 packed rows4 QKV matmul requires I8 interleave".to_string(),
+        ));
+    }
+    let expected_quantized_blocks = rows.checked_mul(blocks_per_row).ok_or_else(|| {
+        BackendError::RuntimeShapeMismatch(
+            "Q8_0 packed rows4 QKV matmul input block count overflow".to_string(),
+        )
+    })?;
+    if quantized_inputs.len() != expected_quantized_blocks {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 QKV matmul expected {expected_quantized_blocks} quantized input blocks, got {}",
+            quantized_inputs.len()
+        )));
+    }
+    if q_packed.rows != q_width || k_packed.rows != k_width || v_packed.rows != v_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 QKV matmul output width mismatch: q packed/requested={}/{}, k packed/requested={}/{}, v packed/requested={}/{}",
+            q_packed.rows, q_width, k_packed.rows, k_width, v_packed.rows, v_width
+        )));
+    }
+
+    let q_groups_per_row = q8_0_packed_rows4_output_groups(q_width, "QKV q projection")?;
+    let k_groups_per_row = q8_0_packed_rows4_output_groups(k_width, "QKV k projection")?;
+    let v_groups_per_row = q8_0_packed_rows4_output_groups(v_width, "QKV v projection")?;
+    let mut q_output = vec![0.0_f32; rows * q_width];
+    let mut k_output = vec![0.0_f32; rows * k_width];
+    let mut v_output = vec![0.0_f32; rows * v_width];
+
+    let total_q_output_groups = rows * q_groups_per_row;
+    if q_width == k_width
+        && q_width == v_width
+        && should_parallelize_q8_packed_rows4_matmul(total_q_output_groups)
+    {
+        let chunk_floats = q8_packed_rows4_matmul_parallel_chunk_floats(total_q_output_groups);
+        q_output
+            .par_chunks_mut(chunk_floats)
+            .zip(k_output.par_chunks_mut(chunk_floats))
+            .zip(v_output.par_chunks_mut(chunk_floats))
+            .enumerate()
+            .for_each(|(chunk_idx, ((q_chunk, k_chunk), v_chunk))| {
+                let first_group_idx = chunk_idx * (chunk_floats / 4);
+                for (local_group_idx, ((q_group, k_group), v_group)) in q_chunk
+                    .chunks_exact_mut(4)
+                    .zip(k_chunk.chunks_exact_mut(4))
+                    .zip(v_chunk.chunks_exact_mut(4))
+                    .enumerate()
+                {
+                    let flat_group_idx = first_group_idx + local_group_idx;
+                    let row_idx = flat_group_idx / q_groups_per_row;
+                    let group_idx = flat_group_idx % q_groups_per_row;
+                    let input_start = row_idx * blocks_per_row;
+                    let group_start = group_idx * blocks_per_row;
+                    let quantized_row =
+                        &quantized_inputs[input_start..input_start + blocks_per_row];
+                    q_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                        &q_packed.blocks[group_start..group_start + blocks_per_row],
+                        quantized_row,
+                        Q8_0PackedRows4Interleave::I8,
+                    ));
+                    k_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                        &k_packed.blocks[group_start..group_start + blocks_per_row],
+                        quantized_row,
+                        Q8_0PackedRows4Interleave::I8,
+                    ));
+                    v_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                        &v_packed.blocks[group_start..group_start + blocks_per_row],
+                        quantized_row,
+                        Q8_0PackedRows4Interleave::I8,
+                    ));
+                }
+            });
+    } else {
+        for row_idx in 0..rows {
+            let input_start = row_idx * blocks_per_row;
+            let quantized_row = &quantized_inputs[input_start..input_start + blocks_per_row];
+            let q_output_start = row_idx * q_width;
+            for (group_idx, output_chunk) in q_output
+                [q_output_start..q_output_start + q_groups_per_row * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                    &q_packed.blocks[group_start..group_start + blocks_per_row],
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+            }
+            let k_output_start = row_idx * k_width;
+            for (group_idx, output_chunk) in k_output
+                [k_output_start..k_output_start + k_groups_per_row * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                    &k_packed.blocks[group_start..group_start + blocks_per_row],
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+            }
+            let v_output_start = row_idx * v_width;
+            for (group_idx, output_chunk) in v_output
+                [v_output_start..v_output_start + v_groups_per_row * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                    &v_packed.blocks[group_start..group_start + blocks_per_row],
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+            }
+        }
+    }
+
+    Ok((
+        CpuTensor::from_f32(
+            "attention_q_x86_q8_qkv_packed_rows4_matmul",
+            vec![rows, q_width],
+            q_output,
+        )?,
+        CpuTensor::from_f32(
+            "attention_k_x86_q8_qkv_packed_rows4_matmul",
+            vec![rows, k_width],
+            k_output,
+        )?,
+        CpuTensor::from_f32(
+            "attention_v_x86_q8_qkv_packed_rows4_matmul",
+            vec![rows, v_width],
+            v_output,
+        )?,
+    ))
+}
+
+fn try_x86_q8_attention_output_decode_consumer_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+    rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<CpuTensor>> {
+    if !runtime_plan.q8.attention_output_decode_consumer
+        || rectangular_role != "linear"
+        || input.rank() != 2
+        || input.dim(0)? != 1
+        || !weight.name.ends_with(".attn_output.weight")
+    {
+        return Ok(None);
+    }
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+    let Some((packed, output_width)) = q8_0_runtime_packed_projection(weight, input_width)? else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 {
+        return Ok(None);
+    }
+
+    let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
+    q8_0_packed_rows4_single_input_projection(packed, &quantized_input.blocks, output_width, name)
+        .map(Some)
+}
+
+fn try_x86_q8_attention_output_packed_rows4_matmul_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+    rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<CpuTensor>> {
+    if !runtime_plan.q8.attention_output_packed_rows4_matmul
+        || rectangular_role != "linear"
+        || input.rank() != 2
+        || input.dim(0)? <= 1
+        || !weight.name.ends_with(".attn_output.weight")
+    {
+        return Ok(None);
+    }
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+    let Some((packed, output_width)) = q8_0_runtime_packed_projection(weight, input_width)? else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 {
+        return Ok(None);
+    }
+
+    q8_0_packed_rows4_matmul_projection(input, packed, output_width, name).map(Some)
 }
 
 fn try_x86_q8_attention_projection_decode_consumer_path(
@@ -7250,9 +8409,7 @@ fn try_x86_q8_attention_projection_decode_consumer_path(
     }
     let weight_rows = weight.dim(0)?;
     let weight_cols = weight.dim(1)?;
-    let output_width = if weight_rows == input_width && weight_cols == input_width {
-        weight_cols
-    } else if weight_rows == input_width {
+    let output_width = if weight_rows == input_width {
         weight_cols
     } else if weight_cols == input_width {
         weight_rows
@@ -7271,146 +8428,103 @@ fn try_x86_q8_attention_projection_decode_consumer_path(
     }
 
     let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
-    let mut output = vec![0.0_f32; output_width];
-    let blocks_per_row = packed.blocks_per_row;
-    for (group_idx, output_chunk) in output.chunks_exact_mut(4).enumerate() {
-        let group_blocks =
-            &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
-        let sums = q8_0_packed_rows4_dot(
-            group_blocks,
-            &quantized_input.blocks,
-            Q8_0PackedRows4Interleave::I8,
-        );
-        output_chunk.copy_from_slice(&sums);
-    }
-    Ok(Some(CpuTensor::from_f32(
-        name,
-        vec![1, output_width],
-        output,
-    )?))
+    q8_0_packed_rows4_single_input_projection(packed, &quantized_input.blocks, output_width, name)
+        .map(Some)
 }
 
-fn try_x86_q8_ffn_down_decode_owner_path(
+fn try_x86_q8_ffn_down_packed_rows4_matmul_path(
     input: &CpuTensor,
     weight: &CpuTensor,
     name: &str,
     rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
 ) -> Result<Option<CpuTensor>> {
-    if !x86_q8_ffn_down_decode_owner_enabled()
+    if !runtime_plan.q8.ffn_down_packed_rows4_matmul
         || rectangular_role != "ffn_down"
         || input.rank() != 2
-        || input.dim(0)? != 1
+        || weight.rank() != 2
         || weight.source_type != Some(GgufTensorType::Q8_0)
     {
         return Ok(None);
     }
+
     let input_width = input.dim(1)?;
-    let output_width = linear_output_width(input, weight, rectangular_role)?;
-    let borrowed = if weight.dim(1)? == input_width {
-        BorrowedLinearWeight::from_tensor(weight)?
-    } else if weight.dim(0)? == input_width {
-        BorrowedLinearWeight::from_tensor(weight)?.with_swapped_matrix_shape()
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+
+    let weight_rows = weight.dim(0)?;
+    let weight_cols = weight.dim(1)?;
+    let output_width = if weight_rows == input_width {
+        weight_cols
+    } else if weight_cols == input_width {
+        weight_rows
     } else {
         return Ok(None);
     };
-    let Some((packed, interleave)) = q8_0_selected_borrowed_packed_rows4(borrowed) else {
+
+    let Some(Q8_0RuntimeStorage::PackedRows4(packed)) = weight.q8_0_runtime_storage.as_ref() else {
         return Ok(None);
     };
-    if interleave != Q8_0PackedRows4Interleave::I8
+    if packed.interleave != Q8_0PackedRows4Interleave::I8
         || packed.rows != output_width
         || packed.blocks_per_row != input_width / Q8_0_BLOCK_VALUES
-        || !input_width.is_multiple_of(Q8_0_BLOCK_VALUES)
         || !output_width.is_multiple_of(4)
     {
         return Ok(None);
     }
-    let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
-    let mut output = vec![0.0_f32; output_width];
-    let blocks_per_row = packed.blocks_per_row;
-    for (group_idx, output_chunk) in output.chunks_exact_mut(4).enumerate() {
-        let group_blocks =
-            &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
-        let sums = q8_0_packed_rows4_dot(group_blocks, &quantized_input.blocks, interleave);
-        output_chunk.copy_from_slice(&sums);
-    }
-    Ok(Some(CpuTensor::from_f32(
-        name,
-        vec![1, output_width],
-        output,
-    )?))
+
+    q8_0_packed_rows4_matmul_projection(input, packed, output_width, name).map(Some)
 }
 
-fn try_x86_q8_ffn_down_decode_owner_residual_path(
+fn try_x86_q8_ffn_down_decode_consumer_path(
     input: &CpuTensor,
     weight: &CpuTensor,
-    residual: &CpuTensor,
-    name: impl Into<String>,
+    name: &str,
     rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
 ) -> Result<Option<CpuTensor>> {
-    if !x86_q8_ffn_down_decode_owner_enabled()
+    if !runtime_plan.q8.ffn_down_decode_consumer
         || rectangular_role != "ffn_down"
         || input.rank() != 2
         || input.dim(0)? != 1
-        || residual.rank() != 2
-        || residual.dim(0)? != 1
         || weight.source_type != Some(GgufTensorType::Q8_0)
     {
         return Ok(None);
     }
+
     let input_width = input.dim(1)?;
-    let output_width = linear_output_width(input, weight, rectangular_role)?;
-    if residual.dim(1)? != output_width || residual.data.len() != output_width {
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) || weight.rank() != 2 {
         return Ok(None);
     }
-    let borrowed = if weight.dim(1)? == input_width {
-        BorrowedLinearWeight::from_tensor(weight)?
-    } else if weight.dim(0)? == input_width {
-        BorrowedLinearWeight::from_tensor(weight)?.with_swapped_matrix_shape()
+
+    let weight_rows = weight.dim(0)?;
+    let weight_cols = weight.dim(1)?;
+    let output_width = if weight_rows == input_width {
+        weight_cols
+    } else if weight_cols == input_width {
+        weight_rows
     } else {
         return Ok(None);
     };
-    let Some((packed, interleave)) = q8_0_selected_borrowed_packed_rows4(borrowed) else {
+
+    let Some(Q8_0RuntimeStorage::PackedRows4(packed)) = weight.q8_0_runtime_storage.as_ref() else {
         return Ok(None);
     };
-    if interleave != Q8_0PackedRows4Interleave::I8
+    if packed.interleave != Q8_0PackedRows4Interleave::I8
         || packed.rows != output_width
         || packed.blocks_per_row != input_width / Q8_0_BLOCK_VALUES
-        || !input_width.is_multiple_of(Q8_0_BLOCK_VALUES)
         || !output_width.is_multiple_of(4)
     {
         return Ok(None);
     }
+
     let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
-    let mut output = residual.data.clone();
-    let blocks_per_row = packed.blocks_per_row;
-    if should_parallelize_linear_output(output.len()) {
-        output
-            .par_chunks_mut(4)
-            .enumerate()
-            .for_each(|(group_idx, output_chunk)| {
-                let group_blocks =
-                    &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(group_blocks, &quantized_input.blocks, interleave);
-                for lane in 0..4 {
-                    output_chunk[lane] += sums[lane];
-                }
-            });
-    } else {
-        for (group_idx, output_chunk) in output.chunks_mut(4).enumerate() {
-            let group_blocks =
-                &packed.blocks[group_idx * blocks_per_row..(group_idx + 1) * blocks_per_row];
-            let sums = q8_0_packed_rows4_dot(group_blocks, &quantized_input.blocks, interleave);
-            for lane in 0..4 {
-                output_chunk[lane] += sums[lane];
-            }
-        }
-    }
-    Ok(Some(CpuTensor::from_f32(
-        name,
-        vec![1, output_width],
-        output,
-    )?))
+    q8_0_packed_rows4_single_input_projection(packed, &quantized_input.blocks, output_width, name)
+        .map(Some)
 }
+
+#[allow(dead_code)]
 fn matmul_rhs_transposed_q8_0_block_dot(
     input: &CpuTensor,
     weight: &CpuTensor,
@@ -9757,8 +10871,8 @@ fn run_q8_0_packed_rows4_prefill_i8mm_kernel(
                             for output_lane in 0..4 {
                                 sums[input_lane][output_lane] += int_sums[input_lane][output_lane]
                                     as f32
-                                    * input_block.scales[input_lane]
-                                    * weight_block.scales[output_lane];
+                                    * weight_block.scales[output_lane]
+                                    * input_block.scales[input_lane];
                             }
                         }
                     }
@@ -9831,12 +10945,12 @@ fn run_q8_0_packed_rows4_prefill_i8mm_two_kernel(
                         let input_scale = input_block.scales[input_lane];
                         gate_sums[input_lane][output_lane] += gate_int_sums[input_lane][output_lane]
                             as f32
-                            * input_scale
-                            * gate_block.scales[output_lane];
+                            * gate_block.scales[output_lane]
+                            * input_scale;
                         up_sums[input_lane][output_lane] += up_int_sums[input_lane][output_lane]
                             as f32
-                            * input_scale
-                            * up_block.scales[output_lane];
+                            * up_block.scales[output_lane]
+                            * input_scale;
                     }
                 }
             }
@@ -12591,6 +13705,9 @@ mod tests {
             "CAMELID_RUNTIME_PROFILE",
             "CAMELID_SQUARE_LINEAR_LAYOUT",
             "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
+            "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
             std::env::remove_var(key);
@@ -12903,6 +14020,15 @@ mod tests {
                 block_dot: true,
                 file_reader_block_dot: false,
                 attention_projection_decode_consumer: false,
+                attention_output_decode_consumer: false,
+                attention_output_packed_rows4_matmul: false,
+                attention_qkv_decode_consumer: false,
+                attention_qkv_packed_rows4_matmul: false,
+                output_packed_rows4_matmul: false,
+                ffn_gate_up_decode_consumer: false,
+                ffn_gate_up_packed_rows4_matmul: false,
+                ffn_down_decode_consumer: false,
+                ffn_down_packed_rows4_matmul: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -12995,6 +14121,15 @@ mod tests {
         std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
         std::env::set_var("CAMELID_Q8_0_FILE_READER_BLOCK_DOT", "1");
         std::env::set_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER", "on");
+        std::env::set_var("CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER", "on");
+        std::env::set_var("CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL", "on");
+        std::env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", "yes");
+        std::env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL", "on");
+        std::env::set_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", "on");
+        std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", "true");
+        std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL", "on");
+        std::env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER", "on");
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL", "on");
         std::env::set_var("CAMELID_HYBRID_Q8_GPU_ROWS", "7");
         std::env::set_var("CAMELID_HYBRID_Q8_GPU_PERCENT", "25");
 
@@ -13007,10 +14142,64 @@ mod tests {
         assert!(plan.q8.block_dot);
         assert!(plan.q8.file_reader_block_dot);
         assert!(plan.q8.attention_projection_decode_consumer);
+        assert!(plan.q8.attention_output_decode_consumer);
+        assert!(plan.q8.attention_output_packed_rows4_matmul);
+        assert!(plan.q8.attention_qkv_decode_consumer);
+        assert!(plan.q8.attention_qkv_packed_rows4_matmul);
+        assert!(plan.q8.output_packed_rows4_matmul);
+        assert!(plan.q8.ffn_gate_up_decode_consumer);
+        assert!(plan.q8.ffn_gate_up_packed_rows4_matmul);
+        assert!(plan.q8.ffn_down_decode_consumer);
+        assert!(plan.q8.ffn_down_packed_rows4_matmul);
         std::env::remove_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER");
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER");
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL");
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER");
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL");
+        std::env::remove_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL");
+        std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER");
+        std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL");
+        std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER");
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL");
         assert!(
             plan.q8.attention_projection_decode_consumer,
             "resolved plan should cache the attention projection consumer gate"
+        );
+        assert!(
+            plan.q8.attention_output_decode_consumer,
+            "resolved plan should cache the attention output consumer gate"
+        );
+        assert!(
+            plan.q8.attention_output_packed_rows4_matmul,
+            "resolved plan should cache the attention output packed-rows4 matmul gate"
+        );
+        assert!(
+            plan.q8.attention_qkv_decode_consumer,
+            "resolved plan should cache the attention QKV consumer gate"
+        );
+        assert!(
+            plan.q8.attention_qkv_packed_rows4_matmul,
+            "resolved plan should cache the attention QKV packed-rows4 matmul gate"
+        );
+        assert!(
+            plan.q8.output_packed_rows4_matmul,
+            "resolved plan should cache the output packed-rows4 matmul gate"
+        );
+        assert!(
+            plan.q8.ffn_gate_up_decode_consumer,
+            "resolved plan should cache the FFN gate/up consumer gate"
+        );
+        assert!(
+            plan.q8.ffn_gate_up_packed_rows4_matmul,
+            "resolved plan should cache the FFN gate/up packed-rows4 matmul gate"
+        );
+        assert!(
+            plan.q8.ffn_down_decode_consumer,
+            "resolved plan should cache the FFN-down consumer gate"
+        );
+        assert!(
+            plan.q8.ffn_down_packed_rows4_matmul,
+            "resolved plan should cache the packed-rows4 matmul gate"
         );
         assert_eq!(plan.q8.hybrid_gpu_rows, Some(7));
         assert_eq!(plan.q8.hybrid_gpu_percent, 25);
@@ -13035,6 +14224,42 @@ mod tests {
             assert!(
                 !plan.q8.attention_projection_decode_consumer,
                 "{profile} should not enable attention projection consumer by default"
+            );
+            assert!(
+                !plan.q8.attention_output_decode_consumer,
+                "{profile} should not enable attention output consumer by default"
+            );
+            assert!(
+                !plan.q8.attention_output_packed_rows4_matmul,
+                "{profile} should not enable attention output packed-rows4 matmul by default"
+            );
+            assert!(
+                !plan.q8.attention_qkv_decode_consumer,
+                "{profile} should not enable attention QKV consumer by default"
+            );
+            assert!(
+                !plan.q8.attention_qkv_packed_rows4_matmul,
+                "{profile} should not enable attention QKV packed-rows4 matmul by default"
+            );
+            assert!(
+                !plan.q8.output_packed_rows4_matmul,
+                "{profile} should not enable output packed-rows4 matmul by default"
+            );
+            assert!(
+                !plan.q8.ffn_gate_up_decode_consumer,
+                "{profile} should not enable FFN gate/up consumer by default"
+            );
+            assert!(
+                !plan.q8.ffn_gate_up_packed_rows4_matmul,
+                "{profile} should not enable FFN gate/up packed-rows4 matmul by default"
+            );
+            assert!(
+                !plan.q8.ffn_down_decode_consumer,
+                "{profile} should not enable FFN-down consumer by default"
+            );
+            assert!(
+                !plan.q8.ffn_down_packed_rows4_matmul,
+                "{profile} should not enable packed-rows4 matmul by default"
             );
             assert!(
                 !plan.q8.metal,
@@ -13484,7 +14709,7 @@ mod tests {
         let actual =
             linear_for_role_runtime(&input, &packed_weight, "actual", role_name, false).unwrap();
 
-        assert_slice_close(&actual.data, &expected.data);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
         assert!(packed_weight.q8_0_blocks.is_none());
         assert!(packed_weight.q8_0_file_backing.is_none());
 
@@ -13543,12 +14768,56 @@ mod tests {
     }
 
     fn attention_projection_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
+        q8_attention_consumer_plan(enabled, false)
+    }
+
+    fn attention_qkv_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
+        q8_attention_consumer_plan(false, enabled)
+    }
+
+    fn attention_qkv_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = q8_attention_consumer_plan(false, false);
+        plan.q8.attention_qkv_packed_rows4_matmul = enabled;
+        plan
+    }
+
+    fn attention_output_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = q8_attention_consumer_plan(false, false);
+        plan.q8.attention_output_decode_consumer = enabled;
+        plan
+    }
+
+    fn attention_output_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = q8_attention_consumer_plan(false, false);
+        plan.q8.attention_output_packed_rows4_matmul = enabled;
+        plan
+    }
+
+    fn output_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = q8_attention_consumer_plan(false, false);
+        plan.q8.output_packed_rows4_matmul = enabled;
+        plan
+    }
+
+    fn q8_attention_consumer_plan(
+        attention_projection_decode_consumer: bool,
+        attention_qkv_decode_consumer: bool,
+    ) -> ResolvedRuntimePlan {
         ResolvedRuntimePlan {
             linear_accumulation_precision: LinearAccumulationPrecision::F32,
             q8: Q8RuntimeFlags {
                 block_dot: false,
                 file_reader_block_dot: false,
-                attention_projection_decode_consumer: enabled,
+                attention_projection_decode_consumer,
+                attention_output_decode_consumer: false,
+                attention_output_packed_rows4_matmul: false,
+                attention_qkv_decode_consumer,
+                attention_qkv_packed_rows4_matmul: false,
+                output_packed_rows4_matmul: false,
+                ffn_gate_up_decode_consumer: false,
+                ffn_gate_up_packed_rows4_matmul: false,
+                ffn_down_decode_consumer: false,
+                ffn_down_packed_rows4_matmul: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -13641,6 +14910,207 @@ mod tests {
     }
 
     #[test]
+    fn q8_attention_qkv_consumer_quantizes_once_for_runtime_packed_qkv() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, q_weight, q_expected) =
+            runtime_packed_attention_projection_case("attention_q", "blk.0.attn_q.weight");
+        let (_, k_weight, k_expected) =
+            runtime_packed_attention_projection_case("attention_k", "blk.0.attn_k.weight");
+        let (_, v_weight, v_expected) =
+            runtime_packed_attention_projection_case("attention_v", "blk.0.attn_v.weight");
+        let plan = attention_qkv_consumer_plan(true);
+
+        let (q, k, v) = try_x86_q8_attention_qkv_decode_consumer_path(
+            &input, &q_weight, &k_weight, &v_weight, &plan,
+        )
+        .unwrap()
+        .expect("QKV consumer should accept runtime-packed attention Q/K/V weights");
+
+        assert_eq!(q.name, "attention_q_x86_q8_qkv_consumer");
+        assert_eq!(k.name, "attention_k_x86_q8_qkv_consumer");
+        assert_eq!(v.name, "attention_v_x86_q8_qkv_consumer");
+        assert_slice_close_with_tolerance(&q.data, &q_expected.data, 5e-4);
+        assert_slice_close_with_tolerance(&k.data, &k_expected.data, 5e-4);
+        assert_slice_close_with_tolerance(&v.data, &v_expected.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_attention_qkv_consumer_is_default_off_and_requires_all_runtime_packed_inputs() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, q_weight, _) =
+            runtime_packed_attention_projection_case("attention_q", "blk.0.attn_q.weight");
+        let (_, k_weight, _) =
+            runtime_packed_attention_projection_case("attention_k", "blk.0.attn_k.weight");
+        let (_, v_weight, _) =
+            runtime_packed_attention_projection_case("attention_v", "blk.0.attn_v.weight");
+
+        assert!(
+            try_x86_q8_attention_qkv_decode_consumer_path(
+                &input,
+                &q_weight,
+                &k_weight,
+                &v_weight,
+                &attention_qkv_consumer_plan(false),
+            )
+            .unwrap()
+            .is_none(),
+            "default-off plan should not enter the fused QKV consumer"
+        );
+
+        let dense_v = CpuTensor::from_f32(
+            "dense_v",
+            vec![12, Q8_0_BLOCK_VALUES * 2],
+            vec![0.0; 12 * Q8_0_BLOCK_VALUES * 2],
+        )
+        .unwrap();
+        assert!(
+            try_x86_q8_attention_qkv_decode_consumer_path(
+                &input,
+                &q_weight,
+                &k_weight,
+                &dense_v,
+                &attention_qkv_consumer_plan(true),
+            )
+            .unwrap()
+            .is_none(),
+            "fused QKV consumer must fail closed unless every Q/K/V projection is runtime-packed Q8_0"
+        );
+    }
+
+    #[test]
+    fn q8_attention_qkv_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefill() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, q_weight, _q_expected) =
+            runtime_packed_attention_projection_case("attention_q", "blk.0.attn_q.weight");
+        let (_, k_weight, _k_expected) =
+            runtime_packed_attention_projection_case("attention_k", "blk.0.attn_k.weight");
+        let (_, v_weight, _v_expected) =
+            runtime_packed_attention_projection_case("attention_v", "blk.0.attn_v.weight");
+        let input_width = q_weight.dim(0).unwrap();
+        let output_width = q_weight.dim(1).unwrap();
+        let rows = 3;
+        let input = CpuTensor::from_f32(
+            "prefill_qkv_context",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 13.0) * 0.078125
+                        + (idx / input_width) as f32 * 0.046875
+                })
+                .collect(),
+        )
+        .unwrap();
+        let plan = attention_qkv_packed_rows4_matmul_plan(true);
+
+        let (q, k, v) = try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+            &input, &q_weight, &k_weight, &v_weight, &plan,
+        )
+        .unwrap()
+        .expect("QKV packed-rows4 matmul should accept multi-row runtime-packed Q/K/V weights");
+
+        assert_eq!(q.name, "attention_q_x86_q8_qkv_packed_rows4_matmul");
+        assert_eq!(k.name, "attention_k_x86_q8_qkv_packed_rows4_matmul");
+        assert_eq!(v.name, "attention_v_x86_q8_qkv_packed_rows4_matmul");
+        assert_eq!(q.shape.dims, vec![rows, output_width]);
+        assert_eq!(k.shape.dims, q.shape.dims);
+        assert_eq!(v.shape.dims, q.shape.dims);
+
+        let expected_q = q8_0_packed_rows4_matmul_projection(
+            &input,
+            match q_weight.q8_0_runtime_storage.as_ref() {
+                Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+                other => panic!("expected runtime-packed Q weight, got {other:?}"),
+            },
+            output_width,
+            "expected_q",
+        )
+        .unwrap();
+        let expected_k = q8_0_packed_rows4_matmul_projection(
+            &input,
+            match k_weight.q8_0_runtime_storage.as_ref() {
+                Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+                other => panic!("expected runtime-packed K weight, got {other:?}"),
+            },
+            output_width,
+            "expected_k",
+        )
+        .unwrap();
+        let expected_v = q8_0_packed_rows4_matmul_projection(
+            &input,
+            match v_weight.q8_0_runtime_storage.as_ref() {
+                Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+                other => panic!("expected runtime-packed V weight, got {other:?}"),
+            },
+            output_width,
+            "expected_v",
+        )
+        .unwrap();
+        assert_slice_close_with_tolerance(&q.data, &expected_q.data, 5e-4);
+        assert_slice_close_with_tolerance(&k.data, &expected_k.data, 5e-4);
+        assert_slice_close_with_tolerance(&v.data, &expected_v.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_attention_qkv_packed_rows4_matmul_is_plan_gated_and_prefill_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (decode_input, q_weight, _) =
+            runtime_packed_attention_projection_case("attention_q", "blk.0.attn_q.weight");
+        let (_, k_weight, _) =
+            runtime_packed_attention_projection_case("attention_k", "blk.0.attn_k.weight");
+        let (_, v_weight, _) =
+            runtime_packed_attention_projection_case("attention_v", "blk.0.attn_v.weight");
+
+        assert!(
+            try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+                &decode_input,
+                &q_weight,
+                &k_weight,
+                &v_weight,
+                &attention_qkv_packed_rows4_matmul_plan(true),
+            )
+            .unwrap()
+            .is_none(),
+            "the matrix path intentionally leaves one-row decode to the decode consumer"
+        );
+
+        let prefill_input = CpuTensor::from_f32(
+            "prefill_input",
+            vec![2, decode_input.dim(1).unwrap()],
+            vec![0.0; 2 * decode_input.dim(1).unwrap()],
+        )
+        .unwrap();
+        assert!(try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+            &prefill_input,
+            &q_weight,
+            &k_weight,
+            &v_weight,
+            &attention_qkv_packed_rows4_matmul_plan(false),
+        )
+        .unwrap()
+        .is_none());
+
+        let dense_v = CpuTensor::from_f32(
+            "dense_v",
+            vec![12, Q8_0_BLOCK_VALUES * 2],
+            vec![0.0; 12 * Q8_0_BLOCK_VALUES * 2],
+        )
+        .unwrap();
+        assert!(try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+            &prefill_input,
+            &q_weight,
+            &k_weight,
+            &dense_v,
+            &attention_qkv_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
     fn q8_attention_projection_consumer_is_plan_gated_and_role_limited() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
@@ -13677,16 +15147,359 @@ mod tests {
     }
 
     #[test]
-    fn x86_q8_ffn_down_decode_owner_path_matches_runtime_packed_baseline() {
+    fn q8_attention_output_consumer_matches_runtime_packed_baseline() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
-        std::env::set_var("CAMELID_Q8_0_BLOCK_DOT", "on");
-        std::env::set_var("CAMELID_X86_Q8_REPACK", "on");
-        std::env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", "on");
+        let (input, packed_weight, expected) = runtime_packed_attention_projection_case(
+            "attention_output",
+            "blk.0.attn_output.weight",
+        );
 
+        let actual = linear_runtime_with_plan(
+            &input,
+            &packed_weight,
+            "actual_attention_output",
+            &attention_output_consumer_plan(true),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(actual.shape.dims, expected.shape.dims);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+        assert!(packed_weight.q8_0_blocks.is_none());
+        assert!(matches!(
+            packed_weight.q8_0_runtime_storage.as_ref(),
+            Some(Q8_0RuntimeStorage::PackedRows4(_))
+        ));
+    }
+
+    #[test]
+    fn q8_attention_output_consumer_is_separate_default_off_x86_gate() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, _expected) = runtime_packed_attention_projection_case(
+            "attention_output",
+            "blk.0.attn_output.weight",
+        );
+
+        assert!(
+            try_x86_q8_attention_output_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "disabled",
+                "linear",
+                &attention_output_consumer_plan(false),
+            )
+            .unwrap()
+            .is_none(),
+            "attention output consumer must stay default-off"
+        );
+        assert!(
+            try_x86_q8_attention_output_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "wrong_role",
+                "attention_q",
+                &attention_output_consumer_plan(true),
+            )
+            .unwrap()
+            .is_none(),
+            "Q/K/V roles must not enter the attention-output consumer"
+        );
+        let projection_only = attention_projection_consumer_plan(true);
+        assert!(
+            try_x86_q8_attention_output_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "projection_only",
+                "linear",
+                &projection_only,
+            )
+            .unwrap()
+            .is_none(),
+            "old Q/K/V projection gate must not enable attention output"
+        );
+    }
+
+    #[test]
+    fn q8_attention_output_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefill() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, packed_weight, _decode_expected) =
+            runtime_packed_attention_projection_case(
+                "attention_output",
+                "blk.0.attn_output.weight",
+            );
+        let input_width = packed_weight.dim(0).unwrap();
+        let output_width = packed_weight.dim(1).unwrap();
+        let rows = 3;
+        let input = CpuTensor::from_f32(
+            "prefill_attention_context",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 11.0) * 0.09375
+                        + (idx / input_width) as f32 * 0.03125
+                })
+                .collect(),
+        )
+        .unwrap();
+        let packed = match packed_weight.q8_0_runtime_storage.as_ref() {
+            Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+            other => panic!("expected runtime-packed rows4 weight, got {other:?}"),
+        };
+        let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+        let mut expected_values = vec![0.0_f32; rows * output_width];
+        for row_idx in 0..rows {
+            let input_start = row_idx * input_width;
+            let quantized = quantize_q8_0_row(&input.data[input_start..input_start + input_width]);
+            for (group_idx, output_chunk) in expected_values
+                [row_idx * output_width..(row_idx + 1) * output_width]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                let sums = q8_0_packed_rows4_dot(
+                    &packed.blocks[group_start..group_start + blocks_per_row],
+                    &quantized.blocks,
+                    Q8_0PackedRows4Interleave::I8,
+                );
+                output_chunk.copy_from_slice(&sums);
+            }
+        }
+        let expected =
+            CpuTensor::from_f32("expected", vec![rows, output_width], expected_values).unwrap();
+        let plan = attention_output_packed_rows4_matmul_plan(true);
+
+        let actual = linear_for_role_runtime_with_plan(
+            &input,
+            &packed_weight,
+            "actual_attention_output_prefill",
+            "linear",
+            &plan,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(actual.shape.dims, vec![rows, output_width]);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_attention_output_packed_rows4_matmul_is_plan_gated_and_shape_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, _expected) = runtime_packed_attention_projection_case(
+            "attention_output",
+            "blk.0.attn_output.weight",
+        );
+
+        assert!(
+            try_x86_q8_attention_output_packed_rows4_matmul_path(
+                &input,
+                &packed_weight,
+                "decode_row",
+                "linear",
+                &attention_output_packed_rows4_matmul_plan(true),
+            )
+            .unwrap()
+            .is_none(),
+            "the matrix path intentionally leaves one-row decode to the decode consumer"
+        );
+
+        let prefill_input = CpuTensor::from_f32(
+            "prefill_input",
+            vec![2, input.dim(1).unwrap()],
+            vec![0.0; 2 * input.dim(1).unwrap()],
+        )
+        .unwrap();
+        assert!(try_x86_q8_attention_output_packed_rows4_matmul_path(
+            &prefill_input,
+            &packed_weight,
+            "disabled",
+            "linear",
+            &attention_output_packed_rows4_matmul_plan(false),
+        )
+        .unwrap()
+        .is_none());
+        assert!(try_x86_q8_attention_output_packed_rows4_matmul_path(
+            &prefill_input,
+            &packed_weight,
+            "wrong_role",
+            "attention_q",
+            &attention_output_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    fn ffn_down_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
+        ResolvedRuntimePlan {
+            linear_accumulation_precision: LinearAccumulationPrecision::F32,
+            q8: Q8RuntimeFlags {
+                block_dot: false,
+                file_reader_block_dot: false,
+                attention_projection_decode_consumer: false,
+                attention_output_decode_consumer: false,
+                attention_output_packed_rows4_matmul: false,
+                attention_qkv_decode_consumer: false,
+                attention_qkv_packed_rows4_matmul: false,
+                output_packed_rows4_matmul: false,
+                ffn_gate_up_decode_consumer: false,
+                ffn_gate_up_packed_rows4_matmul: false,
+                ffn_down_decode_consumer: enabled,
+                ffn_down_packed_rows4_matmul: false,
+                metal: false,
+                metal_retained: false,
+                hybrid_retained: false,
+                hybrid_gpu_rows: None,
+                hybrid_gpu_percent: 10,
+            },
+        }
+    }
+
+    fn ffn_down_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
+        ResolvedRuntimePlan {
+            linear_accumulation_precision: LinearAccumulationPrecision::F32,
+            q8: Q8RuntimeFlags {
+                block_dot: false,
+                file_reader_block_dot: false,
+                attention_projection_decode_consumer: false,
+                attention_output_decode_consumer: false,
+                attention_output_packed_rows4_matmul: false,
+                attention_qkv_decode_consumer: false,
+                attention_qkv_packed_rows4_matmul: false,
+                output_packed_rows4_matmul: false,
+                ffn_gate_up_decode_consumer: false,
+                ffn_gate_up_packed_rows4_matmul: false,
+                ffn_down_decode_consumer: false,
+                ffn_down_packed_rows4_matmul: enabled,
+                metal: false,
+                metal_retained: false,
+                hybrid_retained: false,
+                hybrid_gpu_rows: None,
+                hybrid_gpu_percent: 10,
+            },
+        }
+    }
+
+    fn ffn_gate_up_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
+        ResolvedRuntimePlan {
+            linear_accumulation_precision: LinearAccumulationPrecision::F32,
+            q8: Q8RuntimeFlags {
+                block_dot: false,
+                file_reader_block_dot: false,
+                attention_projection_decode_consumer: false,
+                attention_output_decode_consumer: false,
+                attention_output_packed_rows4_matmul: false,
+                attention_qkv_decode_consumer: false,
+                attention_qkv_packed_rows4_matmul: false,
+                output_packed_rows4_matmul: false,
+                ffn_gate_up_decode_consumer: enabled,
+                ffn_gate_up_packed_rows4_matmul: false,
+                ffn_down_decode_consumer: false,
+                ffn_down_packed_rows4_matmul: false,
+                metal: false,
+                metal_retained: false,
+                hybrid_retained: false,
+                hybrid_gpu_rows: None,
+                hybrid_gpu_percent: 10,
+            },
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn ffn_gate_up_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = ffn_gate_up_consumer_plan(false);
+        plan.q8.ffn_gate_up_packed_rows4_matmul = enabled;
+        plan
+    }
+
+    fn runtime_packed_ffn_gate_up_case() -> (CpuTensor, CpuTensor, CpuTensor, GatedFfnActivation) {
+        let rows = 64;
+        let input_width = Q8_0_BLOCK_VALUES * 2;
+        let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+        let gate_blocks: Vec<Q8_0Block> = (0..rows * blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.125 + block_idx as f32 * 0.005,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8).wrapping_mul(3).wrapping_add(block_idx as i8)
+                }),
+            })
+            .collect();
+        let up_blocks: Vec<Q8_0Block> = (0..rows * blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.2 + block_idx as f32 * 0.003,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8).wrapping_mul(7).wrapping_sub(block_idx as i8)
+                }),
+            })
+            .collect();
+        let input = CpuTensor::from_f32(
+            "input",
+            vec![1, input_width],
+            (0..input_width)
+                .map(|idx| (idx as f32 - 8.0) * 0.125)
+                .collect(),
+        )
+        .unwrap();
+        let retained_gate = CpuTensor::from_f32_with_q8_0_blocks(
+            "retained_gate",
+            vec![rows, input_width],
+            dequantized_q8_0_rows(&gate_blocks),
+            gate_blocks.clone(),
+        )
+        .unwrap();
+        let retained_up = CpuTensor::from_f32_with_q8_0_blocks(
+            "retained_up",
+            vec![rows, input_width],
+            dequantized_q8_0_rows(&up_blocks),
+            up_blocks.clone(),
+        )
+        .unwrap();
+        let expected = gated_ffn_activation_with_plan(
+            &input,
+            &retained_gate,
+            &retained_up,
+            "expected",
+            &ffn_gate_up_consumer_plan(false),
+            false,
+        )
+        .unwrap();
+        let packed_gate = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "blk.0.ffn_gate.weight",
+            TensorShape {
+                dims: vec![input_width, rows],
+            },
+            Q8_0PackedRows4::from_rows(
+                rows,
+                blocks_per_row,
+                Q8_0PackedRows4Interleave::I8,
+                &gate_blocks,
+            )
+            .unwrap(),
+        );
+        let packed_up = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "blk.0.ffn_up.weight",
+            TensorShape {
+                dims: vec![input_width, rows],
+            },
+            Q8_0PackedRows4::from_rows(
+                rows,
+                blocks_per_row,
+                Q8_0PackedRows4Interleave::I8,
+                &up_blocks,
+            )
+            .unwrap(),
+        );
+        (input, packed_gate, packed_up, expected)
+    }
+
+    fn runtime_packed_ffn_down_case() -> (CpuTensor, CpuTensor, CpuTensor) {
         let rows = 32;
         let input_width = Q8_0_BLOCK_VALUES * 2;
-        let row_blocks: Vec<Q8_0Block> = (0..rows * 2)
+        let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+        let row_blocks: Vec<Q8_0Block> = (0..rows * blocks_per_row)
             .map(|row| Q8_0Block {
                 scale: 0.125 + row as f32 * 0.006,
                 quants: std::array::from_fn(|idx| {
@@ -13694,19 +15507,6 @@ mod tests {
                 }),
             })
             .collect();
-        let packed_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
-            "blk.0.ffn_down.weight",
-            TensorShape {
-                dims: vec![input_width, rows],
-            },
-            Q8_0PackedRows4::from_rows(
-                rows,
-                input_width / Q8_0_BLOCK_VALUES,
-                Q8_0PackedRows4Interleave::I8,
-                &row_blocks,
-            )
-            .unwrap(),
-        );
         let input = CpuTensor::from_f32(
             "input",
             vec![1, input_width],
@@ -13715,18 +15515,423 @@ mod tests {
                 .collect(),
         )
         .unwrap();
+        let retained_weight = CpuTensor::from_f32_with_q8_0_blocks(
+            "retained_ffn_down_transposed",
+            vec![rows, input_width],
+            dequantized_q8_0_rows(&row_blocks),
+            row_blocks.clone(),
+        )
+        .unwrap();
+        let expected =
+            matmul_rhs_transposed_with_precision(&input, &retained_weight, "expected").unwrap();
+        let packed_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "blk.0.ffn_down.weight",
+            TensorShape {
+                dims: vec![input_width, rows],
+            },
+            Q8_0PackedRows4::from_rows(
+                rows,
+                blocks_per_row,
+                Q8_0PackedRows4Interleave::I8,
+                &row_blocks,
+            )
+            .unwrap(),
+        );
+        assert!(packed_weight.data.is_empty());
+        assert!(packed_weight.q8_0_blocks.is_none());
+        assert!(packed_weight.q8_0_file_backing.is_none());
+        assert!(matches!(
+            packed_weight.q8_0_runtime_storage.as_ref(),
+            Some(Q8_0RuntimeStorage::PackedRows4(packed))
+                if packed.rows == rows && packed.blocks_per_row == blocks_per_row
+        ));
+        (input, packed_weight, expected)
+    }
 
-        std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER");
-        let baseline =
-            linear_for_role_runtime(&input, &packed_weight, "baseline", "ffn_down", false).unwrap();
+    #[test]
+    fn q8_ffn_down_consumer_matches_runtime_packed_baseline() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, expected) = runtime_packed_ffn_down_case();
+        let plan = ffn_down_consumer_plan(true);
+
+        let actual = linear_for_role_runtime_with_plan(
+            &input,
+            &packed_weight,
+            "actual",
+            "ffn_down",
+            &plan,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(actual.shape.dims, expected.shape.dims);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_ffn_down_consumer_is_plan_gated_and_distinct_from_old_owner_gate() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
         std::env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", "on");
-        let owned =
-            linear_for_role_runtime(&input, &packed_weight, "owned", "ffn_down", false).unwrap();
-        assert_eq!(owned.data, baseline.data);
+        let (input, packed_weight, _expected) = runtime_packed_ffn_down_case();
+
+        let disabled = ffn_down_consumer_plan(false);
+        assert!(
+            try_x86_q8_ffn_down_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "disabled",
+                "ffn_down",
+                &disabled,
+            )
+            .unwrap()
+            .is_none(),
+            "old owner gate must not enable the new FFN-down consumer"
+        );
+
+        let enabled = ffn_down_consumer_plan(true);
+        assert!(
+            try_x86_q8_ffn_down_decode_consumer_path(
+                &input,
+                &packed_weight,
+                "wrong_role",
+                "attention_output",
+                &enabled,
+            )
+            .unwrap()
+            .is_none(),
+            "attention-output must not use the FFN-down consumer"
+        );
 
         std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER");
-        std::env::remove_var("CAMELID_X86_Q8_REPACK");
-        std::env::remove_var("CAMELID_Q8_0_BLOCK_DOT");
+    }
+
+    #[test]
+    fn q8_ffn_down_consumer_fails_closed_for_non_runtime_or_mismatched_storage() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, _expected) = runtime_packed_ffn_down_case();
+        let plan = ffn_down_consumer_plan(true);
+
+        let element_count = packed_weight.shape.element_count().unwrap();
+        let retained_like = CpuTensor::from_f32_with_q8_0_blocks(
+            "retained_ffn_down_transposed",
+            packed_weight.shape.dims.clone(),
+            vec![0.0; element_count],
+            vec![
+                Q8_0Block {
+                    scale: 1.0,
+                    quants: [0; Q8_0_BLOCK_VALUES],
+                };
+                element_count / Q8_0_BLOCK_VALUES
+            ],
+        )
+        .unwrap();
+        assert!(
+            try_x86_q8_ffn_down_decode_consumer_path(
+                &input,
+                &retained_like,
+                "retained_like",
+                "ffn_down",
+                &plan,
+            )
+            .unwrap()
+            .is_none(),
+            "consumer must require backend-owned runtime-packed storage"
+        );
+
+        let mut mismatched = packed_weight.clone();
+        if let Some(Q8_0RuntimeStorage::PackedRows4(packed)) =
+            mismatched.q8_0_runtime_storage.as_mut()
+        {
+            packed.rows += 4;
+        }
+        assert!(
+            try_x86_q8_ffn_down_decode_consumer_path(
+                &input,
+                &mismatched,
+                "mismatched",
+                "ffn_down",
+                &plan,
+            )
+            .unwrap()
+            .is_none(),
+            "consumer must fail closed when packed rows do not match output width"
+        );
+    }
+
+    #[test]
+    fn q8_ffn_down_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefill() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, packed_weight, _decode_expected) = runtime_packed_ffn_down_case();
+        let input_width = packed_weight.dim(0).unwrap();
+        let output_width = packed_weight.dim(1).unwrap();
+        let rows = 3;
+        let input = CpuTensor::from_f32(
+            "prefill_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 9.0) * 0.125 + (idx / input_width) as f32 * 0.0625
+                })
+                .collect(),
+        )
+        .unwrap();
+        let packed = match packed_weight.q8_0_runtime_storage.as_ref() {
+            Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+            other => panic!("expected runtime-packed rows4 weight, got {other:?}"),
+        };
+        let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+        let mut expected_values = vec![0.0_f32; rows * output_width];
+        for row_idx in 0..rows {
+            let input_start = row_idx * input_width;
+            let quantized = quantize_q8_0_row(&input.data[input_start..input_start + input_width]);
+            for (group_idx, output_chunk) in expected_values
+                [row_idx * output_width..(row_idx + 1) * output_width]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let group_start = group_idx * blocks_per_row;
+                let sums = q8_0_packed_rows4_dot(
+                    &packed.blocks[group_start..group_start + blocks_per_row],
+                    &quantized.blocks,
+                    Q8_0PackedRows4Interleave::I8,
+                );
+                output_chunk.copy_from_slice(&sums);
+            }
+        }
+        let expected =
+            CpuTensor::from_f32("expected", vec![rows, output_width], expected_values).unwrap();
+        let plan = ffn_down_packed_rows4_matmul_plan(true);
+
+        let actual = linear_for_role_runtime_with_plan(
+            &input,
+            &packed_weight,
+            "actual",
+            "ffn_down",
+            &plan,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(actual.shape.dims, vec![rows, output_width]);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_ffn_down_packed_rows4_matmul_is_plan_gated() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, _expected) = runtime_packed_ffn_down_case();
+
+        assert!(try_x86_q8_ffn_down_packed_rows4_matmul_path(
+            &input,
+            &packed_weight,
+            "disabled",
+            "ffn_down",
+            &ffn_down_packed_rows4_matmul_plan(false),
+        )
+        .unwrap()
+        .is_none());
+        assert!(try_x86_q8_ffn_down_packed_rows4_matmul_path(
+            &input,
+            &packed_weight,
+            "wrong_role",
+            "attention_output",
+            &ffn_down_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn q8_ffn_gate_up_consumer_matches_runtime_packed_baseline() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_gate, packed_up, expected) = runtime_packed_ffn_gate_up_case();
+
+        let actual = gated_ffn_activation_with_plan(
+            &input,
+            &packed_gate,
+            &packed_up,
+            "actual",
+            &ffn_gate_up_consumer_plan(true),
+            false,
+        )
+        .unwrap();
+
+        assert_slice_close_with_tolerance(&actual.tensor.data, &expected.tensor.data, 5e-4);
+        assert!(packed_gate.q8_0_blocks.is_none());
+        assert!(packed_up.q8_0_blocks.is_none());
+        assert!(matches!(
+            packed_gate.q8_0_runtime_storage.as_ref(),
+            Some(Q8_0RuntimeStorage::PackedRows4(_))
+        ));
+        assert!(matches!(
+            packed_up.q8_0_runtime_storage.as_ref(),
+            Some(Q8_0RuntimeStorage::PackedRows4(_))
+        ));
+    }
+
+    #[test]
+    fn q8_ffn_gate_up_consumer_is_plan_gated_and_requires_runtime_storage() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", "on");
+        let (input, packed_gate, packed_up, _expected) = runtime_packed_ffn_gate_up_case();
+        let mut gate = vec![0.0; 64];
+        let mut up = vec![0.0; 64];
+
+        assert!(
+            try_x86_q8_ffn_gate_up_decode_consumer_path(
+                &input,
+                &packed_gate,
+                &packed_up,
+                &mut gate,
+                &mut up,
+                &ffn_gate_up_consumer_plan(false),
+            )
+            .unwrap()
+            .is_none(),
+            "default-off plan and old owner gate must not enter the FFN gate/up consumer"
+        );
+
+        let retained_like = CpuTensor::from_f32_with_q8_0_blocks(
+            "retained_gate",
+            packed_gate.shape.dims.clone(),
+            vec![0.0; packed_gate.shape.element_count().unwrap()],
+            vec![
+                Q8_0Block {
+                    scale: 1.0,
+                    quants: [0; Q8_0_BLOCK_VALUES],
+                };
+                packed_gate.shape.element_count().unwrap() / Q8_0_BLOCK_VALUES
+            ],
+        )
+        .unwrap();
+        assert!(
+            try_x86_q8_ffn_gate_up_decode_consumer_path(
+                &input,
+                &retained_like,
+                &packed_up,
+                &mut gate,
+                &mut up,
+                &ffn_gate_up_consumer_plan(true),
+            )
+            .unwrap()
+            .is_none(),
+            "consumer must require backend-owned runtime-packed storage for both gate and up"
+        );
+
+        std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER");
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn q8_ffn_gate_up_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefill() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, packed_gate, packed_up, _decode_expected) =
+            runtime_packed_ffn_gate_up_case();
+        let input_width = packed_gate.dim(0).unwrap();
+        let output_width = packed_gate.dim(1).unwrap();
+        let rows = 3;
+        let input = CpuTensor::from_f32(
+            "prefill_gate_up_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 7.0) * 0.109375
+                        + (idx / input_width) as f32 * 0.046875
+                })
+                .collect(),
+        )
+        .unwrap();
+
+        let actual = try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+            &input,
+            &packed_gate,
+            &packed_up,
+            "actual",
+            &ffn_gate_up_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .expect("FFN gate/up packed-rows4 matmul should accept multi-row runtime-packed weights");
+
+        let gate_packed = match packed_gate.q8_0_runtime_storage.as_ref() {
+            Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+            other => panic!("expected runtime-packed gate weight, got {other:?}"),
+        };
+        let up_packed = match packed_up.q8_0_runtime_storage.as_ref() {
+            Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
+            other => panic!("expected runtime-packed up weight, got {other:?}"),
+        };
+        let mut gate =
+            q8_0_packed_rows4_matmul_projection(&input, gate_packed, output_width, "expected_gate")
+                .unwrap();
+        let up =
+            q8_0_packed_rows4_matmul_projection(&input, up_packed, output_width, "expected_up")
+                .unwrap();
+        for (gate_value, up_value) in gate.data.iter_mut().zip(up.data) {
+            *gate_value = (*gate_value / (1.0 + (-*gate_value).exp())) * up_value;
+        }
+
+        assert_eq!(actual.tensor.name, "actual");
+        assert_eq!(actual.tensor.shape.dims, vec![rows, output_width]);
+        assert_slice_close_with_tolerance(&actual.tensor.data, &gate.data, 5e-4);
+        assert!(packed_gate.q8_0_blocks.is_none());
+        assert!(packed_up.q8_0_blocks.is_none());
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn q8_ffn_gate_up_packed_rows4_matmul_is_plan_gated_and_prefill_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (decode_input, packed_gate, packed_up, _expected) = runtime_packed_ffn_gate_up_case();
+        assert!(try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+            &decode_input,
+            &packed_gate,
+            &packed_up,
+            "decode_row",
+            &ffn_gate_up_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+
+        let prefill_input = CpuTensor::from_f32(
+            "prefill_input",
+            vec![2, decode_input.dim(1).unwrap()],
+            vec![0.0; 2 * decode_input.dim(1).unwrap()],
+        )
+        .unwrap();
+        assert!(try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+            &prefill_input,
+            &packed_gate,
+            &packed_up,
+            "disabled",
+            &ffn_gate_up_packed_rows4_matmul_plan(false),
+        )
+        .unwrap()
+        .is_none());
+
+        let dense_up = CpuTensor::from_f32(
+            "dense_up",
+            packed_up.shape.dims.clone(),
+            vec![0.0; packed_up.shape.element_count().unwrap()],
+        )
+        .unwrap();
+        assert!(try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+            &prefill_input,
+            &packed_gate,
+            &dense_up,
+            "dense_up",
+            &ffn_gate_up_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -15845,6 +18050,234 @@ mod tests {
         assert_close(diagnostic_logits.data[2], 9.0);
     }
 
+    #[test]
+    fn q8_packed_rows4_matmul_projection_chunked_prefill_matches_manual_output() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let rows = 5;
+        let output_rows = 128;
+        let blocks_per_row = 2;
+        let input_width = blocks_per_row * Q8_0_BLOCK_VALUES;
+        let row_blocks: Vec<Q8_0Block> = (0..output_rows * blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.03125 + (block_idx % 17) as f32 * 0.001953125,
+                quants: std::array::from_fn(|idx| {
+                    ((block_idx as i32 * 7 + idx as i32 * 11) % 71 - 35) as i8
+                }),
+            })
+            .collect();
+        let packed = Q8_0PackedRows4::from_rows(
+            output_rows,
+            blocks_per_row,
+            Q8_0PackedRows4Interleave::I8,
+            &row_blocks,
+        )
+        .unwrap();
+        let input = CpuTensor::from_f32(
+            "chunked_prefill_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| ((idx % 29) as f32 - 14.0) * 0.078125)
+                .collect(),
+        )
+        .unwrap();
+        let quantized_inputs = q8_0_quantized_matmul_input_rows(&input, blocks_per_row).unwrap();
+
+        let actual = q8_0_packed_rows4_matmul_projection_from_quantized(
+            rows,
+            &packed,
+            output_rows,
+            "actual_chunked_prefill",
+            &quantized_inputs,
+        )
+        .unwrap();
+
+        let mut expected = Vec::with_capacity(rows * output_rows);
+        for row_idx in 0..rows {
+            let input_start = row_idx * blocks_per_row;
+            let quantized_row = &quantized_inputs[input_start..input_start + blocks_per_row];
+            for group_blocks in packed.blocks.chunks_exact(blocks_per_row) {
+                expected.extend_from_slice(&q8_0_packed_rows4_dot(
+                    group_blocks,
+                    quantized_row,
+                    Q8_0PackedRows4Interleave::I8,
+                ));
+            }
+        }
+
+        assert_eq!(actual.shape.dims, vec![rows, output_rows]);
+        assert_eq!(actual.data, expected);
+    }
+
+    #[test]
+    fn q8_packed_rows4_matmul_quantized_input_scratch_matches_owned_rows() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let rows = 4;
+        let blocks_per_row = 3;
+        let input_width = blocks_per_row * Q8_0_BLOCK_VALUES;
+        let input = CpuTensor::from_f32(
+            "scratch_quantized_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| ((idx % 31) as f32 - 15.0) * 0.0625)
+                .collect(),
+        )
+        .unwrap();
+        let owned = q8_0_quantized_matmul_input_rows(&input, blocks_per_row).unwrap();
+
+        let scratch = with_q8_0_quantized_matmul_input_rows(
+            &input,
+            blocks_per_row,
+            |scratch_rows, quantized_inputs| {
+                assert_eq!(scratch_rows, rows);
+                Ok(quantized_inputs.to_vec())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(scratch, owned);
+        let (_, _, quantized_capacity, _) = q8_0_file_reader_scratch_capacities();
+        assert!(quantized_capacity >= rows * blocks_per_row);
+    }
+
+    #[test]
+    fn x86_q8_output_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefill() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let rows = 3;
+        let vocab_rows = 8;
+        let blocks_per_row = 2;
+        let input_width = blocks_per_row * Q8_0_BLOCK_VALUES;
+        let row_blocks: Vec<Q8_0Block> = (0..vocab_rows * blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.0625 + (block_idx % 13) as f32 * 0.00390625,
+                quants: std::array::from_fn(|idx| {
+                    ((block_idx as i32 * 11 + idx as i32 * 5) % 67 - 33) as i8
+                }),
+            })
+            .collect();
+        let packed = Q8_0PackedRows4::from_rows(
+            vocab_rows,
+            blocks_per_row,
+            Q8_0PackedRows4Interleave::I8,
+            &row_blocks,
+        )
+        .unwrap();
+        let output_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "output.weight",
+            TensorShape {
+                dims: vec![input_width, vocab_rows],
+            },
+            packed.clone(),
+        );
+        let input = CpuTensor::from_f32(
+            "output_prefill_hidden",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| ((idx % 23) as f32 - 11.0) * 0.109375)
+                .collect(),
+        )
+        .unwrap();
+        let plan = output_packed_rows4_matmul_plan(true);
+
+        let actual = output_projection_runtime_with_plan(
+            &input,
+            &output_weight,
+            "output_prefill_logits",
+            &plan,
+            false,
+        )
+        .unwrap();
+        let expected = q8_0_packed_rows4_matmul_projection(
+            &input,
+            &packed,
+            vocab_rows,
+            "expected_output_prefill_logits",
+        )
+        .unwrap();
+
+        assert_eq!(actual.shape.dims, vec![rows, vocab_rows]);
+        assert_eq!(actual.data, expected.data);
+    }
+
+    #[test]
+    fn x86_q8_output_packed_rows4_matmul_is_plan_gated_and_prefill_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let vocab_rows = 8;
+        let blocks_per_row = 1;
+        let input_width = blocks_per_row * Q8_0_BLOCK_VALUES;
+        let packed = Q8_0PackedRows4::from_rows(
+            vocab_rows,
+            blocks_per_row,
+            Q8_0PackedRows4Interleave::I8,
+            &vec![
+                Q8_0Block {
+                    scale: 0.125,
+                    quants: [3; Q8_0_BLOCK_VALUES],
+                };
+                vocab_rows * blocks_per_row
+            ],
+        )
+        .unwrap();
+        let output_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "output.weight",
+            TensorShape {
+                dims: vec![input_width, vocab_rows],
+            },
+            packed,
+        );
+        let prefill_input = CpuTensor::from_f32(
+            "prefill_input",
+            vec![2, input_width],
+            vec![0.25; 2 * input_width],
+        )
+        .unwrap();
+        let decode_input = CpuTensor::from_f32(
+            "decode_input",
+            vec![1, input_width],
+            vec![0.25; input_width],
+        )
+        .unwrap();
+
+        assert!(try_x86_q8_output_packed_rows4_matmul_path(
+            &prefill_input,
+            &output_weight,
+            "disabled",
+            &output_packed_rows4_matmul_plan(false),
+        )
+        .unwrap()
+        .is_none());
+        assert!(try_x86_q8_output_packed_rows4_matmul_path(
+            &decode_input,
+            &output_weight,
+            "decode_limited",
+            &output_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+        let non_output_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+            "blk.0.ffn_down.weight",
+            output_weight.shape.clone(),
+            match output_weight.q8_0_runtime_storage.as_ref().unwrap() {
+                Q8_0RuntimeStorage::PackedRows4(packed) => packed.clone(),
+            },
+        );
+        assert!(try_x86_q8_output_packed_rows4_matmul_path(
+            &prefill_input,
+            &non_output_weight,
+            "non_output",
+            &output_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn x86_q8_output_decode_owner_path_uses_runtime_packed_storage() {
@@ -15902,6 +18335,60 @@ mod tests {
 
         std::env::remove_var("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER");
         std::env::remove_var("CAMELID_X86_Q8_REPACK");
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn x86_q8_packed_rows4_decode_projection_matches_manual_wide_output() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+
+        let output_rows = X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS;
+        let blocks_per_row = 2;
+        let input_width = blocks_per_row * Q8_0_BLOCK_VALUES;
+        let row_blocks: Vec<Q8_0Block> = (0..output_rows * blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.0625 + (block_idx % 11) as f32 * 0.00390625,
+                quants: std::array::from_fn(|idx| {
+                    ((block_idx as i32 * 13 + idx as i32 * 7) % 61 - 30) as i8
+                }),
+            })
+            .collect();
+        let packed = Q8_0PackedRows4::from_rows(
+            output_rows,
+            blocks_per_row,
+            Q8_0PackedRows4Interleave::I8,
+            &row_blocks,
+        )
+        .unwrap();
+        let input = CpuTensor::from_f32(
+            "wide_decode_input",
+            vec![1, input_width],
+            (0..input_width)
+                .map(|idx| ((idx % 19) as f32 - 9.0) * 0.125)
+                .collect(),
+        )
+        .unwrap();
+        let quantized_input = quantize_q8_0_row(&input.data);
+
+        let actual = q8_0_packed_rows4_single_input_projection(
+            &packed,
+            &quantized_input.blocks,
+            output_rows,
+            "actual_wide_decode",
+        )
+        .unwrap();
+
+        let mut expected = Vec::with_capacity(output_rows);
+        for group_blocks in packed.blocks.chunks_exact(blocks_per_row) {
+            expected.extend_from_slice(&q8_0_packed_rows4_dot(
+                group_blocks,
+                &quantized_input.blocks,
+                Q8_0PackedRows4Interleave::I8,
+            ));
+        }
+        assert_eq!(actual.shape.dims, vec![1, output_rows]);
+        assert_eq!(actual.data, expected);
     }
 
     #[test]

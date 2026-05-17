@@ -402,7 +402,7 @@ const liveScalarThreeBModel = {
   id: 'scalar_default_rerun',
   name: 'scalar_default_rerun',
   runtime_model_name: 'scalar_default_rerun',
-  model_path: '/home/ubuntu/models/Llama-3.2-3B-Instruct-Q8_0.gguf',
+  model_path: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf',
   quant: 'file_type 7',
 }
 const liveScalarThreeBGate = getChatGateState(capabilityFixture, liveScalarThreeBModel, { active_model_id: 'scalar_default_rerun', loaded_now: true, generation_ready: true })

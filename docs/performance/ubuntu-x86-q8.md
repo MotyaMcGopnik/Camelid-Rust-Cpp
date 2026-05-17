@@ -10,7 +10,7 @@ The current goal is production-directional runtime improvement on a narrow Ubunt
 
 - Added and validated default-off AVX2 Q8 acceleration paths in the measured Ubuntu x86 lane.
 - Added packed Q8 runtime storage work for selected dense tensors.
-- Added matrix-level Q8 execution experiments and deeper FFN ownership slices.
+- Kept matrix-level Q8 GEMM/MUL_MAT as an evidence-gated direction while documenting concrete default-off FFN/attention/output slices by their per-artifact evidence level; local-only follow-ons are not Ubuntu x86_64 validation.
 - Separated cold materialization from warm inference.
 - Documented rejected candidates when they failed parity, wall-clock, or clean-host discipline.
 
@@ -20,7 +20,7 @@ The current goal is production-directional runtime improvement on a narrow Ubunt
 - Cold materialization and warm decode are separate problems.
 - `from_q8_0_bytes` is cold/reload-only on the measured Ubuntu x86 lane.
 - Row-dot micro-optimizations are not enough by themselves.
-- Matrix-level ownership is the current direction.
+- Matrix-level ownership remains a direction, not a support or throughput claim until a fresh Ubuntu x86_64 run proves a concrete default-off path.
 - Retain decisions require parity plus repeated wall-clock evidence on a clean host.
 
 ## Current retained paths
@@ -30,15 +30,22 @@ Only list the paths that are currently evidence-backed and default-off:
 - `CAMELID_X86_Q8_REPACK=on` for the retained Ubuntu x86 runtime-packed lane used in current evidence.
 - AVX2 packed-kernel work in the measured Ubuntu x86 lane where parity and bounded timing evidence support keeping the path under default-off gating.
 - Packed Q8 runtime storage for the dense attention projection family plus dense FFN gate/up/down rows in the measured lane.
+- Default-off decode consumers that directly use backend-owned packed runtime storage for narrow one-row dense projection families, including output, attention Q/K/V, attention output, FFN down, and the FFN gate/up activation slice while validation remains opt-in.
+- Default-off packed-rows4 matmul slices consume backend-owned packed runtime storage for concrete dense projection families with per-slice evidence recorded below: FFN down, multi-row FFN gate/up, multi-row attention Q/K/V, multi-row attention output, and local-only multi-row `output.weight`; the newest chunked output-group traversal and quantized-input scratch-reuse follow-ons are local-only until Ubuntu timing/profiling recovers. This is planner/runtime-gate/allocation-shape evidence, not a blanket throughput, support, portability, or default-on claim.
+- ExecutionPlan now treats the x86 attention Q/K/V, attention-output, output, FFN gate/up/down decode-consumer, packed-rows4 FFN-down matmul, packed-rows4 FFN gate/up matmul, packed-rows4 attention-Q/K/V matmul, packed-rows4 attention-output matmul, and packed-rows4 output matmul flags as managed default-off knobs, so appliance planning clears stale owner experiments instead of inheriting them accidentally.
 
 ## Active experimental direction
 
 Current work is focused on:
 
-- AVX2 scaled row-dot and packed-kernel execution
-- matrix-level Q8 GEMM/MUL_MAT ownership
-- FFN projection optimization, especially deeper `ffn_down` decode ownership
-- attention projection optimization
+- explicit `CAMELID_X86_Q8_KERNEL=avx2` packed-kernel execution
+- matrix-level Q8 GEMM/MUL_MAT ownership only after a concrete default-off flag/path has fresh Ubuntu x86_64 evidence
+- FFN projection optimization, especially deeper `ffn_down` decode ownership and one-quantization FFN gate/up decode consumption
+- attention projection optimization, including narrow one-row Q/K/V decode-consumer and multi-row Q/K/V or attention-output packed-runtime matmul slices only when guarded by fresh Ubuntu x86_64 evidence; current Q/K/V helpers use one shared input quantization and paired/triplet projection helpers under existing default-off gates.
+- output-group scheduling for one-row packed-runtime decode consumers, including the latest local-only helper that can parallelize wide rows4 decode projections inside existing default-off gates; Ubuntu timing/profiling proof is still pending before retaining any measured effect.
+- multi-row output projection ownership through backend-owned packed runtime storage; the current `CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL` slice has local parity/gate evidence only because Ubuntu host reachability blocked timing/profiling.
+- bounded packed-rows4 matmul scheduling follow-ons that reduce Rayon task granularity by chunking output groups across single/pair/triplet helpers; current proof is local semantic coverage only, not a retained Ubuntu speed claim.
+- bounded packed-rows4 matmul activation-quantization scratch reuse, so existing default-off single/pair/triplet matmul consumers can reuse cleared thread-local input blocks rather than allocating a fresh quantized-input vector per helper call; current proof is local allocation-shape/timing-smoke coverage only, not a retained Ubuntu speed claim.
 - reducing wrapper/callback overhead in hot inference
 - keeping the default/reference path safe while experimental paths stay opt-in
 
@@ -69,16 +76,14 @@ Contaminated runs are not used as retained evidence.
 
 ## How to reproduce
 
-Use only the currently validated default-off gates for the retained baseline and keep the host clean before running:
+Use only the current reference default-off gates for the retained Ubuntu x86_64 experiment and keep the host clean before running:
 
 ```bash
-CAMELID_X86_Q8_KERNEL=avx2_scaled_rowdot \
 CAMELID_X86_Q8_REPACK=on \
-CAMELID_X86_Q8_REPACK_TENSORS=ffn,attention_projection \
-CAMELID_X86_Q8_GEMM=avx2_tiled \
-CAMELID_X86_Q8_PACKED_TILE16=on \
-CAMELID_X86_Q8_PACKED_TILE16_SERIAL_OWNER=on
+CAMELID_X86_Q8_KERNEL=avx2
 ```
+
+Do not add older sketch flags or matrix-owner placeholders to reproduction commands unless a fresh Ubuntu x86_64 evidence entry proves that exact flag and shape. Narrow decode-consumer/owner flags are separate default-off developer experiments; enable them only when the current evidence report names the exact flag and validation target for that slice.
 
 For bounded warm-request measurement, use the same host, same model, same request shape, repeated runs, parity checks, and paired `perf stat` / `perf record` evidence.
 
@@ -89,6 +94,28 @@ Primary public evidence anchors for this lane:
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/README.md`
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260515T1108Z-x86-attn-family.txt`
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260515T1235Z-x86-ffn-down-runtime.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260516T0136Z-x86-ffn-gate-up-consumer.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260516T0136Z-x86-ffn-gate-up-consumer-tests.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T0320Z-x86-ffndown-consumer-planner.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T0503Z-x86-attn-output-consumer.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260517T0511Z-doc-claim-guard.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T0655Z-x86-ffndown-packed-rows4-matmul-planner.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260517T0733Z-doc-claim-guard.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T0825Z-x86-attn-output-packed-rows4-matmul.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T1013Z-x86-attn-qkv-packed-rows4-matmul.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T1148Z-x86-attn-qkv-shared-input-quant.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T1359Z-x86-ffn-gate-up-packed-rows4-matmul.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260517T1458Z-doc-claim-guard.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-1eeef0a5-20260517T1516Z-x86-ffn-gate-up-paired-projection-local.txt` (local follow-on only; Ubuntu x86_64 timing proof still pending)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T1522Z-x86-attn-qkv-triplet-packed-rows4.txt`
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-1eeef0a5-20260517T1645Z-x86-ffn-gate-up-decode-paired-local.txt` (local follow-on only; Ubuntu x86_64 timing proof still pending)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T1655Z-x86-attn-qkv-decode-triplet.txt` (local follow-on only; canonical Ubuntu host SSH was blocked by publickey during validation staging)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-1eeef0a5-20260517T1744Z-x86-packed-rows4-decode-output-parallel-local.txt` (local follow-on only; Ubuntu x86_64 timing/profiling proof still pending)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T1834Z-x86-q8-local-gate-blocker.txt` (local gate/source-inspection only; canonical Ubuntu SSH blocked by publickey, so no Ubuntu timing/perf claim)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-1eeef0a5-20260517T1850Z-x86-output-packed-rows4-matmul-local.txt` (local parity/gate/timing-smoke only; canonical Ubuntu SSH timed out, so no Ubuntu timing/perf claim)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-1eeef0a5-20260517T2001Z-x86-packed-rows4-matmul-chunking-local.txt` (local fmt/clippy/unit parity only; canonical Ubuntu SSH timed out, so no Ubuntu timing/perf claim)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-1eeef0a5-20260517T2118Z-x86-packed-rows4-input-scratch-local.txt` (local scratch-reuse parity/timing-smoke only; canonical Ubuntu SSH timed out, so no Ubuntu timing/perf claim)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260517T2207Z-x86-output-packed-rows4-canonical-host-blocker.txt` (canonical-host reachability blocker for the default-off output packed-rows4 matmul validation attempt; no Ubuntu timing/perf claim)
 - the retained/reject notes for bounded Ubuntu x86 Q8 experiments kept under `qa/evidence-bundles/`
 
 ## Product/runtime note

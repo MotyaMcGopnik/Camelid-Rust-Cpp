@@ -1,4 +1,4 @@
-remote_host=ip-172-31-19-175
+remote_host=canonical-private-ubuntu-validation-host
 generated_utc=2026-05-13T19:36:46Z
 source_snapshot=<canonical-ubuntu-current-main-snapshot>
 source_head=9a296eaac6d63556d5fcbf7db74d0c1f65ab3ca9

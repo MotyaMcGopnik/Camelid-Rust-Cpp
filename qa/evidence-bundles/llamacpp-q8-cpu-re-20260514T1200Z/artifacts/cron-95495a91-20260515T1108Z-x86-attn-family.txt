@@ -6,7 +6,7 @@ Scope
 - Storage design: backend-owned Q8_0RuntimeStorage::PackedRows4; no duplicate row-major packed-copy sidecar for the selected tensors.
 - Fallback: unchanged when CAMELID_X86_Q8_REPACK is unset/off, or when the linear is outside the selected x86 family.
 
-llama.cpp source grep evidence refreshed from /Users/timtoole/.openclaw/workspace/projects/llama.cpp
+llama.cpp source grep evidence refreshed from <local-llama-worktree>
 Commands used:
 - git grep -n -i q8_0 -- CMakeLists.txt ggml src include tools tests examples
 - git grep -n -i tinyBLAS -- CMakeLists.txt ggml src include tools tests examples
@@ -45,12 +45,12 @@ Local dev host:
 - cargo test -q x86_q8_repack_loads_dense_attention_family_as_packed_runtime --test tensor_store: PASS, 0 tests on non-x86 due cfg gate.
 
 Canonical Ubuntu x86_64 host:
-- Host: ssh -i /Users/timtoole/Documents/cert/ubuntu.pem ubuntu@54.186.43.33
-- Remote workdir: /home/ubuntu/work/camelid-x86-q8-attn-family-20260515T110324Z
-- Toolchain used explicitly because default cargo was 1.75.0: /home/ubuntu/.rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu/bin/cargo with matching RUSTC.
-- PATH=/home/ubuntu/.rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu/bin:$PATH cargo fmt --check: PASS
-- RUSTC=/home/ubuntu/.rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu/bin/rustc cargo test -q x86_q8_repack_loads_dense_attention_family_as_packed_runtime --test tensor_store: PASS, 1 passed, 23 filtered out.
-- RUSTC=/home/ubuntu/.rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu/bin/rustc cargo test -q x86_q8_avx2_packed_rows4_i8_matches_scalar_dot --lib: PASS, 1 passed, 222 filtered out.
+- Host: ssh [identity omitted] <operator-key-path> ubuntu@<validation-host>
+- Remote workdir: <ubuntu-workdir>/camelid-x86-q8-attn-family-20260515T110324Z
+- Toolchain used explicitly because default cargo was 1.75.0: <ubuntu-cargo-1.90.0> with matching RUSTC.
+- PATH=<ubuntu-rust-bin>:$PATH cargo fmt --check: PASS
+- RUSTC=<ubuntu-rustc-1.90.0> cargo test -q x86_q8_repack_loads_dense_attention_family_as_packed_runtime --test tensor_store: PASS, 1 passed, 23 filtered out.
+- RUSTC=<ubuntu-rustc-1.90.0> cargo test -q x86_q8_avx2_packed_rows4_i8_matches_scalar_dot --lib: PASS, 1 passed, 222 filtered out.
 
 Notes
 - The Ubuntu host default cargo reports rustc 1.75.0 and cannot parse the lockfile / meet MSRV, so validation used the installed 1.90.0 toolchain directly.

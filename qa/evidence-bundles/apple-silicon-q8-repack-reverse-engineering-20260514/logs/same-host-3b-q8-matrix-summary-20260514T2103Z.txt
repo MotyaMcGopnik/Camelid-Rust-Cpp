@@ -1,6 +1,6 @@
 # Camelid / llama.cpp same-host Llama 3.2 3B Q8_0 matrix, 2026-05-14T21:03Z
 
-Host/workload: same local Apple M4 / macOS Darwin 25.5.0, arm64 release binaries, `/Volumes/SSK Drive/Camelid/models/llama-3.2-3b-instruct/Llama-3.2-3B-Instruct-Q8_0.gguf`, harness `node scripts/bench-llama3-same-host.mjs`, `--max-tokens 1 --warmup 0 --repeats 1 --threads 8`, llama.cpp `build-cpu-mac-q8/bin/llama-server -ngl 0 -c 512`.
+Host/workload: same local Apple M4 / macOS Darwin 25.5.0, arm64 release binaries, `$CAMELID_MODEL_DIR/Llama-3.2-3B-Instruct-Q8_0.gguf`, harness `node scripts/bench-llama3-same-host.mjs`, `--max-tokens 1 --warmup 0 --repeats 1 --threads 8`, llama.cpp `build-cpu-mac-q8/bin/llama-server -ngl 0 -c 512`.
 
 Recorded command family:
 - baseline / packed-off: `CAMELID_MAC_Q8_REPACK=off CAMELID_Q8_0_PACKED_4X4_DOT=off CAMELID_Q8_0_PACKED_4X8_DOT=off`

@@ -18,6 +18,7 @@ await writeFile(
       host: 'local-only mac smoke',
       model_path: '$CAMELID_MODEL_DIR/Llama-3.2-3B-Instruct-Q8_0.gguf',
       health_endpoint: '127.0.0.1',
+      elapsed_seconds: '0.03.255.467',
     },
     null,
     2,
