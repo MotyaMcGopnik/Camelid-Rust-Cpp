@@ -337,7 +337,7 @@ ggml/src/ggml-cpu/arch/x86/cpu-feats.cpp:309:#ifdef GGML_AVX512_BF16
 - cargo test -q q8_ffn_down_consumer --lib: PASS (3 passed)
 
 ## Canonical Ubuntu x86_64 validation
-Host command: ssh -i <operator-key> ubuntu@<validation-host>
+Host command: SSH to the canonical validation host
 Remote workdir: <ubuntu-workdir>/camelid-x86-q8-planner-ffndown-consumer-20260517T0320Z
 Observed: Ubuntu x86_64 Intel Xeon Platinum 8488C, 16 vCPUs, AVX2/AVX512/VNNI/AMX flags present; rustc/cargo 1.90.0 used from ~/.rustup/toolchains.
 - cargo fmt --check: PASS

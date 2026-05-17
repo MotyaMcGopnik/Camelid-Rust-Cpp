@@ -1,6 +1,6 @@
 # Ubuntu x86_64 Q8 attention Q/K/V packed-rows4 matmul slice
 date_utc: 2026-05-17T10:13Z
-camelid_workdir: /Users/timtoole/.openclaw/workspace/projects/Camelid
+camelid_workdir: <local-camelid-worktree>
 camelid_head: 0ebbcba8357f2bd102b7fd5c3237240c94ddfaaf
 camelid_branch: ubuntu-x86-q8-f23-plus-qkv-consumers
 
@@ -402,7 +402,7 @@ cargo test ubuntu_experimental_validated_gates_select_rust_avx2_q8_path --lib
 result: all passed locally; hardlink warning only from external target cache.
 
 ## Canonical Ubuntu x86_64 host gate
-host: ssh -i <operator-key> ubuntu@<validation-host>
+host: SSH to the canonical validation host
 remote_workdir: <ubuntu-workdir>/camelid-attn-qkv-packed-rows4-matmul-20260517T1013Z
 uname: Linux <validation-host> 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 rustc: rustc 1.95.0 (59807616e 2026-04-14) via ~/.cargo/bin/rustc

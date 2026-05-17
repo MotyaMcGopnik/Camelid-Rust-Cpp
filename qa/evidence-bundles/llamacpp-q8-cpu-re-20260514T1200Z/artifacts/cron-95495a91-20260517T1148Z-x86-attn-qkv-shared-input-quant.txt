@@ -19,7 +19,7 @@ Scope: Ubuntu x86_64 dense Llama Q8_0 only; no Mac/Apple Silicon/Metal/Mixtral e
 - cargo test ubuntu_experimental_validated_gates_select_rust_avx2_q8_path --lib: 1 passed
 
 ## Canonical Ubuntu x86_64 validation
-- Host: ssh -i <operator-key> ubuntu@<validation-host>
+- Host: SSH to the canonical validation host
 - Workdir: <ubuntu-workdir>/camelid-q8-qkv-shared-input-20260517T1148Z
 - rustc 1.95.0 (59807616e 2026-04-14), cargo 1.95.0 (f2d3ce0bd 2026-03-21)
 - cargo fmt --all -- --check: passed

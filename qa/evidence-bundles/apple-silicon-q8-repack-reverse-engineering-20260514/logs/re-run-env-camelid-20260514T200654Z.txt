@@ -6,7 +6,7 @@
 ?? qa/evidence-bundles/apple-silicon-q8-repack-reverse-engineering-20260514/
 
 # Host
-Darwin tims-mac-mini.lan 25.5.0 Darwin Kernel Version 25.5.0: Tue Apr 14 21:52:36 PDT 2026; root:xnu-12377.120.99.0.7~25/RELEASE_ARM64_T8132 arm64
+Darwin tims-mac-mini.lan 25.5.0 Darwin Kernel Version 25.5.0: Tue Apr 14 21:52:36 PDT 2026; root:xnu-redacted-build~25/RELEASE_ARM64_T8132 arm64
 ProductName:		macOS
 ProductVersion:		26.5
 BuildVersion:		25F5058e

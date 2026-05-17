@@ -16,7 +16,7 @@ Implementation files/functions:
 
 llama.cpp/Camelid grep evidence commands run:
 - git grep -n "q8_0\|Q8_0\|tinyBLAS\|ggml_vec_dot_q8_0_q8_0\|repack\|MUL_MAT\|scheduling\|OpenMP\|AVX2\|AVX512\|VNNI" -- src docs qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z
-- git -C /Users/timtoole/.openclaw/workspace/projects/llama.cpp grep -n "q8_0\|Q8_0\|tinyBLAS\|ggml_vec_dot_q8_0_q8_0\|repack\|MUL_MAT\|scheduling\|OpenMP\|AVX2\|AVX512\|VNNI" -- ggml src include
+- git -C <local-llama.cpp-worktree> grep -n "q8_0\|Q8_0\|tinyBLAS\|ggml_vec_dot_q8_0_q8_0\|repack\|MUL_MAT\|scheduling\|OpenMP\|AVX2\|AVX512\|VNNI" -- ggml src include
 - git grep -n "FFN_GATE_UP_PACKED_ROWS4_MATMUL\|ffn_gate_up_packed_rows4_matmul\|q8_0_quantized_matmul_input_rows\|q8_0_packed_rows4_matmul_projection_from_quantized" -- src docs
 
 Selected source evidence:

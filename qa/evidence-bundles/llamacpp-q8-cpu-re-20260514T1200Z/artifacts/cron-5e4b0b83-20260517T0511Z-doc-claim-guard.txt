@@ -28,7 +28,7 @@ Guardrails preserved:
 - Matrix-level Q8 GEMM/MUL_MAT remains directional until fresh Ubuntu x86_64 evidence proves a concrete default-off flag/path.
 
 Verification commands run:
-- grep -RInE 'CAMELID_X86_Q8_(REPACK_TENSORS|PACKED_TILE16|PACKED_TILE16_SERIAL_OWNER)|avx2_scaled_rowdot|CAMELID_X86_Q8_GEMM=|ssh -i /Users|ubuntu@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' docs/performance/ubuntu-x86-q8.md docs/CONFIGURATION.md qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/README.md
+- grep -RInE 'CAMELID_X86_Q8_(REPACK_TENSORS|PACKED_TILE16|PACKED_TILE16_SERIAL_OWNER)|avx2_scaled_rowdot|CAMELID_X86_Q8_GEMM=|canonical-ssh-pattern|ubuntu@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' docs/performance/ubuntu-x86-q8.md docs/CONFIGURATION.md qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/README.md
 
 Verification result:
 - Only the historical doc-guard note listing removed stale flags remains; no active reproduction command, current recommendation, or raw operator SSH/IP detail matched.

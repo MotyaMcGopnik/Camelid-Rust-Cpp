@@ -3,7 +3,7 @@
 host=ubuntu@<validation-host>
 scratch=<ubuntu-workdir>/camelid-output-decode-owner-20260515T193322Z
 cargo=cargo 1.87.0 (99624be96 2025-05-06)
-kernel=Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+kernel=Linux canonical-private-ubuntu-validation-host 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 cpu=Intel(R) Xeon(R) Platinum 8488C, 16 vCPUs, flags include avx2/avx512/avx_vnni/avx512_vnni/amx_int8
 
 Commands run:

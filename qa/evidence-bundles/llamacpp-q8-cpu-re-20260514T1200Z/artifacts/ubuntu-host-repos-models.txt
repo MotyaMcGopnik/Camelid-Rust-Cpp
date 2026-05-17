@@ -1,6 +1,6 @@
 host
-ip-172-31-19-175
-Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+canonical-private-ubuntu-validation-host
+Linux canonical-private-ubuntu-validation-host 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 Architecture:                            x86_64
 CPU op-mode(s):                          32-bit, 64-bit
 Address sizes:                           46 bits physical, 48 bits virtual

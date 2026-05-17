@@ -1,6 +1,6 @@
 2026-05-14T12:42:03+00:00
-ip-172-31-19-175
-Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+canonical-private-ubuntu-validation-host
+Linux canonical-private-ubuntu-validation-host 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 head=61e6e972a294
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/root       193G  106G   88G  55% /

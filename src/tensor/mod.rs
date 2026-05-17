@@ -294,9 +294,10 @@ fn q8_repack_tensor_enabled(name: &str) -> bool {
 }
 
 fn q8_repack_mac_tensor_enabled(name: &str) -> bool {
-    name.ends_with(".attn_q.weight")
+    q8_repack_attention_tensor_enabled(name)
         || name.ends_with(".ffn_gate.weight")
         || name.ends_with(".ffn_up.weight")
+        || name.ends_with(".ffn_down.weight")
 }
 
 fn q8_repack_x86_tensor_enabled(name: &str) -> bool {

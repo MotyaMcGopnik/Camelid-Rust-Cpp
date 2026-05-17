@@ -7,8 +7,8 @@ canonical_host=ssh [identity omitted] <operator-key-path> ubuntu@<validation-hos
 ?? qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-0719640b-20260514T2249Z-verification.txt
 --- canonical host recheck and x86 q8 tests ---
 2026-05-14T22:48:45Z
-ip-172-31-19-175
-Linux ip-172-31-19-175 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+canonical-private-ubuntu-validation-host
+Linux canonical-private-ubuntu-validation-host 6.17.0-1013-aws #13~24.04.1-Ubuntu SMP Fri Apr 24 21:50:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 Architecture:                            x86_64
 CPU(s):                                  16
 On-line CPU(s) list:                     0-15

@@ -21,7 +21,7 @@ This avoids the failed duplicate packed-copy sidecar direction: it consumes exis
 
 ## llama.cpp inspection summary
 
-Commands used from `/Users/timtoole/.openclaw/workspace/projects/llama.cpp`:
+Commands used from `<local-llama.cpp-worktree>`:
 
 ```bash
 git grep -n 'ggml_vec_dot_q8_0_q8_0' -- .
@@ -77,7 +77,7 @@ src/execution_plan.rs:355:        "CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_
 
 ## Local validation
 
-From `/Users/timtoole/.openclaw/workspace/projects/Camelid`:
+From `<local-camelid-worktree>`:
 
 ```bash
 cargo fmt --all

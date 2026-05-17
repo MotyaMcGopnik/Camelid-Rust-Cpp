@@ -69,6 +69,9 @@ Current public takeaways:
 - Rejected Ubuntu x86 Q8 candidates are being documented instead of hidden; no claimed win is retained unless it survives repeated confirmation with checksum/text preservation on a clean host.
 - The cold/warm split is now explicit in the evidence: `from_q8_0_bytes` is a cold/reload materialization cost on this lane, not the warm decode bottleneck.
 - The active warm-path direction has shifted from leaf row-dot tuning toward matrix-level Q8 GEMM/MUL_MAT ownership, starting with deeper FFN ownership slices.
+- Latest local-only follow-on work tightened default-off paired/triplet helpers and one-row packed-runtime decode output-group traversal so related projections reuse shared quantized inputs and wide rows4 decode projections can schedule independent output groups while consuming backend-owned packed runtime storage; Ubuntu x86_64 timing/profiling proof is still pending, so no measured-effect or support claim is added from those tweaks.
+- Latest bounded output-slice work added a default-off multi-row `output.weight` PackedRows4 matmul consumer (`CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL`) that consumes backend-owned runtime storage only and is managed off by ExecutionPlan; local parity/gate tests pass, but Ubuntu x86_64 timing/profiling is blocked by validation-host SSH timeout, so no retained measured-effect or support claim is added.
+- Latest local-only packed-rows4 matmul follow-ons chunk parallel output-group traversal and reuse bounded quantized-input scratch for existing single, paired, and triplet multi-row helpers; they keep I8/matching-layout/backend-owned-storage guards and have local fmt/clippy/unit/timing-smoke coverage only, with Ubuntu x86_64 timing/profiling still blocked.
 
 Boundaries that remain in force:
 

@@ -437,7 +437,7 @@ $ cargo test ubuntu_experimental_validated_gates_select_rust_avx2_q8_path --lib
 result: 1 passed; 0 failed
 
 === Canonical Ubuntu x86_64 validation ===
-host: ssh -i <operator-key> ubuntu@<validation-host>
+host: SSH to the canonical validation host
 remote workdir: <ubuntu-workdir>/camelid-x86-q8-attn-output-consumer-20260517T0503Z
 toolchain: ~/.cargo/bin rustc 1.95.0, cargo 1.95.0
 commands:
