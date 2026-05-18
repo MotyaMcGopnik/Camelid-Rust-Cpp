@@ -677,8 +677,12 @@ struct Q8RuntimeFlags {
     output_packed_rows4_matmul: bool,
     ffn_gate_up_decode_consumer: bool,
     ffn_gate_up_packed_rows4_matmul: bool,
+    ffn_gate_up_single_owner: bool,
     ffn_down_decode_consumer: bool,
     ffn_down_packed_rows4_matmul: bool,
+    ffn_down_gemm4_prefill: bool,
+    ffn_down_gemm4_row_group_schedule: bool,
+    ffn_down_single_owner: bool,
     metal: bool,
     metal_retained: bool,
     hybrid_retained: bool,
@@ -732,11 +736,23 @@ impl Q8RuntimeFlags {
             ffn_gate_up_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
                 "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
             ),
+            ffn_gate_up_single_owner: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_GATE_UP_SINGLE_OWNER",
+            ),
             ffn_down_decode_consumer: q8_0_env_flag_enabled_default_off(
                 "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
             ),
             ffn_down_packed_rows4_matmul: q8_0_env_flag_enabled_default_off(
                 "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
+            ),
+            ffn_down_gemm4_prefill: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL",
+            ),
+            ffn_down_gemm4_row_group_schedule: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED",
+            ),
+            ffn_down_single_owner: q8_0_env_flag_enabled_default_off(
+                "CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER",
             ),
             metal: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8"),
             metal_retained: q8_0_env_flag_enabled_default_off("CAMELID_METAL_Q8_RETAINED"),
@@ -4015,34 +4031,60 @@ fn forward_prefill_layer_chunk_timed(
     }
     trace_chunk_memory("attention_norm_done");
 
-    let started = Instant::now();
-    let q = linear_runtime(
-        &attn_norm,
-        &layer.attention_q,
-        format!("layer_{layer_idx}_prefill_attention_q"),
-        false,
-    )?;
-    timings.attention_q = started.elapsed().as_micros();
+    let qkv_started = Instant::now();
+    let shared_qkv = if x86_q8_attention_qkv_prefill_consumer_enabled() {
+        let runtime_plan = ResolvedRuntimePlan::from_env()?;
+        try_x86_q8_attention_qkv_packed_rows4_matmul_path(
+            &attn_norm,
+            &layer.attention_q,
+            &layer.attention_k,
+            &layer.attention_v,
+            &runtime_plan,
+        )?
+    } else {
+        None
+    };
 
-    let started = Instant::now();
-    let k = linear_for_role_runtime(
-        &attn_norm,
-        &layer.attention_k,
-        format!("layer_{layer_idx}_prefill_attention_k"),
-        "attention_k",
-        false,
-    )?;
-    timings.attention_k = started.elapsed().as_micros();
+    let (q, k, v, shared_qkv_elapsed) = if let Some((q, k, v)) = shared_qkv {
+        let elapsed = qkv_started.elapsed().as_micros();
+        (q, k, v, Some(elapsed))
+    } else {
+        let started = Instant::now();
+        let q = linear_runtime(
+            &attn_norm,
+            &layer.attention_q,
+            format!("layer_{layer_idx}_prefill_attention_q"),
+            false,
+        )?;
+        timings.attention_q = started.elapsed().as_micros();
 
-    let started = Instant::now();
-    let v = linear_for_role_runtime(
-        &attn_norm,
-        &layer.attention_v,
-        format!("layer_{layer_idx}_prefill_attention_v"),
-        "attention_v",
-        false,
-    )?;
-    timings.attention_v = started.elapsed().as_micros();
+        let started = Instant::now();
+        let k = linear_for_role_runtime(
+            &attn_norm,
+            &layer.attention_k,
+            format!("layer_{layer_idx}_prefill_attention_k"),
+            "attention_k",
+            false,
+        )?;
+        timings.attention_k = started.elapsed().as_micros();
+
+        let started = Instant::now();
+        let v = linear_for_role_runtime(
+            &attn_norm,
+            &layer.attention_v,
+            format!("layer_{layer_idx}_prefill_attention_v"),
+            "attention_v",
+            false,
+        )?;
+        timings.attention_v = started.elapsed().as_micros();
+        (q, k, v, None)
+    };
+    if let Some(total_elapsed) = shared_qkv_elapsed {
+        let base = total_elapsed / 3;
+        timings.attention_q = base;
+        timings.attention_k = base;
+        timings.attention_v = total_elapsed - (base * 2);
+    }
     if let Some(memory) = &mut memory {
         memory.record_after_attention_q(capture_memory_sample(kv_cache));
     }
@@ -4720,6 +4762,24 @@ fn linear_for_role_runtime_with_plan(
             return Ok(output);
         }
         if let Some(output) = try_x86_q8_attention_projection_decode_consumer_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
+            return Ok(output);
+        }
+        if let Some(output) = try_x86_q8_ffn_down_gemm4_prefill_path(
+            input,
+            weight,
+            &name,
+            rectangular_role,
+            runtime_plan,
+        )? {
+            return Ok(output);
+        }
+        if let Some(output) = try_x86_q8_ffn_down_single_owner_path(
             input,
             weight,
             &name,
@@ -6106,6 +6166,7 @@ fn gated_ffn_activation_with_plan(
     runtime_plan: &ResolvedRuntimePlan,
     collect_diagnostics: bool,
 ) -> Result<GatedFfnActivation> {
+    let name = name.into();
     let rows = input.dim(0)?;
     if input.rank() != 2 || rows != 1 {
         return Err(BackendError::RuntimeShapeMismatch(format!(
@@ -6120,6 +6181,18 @@ fn gated_ffn_activation_with_plan(
         return Err(BackendError::RuntimeShapeMismatch(format!(
             "gated FFN gate/up width mismatch: gate output {gate_width}, up output {up_width}"
         )));
+    }
+
+    if !collect_diagnostics {
+        if let Some(activated) = try_x86_q8_ffn_gate_up_single_owner_path(
+            input,
+            gate_weight,
+            up_weight,
+            &name,
+            runtime_plan,
+        )? {
+            return Ok(activated);
+        }
     }
 
     let input_row = &input.data[..input_width];
@@ -6361,6 +6434,15 @@ fn gated_ffn_activation_batch(
     }
 
     let runtime_plan = ResolvedRuntimePlan::from_env()?;
+    if let Some(activated) = try_x86_q8_ffn_gate_up_single_owner_path(
+        input,
+        gate_weight,
+        up_weight,
+        &name,
+        &runtime_plan,
+    )? {
+        return Ok(activated);
+    }
     if let Some(activated) = try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
         input,
         gate_weight,
@@ -6410,6 +6492,82 @@ fn gated_ffn_activation_batch(
         up_diagnostic: None,
         activation_diagnostic: None,
     })
+}
+
+fn try_x86_q8_ffn_gate_up_single_owner_path(
+    input: &CpuTensor,
+    gate_weight: &CpuTensor,
+    up_weight: &CpuTensor,
+    name: impl Into<String>,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<GatedFfnActivation>> {
+    if !runtime_plan.q8.ffn_gate_up_single_owner || input.rank() != 2 {
+        return Ok(None);
+    }
+    let name = name.into();
+    let rows = input.dim(0)?;
+    if rows == 0 {
+        return Ok(None);
+    }
+
+    if rows > 1 {
+        let mut matmul_plan = *runtime_plan;
+        matmul_plan.q8.ffn_gate_up_packed_rows4_matmul = true;
+        return try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+            input,
+            gate_weight,
+            up_weight,
+            &name,
+            &matmul_plan,
+        );
+    }
+
+    let input_width = input.dim(1)?;
+    let gate_width = linear_output_width(input, gate_weight, "ffn gate")?;
+    let up_width = linear_output_width(input, up_weight, "ffn up")?;
+    if gate_width != up_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "gated FFN gate/up width mismatch: gate output {gate_width}, up output {up_width}"
+        )));
+    }
+
+    let mut gate = vec![0.0; gate_width];
+    let mut up = vec![0.0; up_width];
+    let mut decode_plan = *runtime_plan;
+    decode_plan.q8.ffn_gate_up_decode_consumer = true;
+    let Some((gate_elapsed, up_elapsed)) = try_x86_q8_ffn_gate_up_decode_consumer_path(
+        input,
+        gate_weight,
+        up_weight,
+        &mut gate,
+        &mut up,
+        &decode_plan,
+    )?
+    else {
+        let _ = input_width;
+        return Ok(None);
+    };
+
+    let order = diagnostic_ffn_gate_up_order()?;
+    let activation_started = Instant::now();
+    for (gate_value, up_value) in gate.iter_mut().zip(up) {
+        *gate_value = match order {
+            FfnGateUpOrder::GateUp => (*gate_value / (1.0 + (-*gate_value).exp())) * up_value,
+            FfnGateUpOrder::UpGate => (up_value / (1.0 + (-up_value).exp())) * *gate_value,
+        };
+    }
+
+    Ok(Some(GatedFfnActivation {
+        tensor: CpuTensor::from_f32(name, vec![1, gate_width], gate)?,
+        gate: gate_elapsed,
+        up: up_elapsed,
+        activation: activation_started.elapsed().as_micros(),
+        gate_stats: None,
+        up_stats: None,
+        gate_diagnostic: None,
+        up_diagnostic: None,
+        activation_diagnostic: None,
+    }))
 }
 
 fn try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
@@ -7425,6 +7583,20 @@ fn try_x86_q8_output_decode_owner_path(
         .map(Some)
 }
 
+fn x86_q8_attention_qkv_prefill_consumer_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER")
+        })
+    }
+}
+
 fn try_x86_q8_attention_qkv_decode_consumer_path(
     input: &CpuTensor,
     q_weight: &CpuTensor,
@@ -7609,8 +7781,13 @@ fn q8_0_packed_rows4_single_input_projection(
     CpuTensor::from_f32(name, vec![1, output_width], output)
 }
 
+fn x86_q8_packed_rows4_serial_decode_enabled() -> bool {
+    q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE")
+}
+
 fn should_parallelize_x86_q8_packed_rows4_decode_output(output_width: usize) -> bool {
-    output_width >= X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS
+    !x86_q8_packed_rows4_serial_decode_enabled()
+        && output_width >= X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS
         && rayon::current_num_threads() > 1
 }
 
@@ -7636,11 +7813,11 @@ fn q8_0_packed_rows4_single_input_projection_into(
         )));
     }
 
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled();
     let compute_group = |group_idx: usize, output_chunk: &mut [f32]| {
         let group_start = group_idx * blocks_per_row;
         let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
-        let sums =
-            q8_0_packed_rows4_dot(group_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+        let sums = q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_input, use_hoisted_avx2);
         output_chunk.copy_from_slice(&sums);
     };
 
@@ -7693,14 +7870,15 @@ fn q8_0_packed_rows4_single_input_projection_pair_into(
         )));
     }
 
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled();
     let compute_group = |group_idx: usize, left_chunk: &mut [f32], right_chunk: &mut [f32]| {
         let group_start = group_idx * blocks_per_row;
         let left_blocks = &left_packed.blocks[group_start..group_start + blocks_per_row];
         let right_blocks = &right_packed.blocks[group_start..group_start + blocks_per_row];
         let left_sums =
-            q8_0_packed_rows4_dot(left_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+            q8_0_packed_rows4_dot_i8_matmul(left_blocks, quantized_input, use_hoisted_avx2);
         let right_sums =
-            q8_0_packed_rows4_dot(right_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+            q8_0_packed_rows4_dot_i8_matmul(right_blocks, quantized_input, use_hoisted_avx2);
         left_chunk.copy_from_slice(&left_sums);
         right_chunk.copy_from_slice(&right_sums);
     };
@@ -7769,6 +7947,7 @@ fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
     let mut q_output = vec![0.0_f32; q_width];
     let mut k_output = vec![0.0_f32; k_width];
     let mut v_output = vec![0.0_f32; v_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled();
 
     if q_width == k_width
         && q_width == v_width
@@ -7782,20 +7961,20 @@ fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
             .enumerate()
             .for_each(|(group_idx, ((q_chunk, k_chunk), v_chunk))| {
                 let group_start = group_idx * blocks_per_row;
-                q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                q_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &q_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_input,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
-                k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                k_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &k_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_input,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
-                v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                v_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &v_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_input,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             });
     } else if q_width == k_width && q_width == v_width {
@@ -7806,45 +7985,45 @@ fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
             .enumerate()
         {
             let group_start = group_idx * blocks_per_row;
-            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &q_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
-            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &k_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
-            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &v_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
     } else {
         for (group_idx, q_chunk) in q_output.chunks_exact_mut(4).enumerate().take(q_groups) {
             let group_start = group_idx * blocks_per_row;
-            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &q_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
         for (group_idx, k_chunk) in k_output.chunks_exact_mut(4).enumerate().take(k_groups) {
             let group_start = group_idx * blocks_per_row;
-            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &k_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
         for (group_idx, v_chunk) in v_output.chunks_exact_mut(4).enumerate().take(v_groups) {
             let group_start = group_idx * blocks_per_row;
-            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &v_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
     }
@@ -7899,10 +8078,46 @@ fn should_parallelize_q8_packed_rows4_matmul(total_output_groups: usize) -> bool
         && rayon::current_num_threads() > 1
 }
 
+fn x86_q8_packed_rows4_matmul_groups_per_chunk() -> usize {
+    #[cfg(test)]
+    {
+        env::var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK)
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_MATMUL_CHUNK_GROUPS: OnceLock<usize> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_MATMUL_CHUNK_GROUPS.get_or_init(|| {
+            env::var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK)
+        })
+    }
+}
+
 fn q8_packed_rows4_matmul_parallel_chunk_floats(total_output_groups: usize) -> usize {
     let groups_per_chunk =
-        total_output_groups.clamp(1, X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK);
+        total_output_groups.clamp(1, x86_q8_packed_rows4_matmul_groups_per_chunk());
     groups_per_chunk * 4
+}
+
+fn x86_q8_parallel_matmul_input_quantize_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PARALLEL_INPUT_QUANTIZE: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_PARALLEL_INPUT_QUANTIZE.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE")
+        })
+    }
 }
 
 #[cfg(test)]
@@ -7943,8 +8158,30 @@ fn q8_0_fill_quantized_matmul_input_rows(
 
     quantized_inputs.clear();
     quantized_inputs.reserve(rows * blocks_per_row);
-    for row in input.data.chunks_exact(input_width) {
-        quantize_q8_0_blocks_into(row, quantized_inputs);
+    if x86_q8_parallel_matmul_input_quantize_enabled()
+        && rows >= 8
+        && rayon::current_num_threads() > 1
+    {
+        let rows_per_chunk = rows.clamp(1, 8);
+        let floats_per_chunk = rows_per_chunk * input_width;
+        let quantized_chunks: Vec<Vec<Q8_0Block>> = input
+            .data
+            .par_chunks(floats_per_chunk)
+            .map(|input_rows| {
+                let mut local_blocks = Vec::with_capacity(input_rows.len() / Q8_0_BLOCK_VALUES);
+                for row in input_rows.chunks_exact(input_width) {
+                    quantize_q8_0_blocks_into(row, &mut local_blocks);
+                }
+                local_blocks
+            })
+            .collect();
+        for chunk in quantized_chunks {
+            quantized_inputs.extend(chunk);
+        }
+    } else {
+        for row in input.data.chunks_exact(input_width) {
+            quantize_q8_0_blocks_into(row, quantized_inputs);
+        }
     }
     Ok(rows)
 }
@@ -7979,6 +8216,7 @@ fn q8_0_packed_rows4_matmul_projection_from_quantized(
     let output_groups_per_row = q8_0_packed_rows4_output_groups(output_width, "matmul projection")?;
     let total_output_groups = rows * output_groups_per_row;
     let mut output = vec![0.0_f32; rows * output_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_hoist_enabled();
     if should_parallelize_q8_packed_rows4_matmul(total_output_groups) {
         let chunk_floats = q8_packed_rows4_matmul_parallel_chunk_floats(total_output_groups);
         output
@@ -7994,10 +8232,10 @@ fn q8_0_packed_rows4_matmul_projection_from_quantized(
                     let input_start = row_idx * blocks_per_row;
                     let group_start = group_idx * blocks_per_row;
                     let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
-                    let sums = q8_0_packed_rows4_dot(
+                    let sums = q8_0_packed_rows4_dot_i8_matmul(
                         group_blocks,
                         &quantized_inputs[input_start..input_start + blocks_per_row],
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     );
                     output_group.copy_from_slice(&sums);
                 }
@@ -8013,14 +8251,204 @@ fn q8_0_packed_rows4_matmul_projection_from_quantized(
             {
                 let group_start = group_idx * blocks_per_row;
                 let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(
-                    group_blocks,
-                    quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
-                );
+                let sums =
+                    q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_row, use_hoisted_avx2);
                 output_chunk.copy_from_slice(&sums);
             }
         }
+    }
+
+    CpuTensor::from_f32(name, vec![rows, output_width], output)
+}
+
+fn q8_0_packed_rows4_gemm4_block_scalar(
+    input_block: &Q8_0PackedRows4Block,
+    weight_block: &Q8_0PackedRows4Block,
+) -> [[i32; 4]; 4] {
+    let mut sums = [[0_i32; 4]; 4];
+    for chunk in 0..4 {
+        for k in 0..8 {
+            for (input_lane, row_sums) in sums.iter_mut().enumerate() {
+                let input = input_block.quants[chunk * 32 + input_lane * 8 + k] as i32;
+                for (output_lane, sum) in row_sums.iter_mut().enumerate() {
+                    let weight = weight_block.quants[chunk * 32 + output_lane * 8 + k] as i32;
+                    *sum += input * weight;
+                }
+            }
+        }
+    }
+    sums
+}
+
+fn run_q8_0_packed_rows4_prefill_gemm4_kernel_row_group_parallel(
+    packed_weight: &Q8_0PackedRows4,
+    packed_inputs: &[Q8_0PackedRows4Block],
+    input_groups: usize,
+    output: &mut [f32],
+) {
+    let rows = packed_weight.rows;
+    let blocks_per_row = packed_weight.blocks_per_row;
+    debug_assert_eq!(packed_inputs.len(), input_groups * blocks_per_row);
+    output
+        .par_chunks_mut(4 * rows)
+        .take(input_groups)
+        .enumerate()
+        .for_each(|(input_group, group_output)| {
+            let input_blocks =
+                &packed_inputs[input_group * blocks_per_row..(input_group + 1) * blocks_per_row];
+            let (row0, rest) = group_output.split_at_mut(rows);
+            let (row1, rest) = rest.split_at_mut(rows);
+            let (row2, row3) = rest.split_at_mut(rows);
+            for output_group in 0..rows / 4 {
+                let weight_group = &packed_weight.blocks
+                    [output_group * blocks_per_row..(output_group + 1) * blocks_per_row];
+                let mut sums = [[0.0_f32; 4]; 4];
+                for (input_block, weight_block) in input_blocks.iter().zip(weight_group) {
+                    let int_sums = q8_0_packed_rows4_gemm4_block_scalar(input_block, weight_block);
+                    for input_lane in 0..4 {
+                        for output_lane in 0..4 {
+                            sums[input_lane][output_lane] += int_sums[input_lane][output_lane]
+                                as f32
+                                * weight_block.scales[output_lane]
+                                * input_block.scales[input_lane];
+                        }
+                    }
+                }
+                let start = output_group * 4;
+                row0[start..start + 4].copy_from_slice(&sums[0]);
+                row1[start..start + 4].copy_from_slice(&sums[1]);
+                row2[start..start + 4].copy_from_slice(&sums[2]);
+                row3[start..start + 4].copy_from_slice(&sums[3]);
+            }
+        });
+}
+
+fn run_q8_0_packed_rows4_prefill_gemm4_kernel(
+    packed_weight: &Q8_0PackedRows4,
+    packed_inputs: &[Q8_0PackedRows4Block],
+    input_groups: usize,
+    output: &mut [f32],
+) {
+    let rows = packed_weight.rows;
+    let blocks_per_row = packed_weight.blocks_per_row;
+    debug_assert_eq!(packed_inputs.len(), input_groups * blocks_per_row);
+    for input_group in 0..input_groups {
+        let input_blocks =
+            &packed_inputs[input_group * blocks_per_row..(input_group + 1) * blocks_per_row];
+        let group_output = &mut output[input_group * 4 * rows..(input_group + 1) * 4 * rows];
+        let (row0, rest) = group_output.split_at_mut(rows);
+        let (row1, rest) = rest.split_at_mut(rows);
+        let (row2, row3) = rest.split_at_mut(rows);
+        row0.par_chunks_mut(4)
+            .zip(row1.par_chunks_mut(4))
+            .zip(row2.par_chunks_mut(4))
+            .zip(row3.par_chunks_mut(4))
+            .enumerate()
+            .for_each(
+                |(output_group, (((row0_chunk, row1_chunk), row2_chunk), row3_chunk))| {
+                    let weight_group = &packed_weight.blocks
+                        [output_group * blocks_per_row..(output_group + 1) * blocks_per_row];
+                    let mut sums = [[0.0_f32; 4]; 4];
+                    for (input_block, weight_block) in input_blocks.iter().zip(weight_group) {
+                        let int_sums =
+                            q8_0_packed_rows4_gemm4_block_scalar(input_block, weight_block);
+                        for input_lane in 0..4 {
+                            for output_lane in 0..4 {
+                                sums[input_lane][output_lane] += int_sums[input_lane][output_lane]
+                                    as f32
+                                    * weight_block.scales[output_lane]
+                                    * input_block.scales[input_lane];
+                            }
+                        }
+                    }
+                    row0_chunk.copy_from_slice(&sums[0]);
+                    row1_chunk.copy_from_slice(&sums[1]);
+                    row2_chunk.copy_from_slice(&sums[2]);
+                    row3_chunk.copy_from_slice(&sums[3]);
+                },
+            );
+    }
+}
+
+fn q8_0_packed_rows4_gemm4_projection_with_row_group_schedule(
+    input: &CpuTensor,
+    packed: &Q8_0PackedRows4,
+    output_width: usize,
+    name: &str,
+    row_group_schedule: bool,
+) -> Result<CpuTensor> {
+    let rows = input.dim(0)?;
+    let input_width = input.dim(1)?;
+    let blocks_per_row = input_width / Q8_0_BLOCK_VALUES;
+    if blocks_per_row != packed.blocks_per_row {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 gemm4 expected {} input blocks per row, got {blocks_per_row}",
+            packed.blocks_per_row
+        )));
+    }
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 || packed.rows != output_width {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "Q8_0 packed rows4 gemm4 requires matching I8 packed output, got interleave {:?}, packed rows {}, output {}",
+            packed.interleave, packed.rows, output_width
+        )));
+    }
+    q8_0_packed_rows4_output_groups(output_width, "gemm4 projection")?;
+
+    let packed_rows = rows / 4 * 4;
+    if packed_rows == 0 {
+        return q8_0_packed_rows4_matmul_projection(input, packed, output_width, name);
+    }
+
+    let mut output = vec![0.0_f32; rows * output_width];
+    Q8_0_PREFILL_PACKED_INPUTS.with(|cell| {
+        let mut packed_inputs = cell.borrow_mut();
+        packed_inputs.clear();
+        quantize_pack_q8_0_rows4_i8_direct_into(
+            &input.data[..packed_rows * input_width],
+            packed_rows,
+            input_width,
+            blocks_per_row,
+            &mut packed_inputs,
+        );
+        if row_group_schedule {
+            run_q8_0_packed_rows4_prefill_gemm4_kernel_row_group_parallel(
+                packed,
+                &packed_inputs,
+                packed_rows / 4,
+                &mut output,
+            );
+        } else {
+            run_q8_0_packed_rows4_prefill_gemm4_kernel(
+                packed,
+                &packed_inputs,
+                packed_rows / 4,
+                &mut output,
+            );
+        }
+        packed_inputs.clear();
+        cap_q8_0_file_reader_scratch(&mut packed_inputs, 0);
+    });
+
+    let tail_rows = rows - packed_rows;
+    if tail_rows > 0 {
+        with_q8_0_file_reader_quantized_inputs(|quantized_inputs| {
+            quantized_inputs.clear();
+            quantized_inputs.reserve(tail_rows * blocks_per_row);
+            for row in input.data[packed_rows * input_width..].chunks_exact(input_width) {
+                quantize_q8_0_blocks_into(row, quantized_inputs);
+            }
+            for tail_row in 0..tail_rows {
+                let input_start = tail_row * blocks_per_row;
+                let output_start = (packed_rows + tail_row) * output_width;
+                accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                    &quantized_inputs[input_start..input_start + blocks_per_row],
+                    packed,
+                    Q8_0PackedRows4Interleave::I8,
+                    &mut output[output_start..output_start + output_width],
+                );
+            }
+            Ok(())
+        })?;
     }
 
     CpuTensor::from_f32(name, vec![rows, output_width], output)
@@ -8075,6 +8503,7 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
         q8_0_packed_rows4_output_groups(right_output_width, "pair matmul right projection")?;
     let mut left_output = vec![0.0_f32; rows * left_output_width];
     let mut right_output = vec![0.0_f32; rows * right_output_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_hoist_enabled();
 
     let total_left_output_groups = rows * left_output_groups_per_row;
     if left_output_width == right_output_width
@@ -8103,15 +8532,15 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
                         &left_packed.blocks[group_start..group_start + blocks_per_row];
                     let right_blocks =
                         &right_packed.blocks[group_start..group_start + blocks_per_row];
-                    let left_sums = q8_0_packed_rows4_dot(
+                    let left_sums = q8_0_packed_rows4_dot_i8_matmul(
                         left_blocks,
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     );
-                    let right_sums = q8_0_packed_rows4_dot(
+                    let right_sums = q8_0_packed_rows4_dot_i8_matmul(
                         right_blocks,
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     );
                     left_group.copy_from_slice(&left_sums);
                     right_group.copy_from_slice(&right_sums);
@@ -8129,11 +8558,8 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
             {
                 let group_start = group_idx * blocks_per_row;
                 let group_blocks = &left_packed.blocks[group_start..group_start + blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(
-                    group_blocks,
-                    quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
-                );
+                let sums =
+                    q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_row, use_hoisted_avx2);
                 output_chunk.copy_from_slice(&sums);
             }
             let right_output_start = row_idx * right_output_width;
@@ -8144,11 +8570,8 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
             {
                 let group_start = group_idx * blocks_per_row;
                 let group_blocks = &right_packed.blocks[group_start..group_start + blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(
-                    group_blocks,
-                    quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
-                );
+                let sums =
+                    q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_row, use_hoisted_avx2);
                 output_chunk.copy_from_slice(&sums);
             }
         }
@@ -8210,6 +8633,7 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
     let mut q_output = vec![0.0_f32; rows * q_width];
     let mut k_output = vec![0.0_f32; rows * k_width];
     let mut v_output = vec![0.0_f32; rows * v_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_hoist_enabled();
 
     let total_q_output_groups = rows * q_groups_per_row;
     if q_width == k_width
@@ -8237,20 +8661,20 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                     let group_start = group_idx * blocks_per_row;
                     let quantized_row =
                         &quantized_inputs[input_start..input_start + blocks_per_row];
-                    q_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                    q_group.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                         &q_packed.blocks[group_start..group_start + blocks_per_row],
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     ));
-                    k_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                    k_group.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                         &k_packed.blocks[group_start..group_start + blocks_per_row],
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     ));
-                    v_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                    v_group.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                         &v_packed.blocks[group_start..group_start + blocks_per_row],
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     ));
                 }
             });
@@ -8265,10 +8689,10 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                 .enumerate()
             {
                 let group_start = group_idx * blocks_per_row;
-                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &q_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             }
             let k_output_start = row_idx * k_width;
@@ -8278,10 +8702,10 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                 .enumerate()
             {
                 let group_start = group_idx * blocks_per_row;
-                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &k_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             }
             let v_output_start = row_idx * v_width;
@@ -8291,10 +8715,10 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                 .enumerate()
             {
                 let group_start = group_idx * blocks_per_row;
-                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &v_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             }
         }
@@ -8475,6 +8899,84 @@ fn try_x86_q8_ffn_down_packed_rows4_matmul_path(
     }
 
     q8_0_packed_rows4_matmul_projection(input, packed, output_width, name).map(Some)
+}
+
+fn try_x86_q8_ffn_down_gemm4_prefill_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+    rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<CpuTensor>> {
+    if !runtime_plan.q8.ffn_down_gemm4_prefill
+        || rectangular_role != "ffn_down"
+        || input.rank() != 2
+        || input.dim(0)? < 4
+    {
+        return Ok(None);
+    }
+
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+
+    let Some((packed, output_width)) = q8_0_runtime_packed_projection(weight, input_width)? else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 {
+        return Ok(None);
+    }
+
+    q8_0_packed_rows4_gemm4_projection_with_row_group_schedule(
+        input,
+        packed,
+        output_width,
+        name,
+        runtime_plan.q8.ffn_down_gemm4_row_group_schedule,
+    )
+    .map(Some)
+}
+
+fn try_x86_q8_ffn_down_single_owner_path(
+    input: &CpuTensor,
+    weight: &CpuTensor,
+    name: &str,
+    rectangular_role: &str,
+    runtime_plan: &ResolvedRuntimePlan,
+) -> Result<Option<CpuTensor>> {
+    if !runtime_plan.q8.ffn_down_single_owner
+        || rectangular_role != "ffn_down"
+        || input.rank() != 2
+        || weight.rank() != 2
+    {
+        return Ok(None);
+    }
+
+    let input_width = input.dim(1)?;
+    if !input_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Ok(None);
+    }
+
+    let Some((packed, output_width)) = q8_0_runtime_packed_projection(weight, input_width)? else {
+        return Ok(None);
+    };
+    if packed.interleave != Q8_0PackedRows4Interleave::I8 {
+        return Ok(None);
+    }
+
+    if input.dim(0)? == 1 {
+        let quantized_input = quantize_q8_0_row(&input.data[..input_width]);
+        q8_0_packed_rows4_single_input_projection(
+            packed,
+            &quantized_input.blocks,
+            output_width,
+            name,
+        )
+        .map(Some)
+    } else {
+        q8_0_packed_rows4_matmul_projection(input, packed, output_width, name).map(Some)
+    }
 }
 
 fn try_x86_q8_ffn_down_decode_consumer_path(
@@ -9590,6 +10092,64 @@ fn x86_q8_kernel_avx2_enabled_from_env() -> bool {
         env::var("CAMELID_X86_Q8_KERNEL").as_deref(),
         Ok("avx2") | Ok("AVX2") | Ok("on") | Ok("ON") | Ok("1") | Ok("true") | Ok("TRUE")
     )
+}
+
+fn x86_q8_packed_rows4_avx2_dot_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_AVX2_DOT_ENABLED: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_AVX2_DOT_ENABLED.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT")
+        })
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn x86_q8_packed_rows4_avx2_dot_hoist_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST")
+            && std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST_ENABLED: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST_ENABLED.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST")
+                && std::arch::is_x86_feature_detected!("avx2")
+        })
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn x86_q8_packed_rows4_avx2_dot_hoist_enabled() -> bool {
+    false
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST")
+            && std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST_ENABLED: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST_ENABLED.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST")
+                && std::arch::is_x86_feature_detected!("avx2")
+        })
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled() -> bool {
+    false
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -10792,7 +11352,6 @@ fn matmul_rhs_transposed_q8_0_packed_rows4_prefill_i8mm(
     CpuTensor::from_f32(name, vec![rows, output_width], output)
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn quantize_pack_q8_0_rows4_i8_direct_into(
     row_major_input: &[f32],
     rows_to_pack: usize,
@@ -11074,6 +11633,42 @@ fn accumulate_q8_0_packed_rows4_f32_input(
     }
 }
 
+fn q8_0_packed_rows4_dot_i8_matmul(
+    packed_blocks: &[Q8_0PackedRows4Block],
+    input: &[Q8_0Block],
+    use_hoisted_avx2: bool,
+) -> [f32; 4] {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if use_hoisted_avx2 {
+            // SAFETY: `use_hoisted_avx2` is only true after runtime AVX2 detection.
+            return unsafe { q8_0_packed_rows4_dot_i8_avx2(packed_blocks, input) };
+        }
+    }
+    let _ = use_hoisted_avx2;
+    q8_0_packed_rows4_dot(packed_blocks, input, Q8_0PackedRows4Interleave::I8)
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn q8_0_packed_rows4_dot_i8_avx2(
+    packed_blocks: &[Q8_0PackedRows4Block],
+    input: &[Q8_0Block],
+) -> [f32; 4] {
+    debug_assert_eq!(packed_blocks.len(), input.len());
+    let mut sums = [0.0_f32; 4];
+    for (packed_block, input_block) in packed_blocks.iter().zip(input) {
+        let int_sums = unsafe {
+            q8_0_packed_4x8_block_avx2(packed_block.quants.as_ptr(), input_block.quants.as_ptr())
+        };
+        let input_scale = input_block.scale;
+        for lane in 0..4 {
+            sums[lane] += int_sums[lane] as f32 * packed_block.scales[lane] * input_scale;
+        }
+    }
+    sums
+}
+
 fn q8_0_packed_rows4_dot(
     packed_blocks: &[Q8_0PackedRows4Block],
     input: &[Q8_0Block],
@@ -11110,7 +11705,7 @@ fn q8_0_packed_rows4_dot(
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
                 if interleave == Q8_0PackedRows4Interleave::I8
-                    && x86_q8_kernel_avx2_enabled()
+                    && (x86_q8_packed_rows4_avx2_dot_enabled() || x86_q8_kernel_avx2_enabled())
                     && std::arch::is_x86_feature_detected!("avx2")
                 {
                     // SAFETY: runtime feature detection confirms AVX2 support; packed quants
@@ -11169,35 +11764,49 @@ fn q8_0_packed_rows4_block_dot_scalar(
 unsafe fn q8_0_packed_4x8_block_avx2(packed: *const i8, input: *const i8) -> [i32; 4] {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::{
-        _mm256_cvtepi8_epi16, _mm256_madd_epi16, _mm256_mullo_epi16, _mm256_set1_epi16,
-        _mm256_storeu_si256, _mm_loadl_epi64, _mm_loadu_si128, _mm_unpacklo_epi64,
+        _mm256_add_epi32, _mm256_cvtepi8_epi16, _mm256_madd_epi16, _mm256_mullo_epi16,
+        _mm256_set1_epi16, _mm256_setzero_si256, _mm256_storeu_si256, _mm_loadl_epi64,
+        _mm_loadu_si128, _mm_unpacklo_epi64,
     };
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::{
-        _mm256_cvtepi8_epi16, _mm256_madd_epi16, _mm256_mullo_epi16, _mm256_set1_epi16,
-        _mm256_storeu_si256, _mm_loadl_epi64, _mm_loadu_si128, _mm_unpacklo_epi64,
+        _mm256_add_epi32, _mm256_cvtepi8_epi16, _mm256_madd_epi16, _mm256_mullo_epi16,
+        _mm256_set1_epi16, _mm256_setzero_si256, _mm256_storeu_si256, _mm_loadl_epi64,
+        _mm_loadu_si128, _mm_unpacklo_epi64,
     };
 
     let ones = _mm256_set1_epi16(1);
-    let mut sums = [0_i32; 4];
+    let mut acc01 = _mm256_setzero_si256();
+    let mut acc23 = _mm256_setzero_si256();
     for chunk in 0..4usize {
         let chunk_packed = unsafe { packed.add(chunk * 32) };
         let input8 = unsafe { _mm_loadl_epi64(input.add(chunk * 8).cast()) };
         let input16 = _mm_unpacklo_epi64(input8, input8);
         let input_i16 = _mm256_cvtepi8_epi16(input16);
 
-        for pair in 0..2usize {
-            let packed16 = unsafe { _mm_loadu_si128(chunk_packed.add(pair * 16).cast()) };
-            let packed_i16 = _mm256_cvtepi8_epi16(packed16);
-            let products_i16 = _mm256_mullo_epi16(packed_i16, input_i16);
-            let pair_sums_i32 = _mm256_madd_epi16(products_i16, ones);
-            let mut lanes = [0_i32; 8];
-            unsafe { _mm256_storeu_si256(lanes.as_mut_ptr().cast(), pair_sums_i32) };
-            sums[pair * 2] += lanes[..4].iter().sum::<i32>();
-            sums[pair * 2 + 1] += lanes[4..].iter().sum::<i32>();
-        }
+        let packed01 = unsafe { _mm_loadu_si128(chunk_packed.cast()) };
+        let packed01_i16 = _mm256_cvtepi8_epi16(packed01);
+        let products01_i16 = _mm256_mullo_epi16(packed01_i16, input_i16);
+        acc01 = _mm256_add_epi32(acc01, _mm256_madd_epi16(products01_i16, ones));
+
+        let packed23 = unsafe { _mm_loadu_si128(chunk_packed.add(16).cast()) };
+        let packed23_i16 = _mm256_cvtepi8_epi16(packed23);
+        let products23_i16 = _mm256_mullo_epi16(packed23_i16, input_i16);
+        acc23 = _mm256_add_epi32(acc23, _mm256_madd_epi16(products23_i16, ones));
     }
-    sums
+
+    let mut lanes01 = [0_i32; 8];
+    let mut lanes23 = [0_i32; 8];
+    unsafe {
+        _mm256_storeu_si256(lanes01.as_mut_ptr().cast(), acc01);
+        _mm256_storeu_si256(lanes23.as_mut_ptr().cast(), acc23);
+    }
+    [
+        lanes01[..4].iter().sum(),
+        lanes01[4..].iter().sum(),
+        lanes23[..4].iter().sum(),
+        lanes23[4..].iter().sum(),
+    ]
 }
 
 fn accumulate_q8_0_block_dot_quantized_cpu(
@@ -12794,9 +13403,28 @@ mod tests {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
+    fn x86_q8_packed_rows4_matmul_chunk_groups_env_override() {
+        let _env_guard = env_lock();
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK");
+        assert_eq!(
+            x86_q8_packed_rows4_matmul_groups_per_chunk(),
+            X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK
+        );
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "32");
+        assert_eq!(x86_q8_packed_rows4_matmul_groups_per_chunk(), 32);
+        assert_eq!(q8_packed_rows4_matmul_parallel_chunk_floats(128), 128);
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "0");
+        assert_eq!(
+            x86_q8_packed_rows4_matmul_groups_per_chunk(),
+            X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK
+        );
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK");
+    }
+
+    #[test]
     fn x86_q8_avx2_packed_rows4_i8_matches_scalar_dot() {
         let _env_guard = env_lock();
-        std::env::set_var("CAMELID_X86_Q8_KERNEL", "avx2");
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT", "on");
         let packed = std::array::from_fn(|idx| (idx as i8).wrapping_mul(11).wrapping_sub(37));
         let input = std::array::from_fn(|idx| (idx as i8).wrapping_mul(5).wrapping_add(19));
         let expected =
@@ -12826,7 +13454,75 @@ mod tests {
                 expected[lane] as f32 * [0.25, 0.5, 0.75, 1.25][lane] * 0.125
             );
         }
-        std::env::remove_var("CAMELID_X86_Q8_KERNEL");
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT");
+    }
+
+    #[test]
+    fn x86_q8_avx2_packed_rows4_hoisted_matmul_matches_scalar_dot() {
+        let _env_guard = env_lock();
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST", "on");
+        let packed_block = Q8_0PackedRows4Block {
+            scales: [0.25, 0.5, 0.75, 1.25],
+            quants: std::array::from_fn(|idx| (idx as i8).wrapping_mul(11).wrapping_sub(37)),
+        };
+        let input_block = Q8_0Block {
+            scale: 0.125,
+            quants: std::array::from_fn(|idx| (idx as i8).wrapping_mul(5).wrapping_add(19)),
+        };
+        let expected = q8_0_packed_rows4_dot(
+            std::slice::from_ref(&packed_block),
+            std::slice::from_ref(&input_block),
+            Q8_0PackedRows4Interleave::I8,
+        );
+        let actual = q8_0_packed_rows4_dot_i8_matmul(
+            std::slice::from_ref(&packed_block),
+            std::slice::from_ref(&input_block),
+            x86_q8_packed_rows4_avx2_dot_hoist_enabled(),
+        );
+        assert_eq!(actual, expected);
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST");
+    }
+
+    #[test]
+    fn x86_q8_avx2_packed_rows4_decode_hoist_projection_matches_scalar_dot() {
+        let _env_guard = env_lock();
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST", "on");
+        let blocks_per_row = 2;
+        let packed = Q8_0PackedRows4 {
+            rows: 4,
+            blocks_per_row,
+            interleave: Q8_0PackedRows4Interleave::I8,
+            blocks: (0..blocks_per_row)
+                .map(|block_idx| Q8_0PackedRows4Block {
+                    scales: [0.25, 0.5, 0.75, 1.25],
+                    quants: std::array::from_fn(|idx| {
+                        (idx as i8)
+                            .wrapping_mul(3)
+                            .wrapping_add((block_idx as i8).wrapping_mul(17))
+                    }),
+                })
+                .collect(),
+        };
+        let quantized_input: Vec<Q8_0Block> = (0..blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.125,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8)
+                        .wrapping_mul(5)
+                        .wrapping_sub((block_idx as i8).wrapping_mul(13))
+                }),
+            })
+            .collect();
+        let expected = q8_0_packed_rows4_dot(
+            &packed.blocks,
+            &quantized_input,
+            Q8_0PackedRows4Interleave::I8,
+        );
+        let mut actual = [0.0_f32; 4];
+        q8_0_packed_rows4_single_input_projection_into(&packed, &quantized_input, &mut actual)
+            .unwrap();
+        assert_eq!(actual, expected);
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST");
     }
 
     #[test]
@@ -14027,8 +14723,12 @@ mod tests {
                 output_packed_rows4_matmul: false,
                 ffn_gate_up_decode_consumer: false,
                 ffn_gate_up_packed_rows4_matmul: false,
+                ffn_gate_up_single_owner: false,
                 ffn_down_decode_consumer: false,
                 ffn_down_packed_rows4_matmul: false,
+                ffn_down_gemm4_prefill: false,
+                ffn_down_gemm4_row_group_schedule: false,
+                ffn_down_single_owner: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -14128,6 +14828,7 @@ mod tests {
         std::env::set_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", "on");
         std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", "true");
         std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL", "on");
+        std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_SINGLE_OWNER", "on");
         std::env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER", "on");
         std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL", "on");
         std::env::set_var("CAMELID_HYBRID_Q8_GPU_ROWS", "7");
@@ -14149,6 +14850,7 @@ mod tests {
         assert!(plan.q8.output_packed_rows4_matmul);
         assert!(plan.q8.ffn_gate_up_decode_consumer);
         assert!(plan.q8.ffn_gate_up_packed_rows4_matmul);
+        assert!(plan.q8.ffn_gate_up_single_owner);
         assert!(plan.q8.ffn_down_decode_consumer);
         assert!(plan.q8.ffn_down_packed_rows4_matmul);
         std::env::remove_var("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER");
@@ -14159,6 +14861,7 @@ mod tests {
         std::env::remove_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL");
         std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER");
         std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL");
+        std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_SINGLE_OWNER");
         std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER");
         std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL");
         assert!(
@@ -14192,6 +14895,10 @@ mod tests {
         assert!(
             plan.q8.ffn_gate_up_packed_rows4_matmul,
             "resolved plan should cache the FFN gate/up packed-rows4 matmul gate"
+        );
+        assert!(
+            plan.q8.ffn_gate_up_single_owner,
+            "resolved plan should cache the FFN gate/up single-owner gate"
         );
         assert!(
             plan.q8.ffn_down_decode_consumer,
@@ -14252,6 +14959,10 @@ mod tests {
             assert!(
                 !plan.q8.ffn_gate_up_packed_rows4_matmul,
                 "{profile} should not enable FFN gate/up packed-rows4 matmul by default"
+            );
+            assert!(
+                !plan.q8.ffn_gate_up_single_owner,
+                "{profile} should not enable FFN gate/up single owner by default"
             );
             assert!(
                 !plan.q8.ffn_down_decode_consumer,
@@ -14816,8 +15527,12 @@ mod tests {
                 output_packed_rows4_matmul: false,
                 ffn_gate_up_decode_consumer: false,
                 ffn_gate_up_packed_rows4_matmul: false,
+                ffn_gate_up_single_owner: false,
                 ffn_down_decode_consumer: false,
                 ffn_down_packed_rows4_matmul: false,
+                ffn_down_gemm4_prefill: false,
+                ffn_down_gemm4_row_group_schedule: false,
+                ffn_down_single_owner: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -14977,6 +15692,17 @@ mod tests {
             .is_none(),
             "fused QKV consumer must fail closed unless every Q/K/V projection is runtime-packed Q8_0"
         );
+    }
+
+    #[test]
+    fn q8_attention_qkv_prefill_consumer_gate_is_default_off() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER");
+        assert!(!x86_q8_attention_qkv_prefill_consumer_enabled());
+        std::env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER", "on");
+        assert!(x86_q8_attention_qkv_prefill_consumer_enabled());
+        std::env::remove_var("CAMELID_X86_Q8_ATTENTION_QKV_PREFILL_CONSUMER");
     }
 
     #[test]
@@ -15347,8 +16073,12 @@ mod tests {
                 output_packed_rows4_matmul: false,
                 ffn_gate_up_decode_consumer: false,
                 ffn_gate_up_packed_rows4_matmul: false,
+                ffn_gate_up_single_owner: false,
                 ffn_down_decode_consumer: enabled,
                 ffn_down_packed_rows4_matmul: false,
+                ffn_down_gemm4_prefill: false,
+                ffn_down_gemm4_row_group_schedule: false,
+                ffn_down_single_owner: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -15372,8 +16102,12 @@ mod tests {
                 output_packed_rows4_matmul: false,
                 ffn_gate_up_decode_consumer: false,
                 ffn_gate_up_packed_rows4_matmul: false,
+                ffn_gate_up_single_owner: false,
                 ffn_down_decode_consumer: false,
                 ffn_down_packed_rows4_matmul: enabled,
+                ffn_down_gemm4_prefill: false,
+                ffn_down_gemm4_row_group_schedule: false,
+                ffn_down_single_owner: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -15381,6 +16115,18 @@ mod tests {
                 hybrid_gpu_percent: 10,
             },
         }
+    }
+
+    fn ffn_down_gemm4_prefill_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = ffn_down_packed_rows4_matmul_plan(false);
+        plan.q8.ffn_down_gemm4_prefill = enabled;
+        plan
+    }
+
+    fn ffn_down_single_owner_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = ffn_down_packed_rows4_matmul_plan(false);
+        plan.q8.ffn_down_single_owner = enabled;
+        plan
     }
 
     fn ffn_gate_up_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
@@ -15397,8 +16143,12 @@ mod tests {
                 output_packed_rows4_matmul: false,
                 ffn_gate_up_decode_consumer: enabled,
                 ffn_gate_up_packed_rows4_matmul: false,
+                ffn_gate_up_single_owner: false,
                 ffn_down_decode_consumer: false,
                 ffn_down_packed_rows4_matmul: false,
+                ffn_down_gemm4_prefill: false,
+                ffn_down_gemm4_row_group_schedule: false,
+                ffn_down_single_owner: false,
                 metal: false,
                 metal_retained: false,
                 hybrid_retained: false,
@@ -15412,6 +16162,12 @@ mod tests {
     fn ffn_gate_up_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
         let mut plan = ffn_gate_up_consumer_plan(false);
         plan.q8.ffn_gate_up_packed_rows4_matmul = enabled;
+        plan
+    }
+
+    fn ffn_gate_up_single_owner_plan(enabled: bool) -> ResolvedRuntimePlan {
+        let mut plan = ffn_gate_up_consumer_plan(false);
+        plan.q8.ffn_gate_up_single_owner = enabled;
         plan
     }
 
@@ -15747,6 +16503,224 @@ mod tests {
     }
 
     #[test]
+    fn q8_ffn_down_gemm4_prefill_matches_runtime_packed_matmul_with_tail() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, packed_weight, _decode_expected) = runtime_packed_ffn_down_case();
+        let input_width = packed_weight.dim(0).unwrap();
+        let output_width = packed_weight.dim(1).unwrap();
+        let rows = 5;
+        let input = CpuTensor::from_f32(
+            "ffn_down_gemm4_prefill_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 9.0) * 0.125 + (idx / input_width) as f32 * 0.0625
+                })
+                .collect(),
+        )
+        .unwrap();
+
+        let actual = try_x86_q8_ffn_down_gemm4_prefill_path(
+            &input,
+            &packed_weight,
+            "actual_ffn_down_gemm4_prefill",
+            "ffn_down",
+            &ffn_down_gemm4_prefill_plan(true),
+        )
+        .unwrap()
+        .expect("gemm4 prefill should cover rows4 plus tail FFN-down input");
+        let expected = try_x86_q8_ffn_down_packed_rows4_matmul_path(
+            &input,
+            &packed_weight,
+            "expected_ffn_down_matmul",
+            "ffn_down",
+            &ffn_down_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .expect("packed rows4 matmul should cover FFN-down prefill baseline");
+
+        assert_eq!(actual.shape.dims, vec![rows, output_width]);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_ffn_down_gemm4_prefill_is_plan_gated_and_rows4_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, packed_weight, _expected) = runtime_packed_ffn_down_case();
+        let input_width = packed_weight.dim(0).unwrap();
+        let input = CpuTensor::from_f32(
+            "too_short",
+            vec![3, input_width],
+            vec![0.0; 3 * input_width],
+        )
+        .unwrap();
+        let rows4_input =
+            CpuTensor::from_f32("rows4", vec![4, input_width], vec![0.0; 4 * input_width]).unwrap();
+
+        assert!(try_x86_q8_ffn_down_gemm4_prefill_path(
+            &rows4_input,
+            &packed_weight,
+            "disabled",
+            "ffn_down",
+            &ffn_down_gemm4_prefill_plan(false),
+        )
+        .unwrap()
+        .is_none());
+        assert!(try_x86_q8_ffn_down_gemm4_prefill_path(
+            &input,
+            &packed_weight,
+            "too_short",
+            "ffn_down",
+            &ffn_down_gemm4_prefill_plan(true),
+        )
+        .unwrap()
+        .is_none());
+        assert!(try_x86_q8_ffn_down_gemm4_prefill_path(
+            &rows4_input,
+            &packed_weight,
+            "wrong_role",
+            "attention_output",
+            &ffn_down_gemm4_prefill_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn q8_ffn_down_gemm4_row_group_schedule_matches_default_gemm4() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (_decode_input, packed_weight, _decode_expected) = runtime_packed_ffn_down_case();
+        let input_width = packed_weight.dim(0).unwrap();
+        let rows = 8;
+        let input = CpuTensor::from_f32(
+            "ffn_down_gemm4_row_group_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 7.0) * 0.15625
+                        + (idx / input_width) as f32 * 0.03125
+                })
+                .collect(),
+        )
+        .unwrap();
+
+        let default_plan = ffn_down_gemm4_prefill_plan(true);
+        let expected = try_x86_q8_ffn_down_gemm4_prefill_path(
+            &input,
+            &packed_weight,
+            "expected_default_gemm4_schedule",
+            "ffn_down",
+            &default_plan,
+        )
+        .unwrap()
+        .expect("default gemm4 should cover rows4 FFN-down input");
+        let mut row_group_plan = ffn_down_gemm4_prefill_plan(true);
+        row_group_plan.q8.ffn_down_gemm4_row_group_schedule = true;
+        let actual = try_x86_q8_ffn_down_gemm4_prefill_path(
+            &input,
+            &packed_weight,
+            "actual_row_group_gemm4_schedule",
+            "ffn_down",
+            &row_group_plan,
+        )
+        .unwrap()
+        .expect("row-group gemm4 should cover rows4 FFN-down input");
+
+        assert_eq!(actual.shape.dims, expected.shape.dims);
+        assert_slice_close_with_tolerance(&actual.data, &expected.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_ffn_down_single_owner_matches_decode_and_prefill_owners() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (decode_input, packed_weight, _expected) = runtime_packed_ffn_down_case();
+
+        let actual_decode = try_x86_q8_ffn_down_single_owner_path(
+            &decode_input,
+            &packed_weight,
+            "actual_decode",
+            "ffn_down",
+            &ffn_down_single_owner_plan(true),
+        )
+        .unwrap()
+        .expect("single owner should cover FFN-down decode");
+        let expected_decode = try_x86_q8_ffn_down_decode_consumer_path(
+            &decode_input,
+            &packed_weight,
+            "expected_decode",
+            "ffn_down",
+            &ffn_down_consumer_plan(true),
+        )
+        .unwrap()
+        .expect("decode consumer should cover FFN-down decode");
+        assert_eq!(actual_decode.shape.dims, expected_decode.shape.dims);
+        assert_slice_close_with_tolerance(&actual_decode.data, &expected_decode.data, 5e-4);
+
+        let input_width = packed_weight.dim(0).unwrap();
+        let rows = 3;
+        let prefill_input = CpuTensor::from_f32(
+            "prefill_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 9.0) * 0.125 + (idx / input_width) as f32 * 0.0625
+                })
+                .collect(),
+        )
+        .unwrap();
+        let actual_prefill = try_x86_q8_ffn_down_single_owner_path(
+            &prefill_input,
+            &packed_weight,
+            "actual_prefill",
+            "ffn_down",
+            &ffn_down_single_owner_plan(true),
+        )
+        .unwrap()
+        .expect("single owner should cover FFN-down prefill");
+        let expected_prefill = try_x86_q8_ffn_down_packed_rows4_matmul_path(
+            &prefill_input,
+            &packed_weight,
+            "expected_prefill",
+            "ffn_down",
+            &ffn_down_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .expect("packed rows4 matmul should cover FFN-down prefill");
+        assert_eq!(actual_prefill.shape.dims, expected_prefill.shape.dims);
+        assert_slice_close_with_tolerance(&actual_prefill.data, &expected_prefill.data, 5e-4);
+    }
+
+    #[test]
+    fn q8_ffn_down_single_owner_is_plan_gated_and_role_limited() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_weight, _expected) = runtime_packed_ffn_down_case();
+
+        assert!(try_x86_q8_ffn_down_single_owner_path(
+            &input,
+            &packed_weight,
+            "disabled",
+            "ffn_down",
+            &ffn_down_single_owner_plan(false),
+        )
+        .unwrap()
+        .is_none());
+        assert!(try_x86_q8_ffn_down_single_owner_path(
+            &input,
+            &packed_weight,
+            "wrong_role",
+            "attention_output",
+            &ffn_down_single_owner_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
     fn q8_ffn_gate_up_consumer_matches_runtime_packed_baseline() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
@@ -15929,6 +16903,106 @@ mod tests {
             &dense_up,
             "dense_up",
             &ffn_gate_up_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn q8_ffn_gate_up_single_owner_matches_decode_and_prefill_owners() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (decode_input, packed_gate, packed_up, expected_decode) =
+            runtime_packed_ffn_gate_up_case();
+
+        let actual_decode = try_x86_q8_ffn_gate_up_single_owner_path(
+            &decode_input,
+            &packed_gate,
+            &packed_up,
+            "actual_decode",
+            &ffn_gate_up_single_owner_plan(true),
+        )
+        .unwrap()
+        .expect("single owner should cover FFN gate/up decode");
+        assert_eq!(
+            actual_decode.tensor.shape.dims,
+            expected_decode.tensor.shape.dims
+        );
+        assert_slice_close_with_tolerance(
+            &actual_decode.tensor.data,
+            &expected_decode.tensor.data,
+            5e-4,
+        );
+
+        let input_width = packed_gate.dim(0).unwrap();
+        let output_width = packed_gate.dim(1).unwrap();
+        let rows = 3;
+        let prefill_input = CpuTensor::from_f32(
+            "prefill_gate_up_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| {
+                    ((idx % input_width) as f32 - 7.0) * 0.109375
+                        + (idx / input_width) as f32 * 0.046875
+                })
+                .collect(),
+        )
+        .unwrap();
+        let actual_prefill = try_x86_q8_ffn_gate_up_single_owner_path(
+            &prefill_input,
+            &packed_gate,
+            &packed_up,
+            "actual_prefill",
+            &ffn_gate_up_single_owner_plan(true),
+        )
+        .unwrap()
+        .expect("single owner should cover FFN gate/up prefill");
+        let expected_prefill = try_x86_q8_ffn_gate_up_packed_rows4_matmul_path(
+            &prefill_input,
+            &packed_gate,
+            &packed_up,
+            "expected_prefill",
+            &ffn_gate_up_packed_rows4_matmul_plan(true),
+        )
+        .unwrap()
+        .expect("packed rows4 matmul should cover FFN gate/up prefill");
+        assert_eq!(actual_prefill.tensor.name, "actual_prefill");
+        assert_eq!(actual_prefill.tensor.shape.dims, vec![rows, output_width]);
+        assert_slice_close_with_tolerance(
+            &actual_prefill.tensor.data,
+            &expected_prefill.tensor.data,
+            5e-4,
+        );
+    }
+
+    #[test]
+    fn q8_ffn_gate_up_single_owner_is_default_off_and_requires_runtime_storage() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let (input, packed_gate, packed_up, _expected) = runtime_packed_ffn_gate_up_case();
+
+        assert!(try_x86_q8_ffn_gate_up_single_owner_path(
+            &input,
+            &packed_gate,
+            &packed_up,
+            "disabled",
+            &ffn_gate_up_single_owner_plan(false),
+        )
+        .unwrap()
+        .is_none());
+
+        let dense_up = CpuTensor::from_f32(
+            "dense_up",
+            packed_up.shape.dims.clone(),
+            vec![0.0; packed_up.shape.element_count().unwrap()],
+        )
+        .unwrap();
+        assert!(try_x86_q8_ffn_gate_up_single_owner_path(
+            &input,
+            &packed_gate,
+            &dense_up,
+            "dense_up",
+            &ffn_gate_up_single_owner_plan(true),
         )
         .unwrap()
         .is_none());
@@ -18111,6 +19185,31 @@ mod tests {
     }
 
     #[test]
+    fn q8_packed_rows4_parallel_input_quantize_matches_serial() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        let rows = 11;
+        let blocks_per_row = 3;
+        let input_width = blocks_per_row * Q8_0_BLOCK_VALUES;
+        let input = CpuTensor::from_f32(
+            "parallel_quantize_input",
+            vec![rows, input_width],
+            (0..rows * input_width)
+                .map(|idx| ((idx % 37) as f32 - 18.0) * 0.0546875)
+                .collect(),
+        )
+        .unwrap();
+
+        std::env::remove_var("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE");
+        let serial = q8_0_quantized_matmul_input_rows(&input, blocks_per_row).unwrap();
+        std::env::set_var("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE", "on");
+        let parallel = q8_0_quantized_matmul_input_rows(&input, blocks_per_row).unwrap();
+        std::env::remove_var("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE");
+
+        assert_eq!(parallel, serial);
+    }
+
+    #[test]
     fn q8_packed_rows4_matmul_quantized_input_scratch_matches_owned_rows() {
         let _env_guard = env_lock();
         clear_dense_diagnostic_env();
@@ -18389,6 +19488,27 @@ mod tests {
         }
         assert_eq!(actual.shape.dims, vec![1, output_rows]);
         assert_eq!(actual.data, expected);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn x86_q8_packed_rows4_serial_decode_gate_disables_decode_parallelism() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE");
+
+        let output_rows = X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS;
+        if rayon::current_num_threads() > 1 {
+            assert!(should_parallelize_x86_q8_packed_rows4_decode_output(
+                output_rows
+            ));
+        }
+
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE", "on");
+        assert!(!should_parallelize_x86_q8_packed_rows4_decode_output(
+            output_rows
+        ));
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE");
     }
 
     #[test]
