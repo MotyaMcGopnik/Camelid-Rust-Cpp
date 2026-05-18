@@ -8121,6 +8121,7 @@ fn q8_0_packed_rows4_matmul_projection_from_quantized(
     let output_groups_per_row = q8_0_packed_rows4_output_groups(output_width, "matmul projection")?;
     let total_output_groups = rows * output_groups_per_row;
     let mut output = vec![0.0_f32; rows * output_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_hoist_enabled();
     if should_parallelize_q8_packed_rows4_matmul(total_output_groups) {
         let chunk_floats = q8_packed_rows4_matmul_parallel_chunk_floats(total_output_groups);
         output
@@ -8136,10 +8137,10 @@ fn q8_0_packed_rows4_matmul_projection_from_quantized(
                     let input_start = row_idx * blocks_per_row;
                     let group_start = group_idx * blocks_per_row;
                     let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
-                    let sums = q8_0_packed_rows4_dot(
+                    let sums = q8_0_packed_rows4_dot_i8_matmul(
                         group_blocks,
                         &quantized_inputs[input_start..input_start + blocks_per_row],
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     );
                     output_group.copy_from_slice(&sums);
                 }
@@ -8155,11 +8156,8 @@ fn q8_0_packed_rows4_matmul_projection_from_quantized(
             {
                 let group_start = group_idx * blocks_per_row;
                 let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(
-                    group_blocks,
-                    quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
-                );
+                let sums =
+                    q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_row, use_hoisted_avx2);
                 output_chunk.copy_from_slice(&sums);
             }
         }
@@ -8217,6 +8215,7 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
         q8_0_packed_rows4_output_groups(right_output_width, "pair matmul right projection")?;
     let mut left_output = vec![0.0_f32; rows * left_output_width];
     let mut right_output = vec![0.0_f32; rows * right_output_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_hoist_enabled();
 
     let total_left_output_groups = rows * left_output_groups_per_row;
     if left_output_width == right_output_width
@@ -8245,15 +8244,15 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
                         &left_packed.blocks[group_start..group_start + blocks_per_row];
                     let right_blocks =
                         &right_packed.blocks[group_start..group_start + blocks_per_row];
-                    let left_sums = q8_0_packed_rows4_dot(
+                    let left_sums = q8_0_packed_rows4_dot_i8_matmul(
                         left_blocks,
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     );
-                    let right_sums = q8_0_packed_rows4_dot(
+                    let right_sums = q8_0_packed_rows4_dot_i8_matmul(
                         right_blocks,
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     );
                     left_group.copy_from_slice(&left_sums);
                     right_group.copy_from_slice(&right_sums);
@@ -8271,11 +8270,8 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
             {
                 let group_start = group_idx * blocks_per_row;
                 let group_blocks = &left_packed.blocks[group_start..group_start + blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(
-                    group_blocks,
-                    quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
-                );
+                let sums =
+                    q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_row, use_hoisted_avx2);
                 output_chunk.copy_from_slice(&sums);
             }
             let right_output_start = row_idx * right_output_width;
@@ -8286,11 +8282,8 @@ fn q8_0_packed_rows4_matmul_projection_pair_from_quantized(
             {
                 let group_start = group_idx * blocks_per_row;
                 let group_blocks = &right_packed.blocks[group_start..group_start + blocks_per_row];
-                let sums = q8_0_packed_rows4_dot(
-                    group_blocks,
-                    quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
-                );
+                let sums =
+                    q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_row, use_hoisted_avx2);
                 output_chunk.copy_from_slice(&sums);
             }
         }
@@ -8352,6 +8345,7 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
     let mut q_output = vec![0.0_f32; rows * q_width];
     let mut k_output = vec![0.0_f32; rows * k_width];
     let mut v_output = vec![0.0_f32; rows * v_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_hoist_enabled();
 
     let total_q_output_groups = rows * q_groups_per_row;
     if q_width == k_width
@@ -8379,20 +8373,20 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                     let group_start = group_idx * blocks_per_row;
                     let quantized_row =
                         &quantized_inputs[input_start..input_start + blocks_per_row];
-                    q_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                    q_group.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                         &q_packed.blocks[group_start..group_start + blocks_per_row],
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     ));
-                    k_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                    k_group.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                         &k_packed.blocks[group_start..group_start + blocks_per_row],
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     ));
-                    v_group.copy_from_slice(&q8_0_packed_rows4_dot(
+                    v_group.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                         &v_packed.blocks[group_start..group_start + blocks_per_row],
                         quantized_row,
-                        Q8_0PackedRows4Interleave::I8,
+                        use_hoisted_avx2,
                     ));
                 }
             });
@@ -8407,10 +8401,10 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                 .enumerate()
             {
                 let group_start = group_idx * blocks_per_row;
-                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &q_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             }
             let k_output_start = row_idx * k_width;
@@ -8420,10 +8414,10 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                 .enumerate()
             {
                 let group_start = group_idx * blocks_per_row;
-                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &k_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             }
             let v_output_start = row_idx * v_width;
@@ -8433,10 +8427,10 @@ fn q8_0_packed_rows4_matmul_projection_triplet_from_quantized(
                 .enumerate()
             {
                 let group_start = group_idx * blocks_per_row;
-                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                output_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &v_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_row,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             }
         }
@@ -9787,6 +9781,28 @@ fn x86_q8_packed_rows4_avx2_dot_enabled() -> bool {
             q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT")
         })
     }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn x86_q8_packed_rows4_avx2_dot_hoist_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST")
+            && std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST_ENABLED: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST_ENABLED.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST")
+                && std::arch::is_x86_feature_detected!("avx2")
+        })
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn x86_q8_packed_rows4_avx2_dot_hoist_enabled() -> bool {
+    false
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -11269,6 +11285,42 @@ fn accumulate_q8_0_packed_rows4_f32_input(
     for (group_idx, output_chunk) in output.chunks_mut(4).enumerate() {
         compute_group(group_idx, output_chunk);
     }
+}
+
+fn q8_0_packed_rows4_dot_i8_matmul(
+    packed_blocks: &[Q8_0PackedRows4Block],
+    input: &[Q8_0Block],
+    use_hoisted_avx2: bool,
+) -> [f32; 4] {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if use_hoisted_avx2 {
+            // SAFETY: `use_hoisted_avx2` is only true after runtime AVX2 detection.
+            return unsafe { q8_0_packed_rows4_dot_i8_avx2(packed_blocks, input) };
+        }
+    }
+    let _ = use_hoisted_avx2;
+    q8_0_packed_rows4_dot(packed_blocks, input, Q8_0PackedRows4Interleave::I8)
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn q8_0_packed_rows4_dot_i8_avx2(
+    packed_blocks: &[Q8_0PackedRows4Block],
+    input: &[Q8_0Block],
+) -> [f32; 4] {
+    debug_assert_eq!(packed_blocks.len(), input.len());
+    let mut sums = [0.0_f32; 4];
+    for (packed_block, input_block) in packed_blocks.iter().zip(input) {
+        let int_sums = unsafe {
+            q8_0_packed_4x8_block_avx2(packed_block.quants.as_ptr(), input_block.quants.as_ptr())
+        };
+        let input_scale = input_block.scale;
+        for lane in 0..4 {
+            sums[lane] += int_sums[lane] as f32 * packed_block.scales[lane] * input_scale;
+        }
+    }
+    sums
 }
 
 fn q8_0_packed_rows4_dot(
@@ -13057,6 +13109,32 @@ mod tests {
             );
         }
         std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT");
+    }
+
+    #[test]
+    fn x86_q8_avx2_packed_rows4_hoisted_matmul_matches_scalar_dot() {
+        let _env_guard = env_lock();
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST", "on");
+        let packed_block = Q8_0PackedRows4Block {
+            scales: [0.25, 0.5, 0.75, 1.25],
+            quants: std::array::from_fn(|idx| (idx as i8).wrapping_mul(11).wrapping_sub(37)),
+        };
+        let input_block = Q8_0Block {
+            scale: 0.125,
+            quants: std::array::from_fn(|idx| (idx as i8).wrapping_mul(5).wrapping_add(19)),
+        };
+        let expected = q8_0_packed_rows4_dot(
+            std::slice::from_ref(&packed_block),
+            std::slice::from_ref(&input_block),
+            Q8_0PackedRows4Interleave::I8,
+        );
+        let actual = q8_0_packed_rows4_dot_i8_matmul(
+            std::slice::from_ref(&packed_block),
+            std::slice::from_ref(&input_block),
+            x86_q8_packed_rows4_avx2_dot_hoist_enabled(),
+        );
+        assert_eq!(actual, expected);
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST");
     }
 
     #[test]
