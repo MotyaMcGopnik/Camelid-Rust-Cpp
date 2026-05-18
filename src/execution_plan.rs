@@ -762,6 +762,9 @@ mod tests {
             "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
             "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
             "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
+            "CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL",
+            "CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED",
+            "CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2",
             "CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER",
             "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
@@ -1044,6 +1047,12 @@ mod tests {
         assert_eq!(
             outcome
                 .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
                 .get("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER"),
             Some(&Some("off"))
         );
@@ -1078,6 +1087,7 @@ mod tests {
         env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL", "on");
         env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL", "on");
         env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2", "on");
         env::set_var("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER", "on");
 
         PlannerEnv::capture().apply(&BTreeMap::new());
@@ -1094,6 +1104,7 @@ mod tests {
         assert!(env::var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL").is_err());
         assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL").is_err());
         assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED").is_err());
+        assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2").is_err());
         assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER").is_err());
         clear_profile_env();
     }
