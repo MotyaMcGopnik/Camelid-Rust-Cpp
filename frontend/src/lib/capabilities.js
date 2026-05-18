@@ -60,6 +60,11 @@ function extractQuantKey(model, catalogItem, subject) {
   const explicit = normalizeCapabilityKey(explicitFileType ? quantLabelFromGgufFileType(explicitFileType) : explicitLabel)
   if (explicit) return explicit
 
+  const artifactText = [model?.model_path, model?.path, model?.hf_filename, catalogItem?.filename].filter(Boolean).join(' ')
+  const artifactMatch = artifactText.match(/\b(q\d(?:_k_[ms]|_\d)|bf16|f16|f32)\b/i)
+  const artifactQuant = normalizeCapabilityKey(artifactMatch?.[1])
+  if (artifactQuant) return artifactQuant
+
   const text = subject || ''
   const match = text.match(/\b(q\d(?:_k_[ms]|_\d)|bf16|f16|f32)\b/i)
   return normalizeCapabilityKey(match?.[1])
@@ -569,6 +574,15 @@ export function compatibilityHintLabel(hint, fallback = 'No matching compatibili
   return `${hint.target.id}: ${formatCapabilityStatus(hint.target.status)}`
 }
 
+function displayObservedQuant(value) {
+  const text = String(value || '')
+  const qDigit = text.match(/^Q(\d)(\d)$/i)
+  if (qDigit) return `Q${qDigit[1]}_${qDigit[2]}`
+  const qK = text.match(/^Q(\d)K([MSL])$/i)
+  if (qK) return `Q${qK[1]}_K_${qK[2].toUpperCase()}`
+  return text
+}
+
 export function compatibilityHintCopy(hint) {
   if (!hint) return 'No exact COMPATIBILITY.md row matched this model name/path, so the UI will not infer model-family support; load results and typed backend errors remain the source of truth.'
   if (hint.kind === 'family') {
@@ -576,7 +590,7 @@ export function compatibilityHintCopy(hint) {
     return `${boundary}. This is only a ${hint.confidence}; it is not chat-ready support until a concrete exact compatibility row is validated.`
   }
   if (hint.kind === 'quant_missing') return `${hint.target.id} is the right model-size row, but this local record does not expose a quant label yet. Do not unlock chat from a size/name match alone; wait for GGUF quant evidence from the loaded model metadata plus generation_ready=true.`
-  if (hint.kind === 'quant_mismatch') return `${hint.target.id} is scoped to ${hint.target.quantization}, but this entry appears to be ${hint.observedQuant || 'a different quantization'}. Do not inherit the supported gate from a same-family row; wait for an exact COMPATIBILITY.md row plus generation_ready=true.`
+  if (hint.kind === 'quant_mismatch') return `${hint.target.id} is scoped to ${hint.target.quantization}, but this entry appears to be ${displayObservedQuant(hint.observedQuant) || 'a different quantization'}. Do not inherit the supported gate from a same-family row; wait for an exact COMPATIBILITY.md row plus generation_ready=true.`
   return `${hint.target.family} · ${hint.target.quantization} · ${hint.target.evidence || hint.target.next_step}. Match source: ${hint.confidence}; runtime generation still requires loaded_now=true and generation_ready=true.`
 }
 
