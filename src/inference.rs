@@ -7756,11 +7756,11 @@ fn q8_0_packed_rows4_single_input_projection_into(
         )));
     }
 
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled();
     let compute_group = |group_idx: usize, output_chunk: &mut [f32]| {
         let group_start = group_idx * blocks_per_row;
         let group_blocks = &packed.blocks[group_start..group_start + blocks_per_row];
-        let sums =
-            q8_0_packed_rows4_dot(group_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+        let sums = q8_0_packed_rows4_dot_i8_matmul(group_blocks, quantized_input, use_hoisted_avx2);
         output_chunk.copy_from_slice(&sums);
     };
 
@@ -7813,14 +7813,15 @@ fn q8_0_packed_rows4_single_input_projection_pair_into(
         )));
     }
 
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled();
     let compute_group = |group_idx: usize, left_chunk: &mut [f32], right_chunk: &mut [f32]| {
         let group_start = group_idx * blocks_per_row;
         let left_blocks = &left_packed.blocks[group_start..group_start + blocks_per_row];
         let right_blocks = &right_packed.blocks[group_start..group_start + blocks_per_row];
         let left_sums =
-            q8_0_packed_rows4_dot(left_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+            q8_0_packed_rows4_dot_i8_matmul(left_blocks, quantized_input, use_hoisted_avx2);
         let right_sums =
-            q8_0_packed_rows4_dot(right_blocks, quantized_input, Q8_0PackedRows4Interleave::I8);
+            q8_0_packed_rows4_dot_i8_matmul(right_blocks, quantized_input, use_hoisted_avx2);
         left_chunk.copy_from_slice(&left_sums);
         right_chunk.copy_from_slice(&right_sums);
     };
@@ -7889,6 +7890,7 @@ fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
     let mut q_output = vec![0.0_f32; q_width];
     let mut k_output = vec![0.0_f32; k_width];
     let mut v_output = vec![0.0_f32; v_width];
+    let use_hoisted_avx2 = x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled();
 
     if q_width == k_width
         && q_width == v_width
@@ -7902,20 +7904,20 @@ fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
             .enumerate()
             .for_each(|(group_idx, ((q_chunk, k_chunk), v_chunk))| {
                 let group_start = group_idx * blocks_per_row;
-                q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                q_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &q_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_input,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
-                k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                k_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &k_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_input,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
-                v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+                v_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                     &v_packed.blocks[group_start..group_start + blocks_per_row],
                     quantized_input,
-                    Q8_0PackedRows4Interleave::I8,
+                    use_hoisted_avx2,
                 ));
             });
     } else if q_width == k_width && q_width == v_width {
@@ -7926,45 +7928,45 @@ fn q8_0_packed_rows4_single_input_projection_triplet_from_quantized(
             .enumerate()
         {
             let group_start = group_idx * blocks_per_row;
-            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &q_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
-            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &k_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
-            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &v_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
     } else {
         for (group_idx, q_chunk) in q_output.chunks_exact_mut(4).enumerate().take(q_groups) {
             let group_start = group_idx * blocks_per_row;
-            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            q_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &q_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
         for (group_idx, k_chunk) in k_output.chunks_exact_mut(4).enumerate().take(k_groups) {
             let group_start = group_idx * blocks_per_row;
-            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            k_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &k_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
         for (group_idx, v_chunk) in v_output.chunks_exact_mut(4).enumerate().take(v_groups) {
             let group_start = group_idx * blocks_per_row;
-            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot(
+            v_chunk.copy_from_slice(&q8_0_packed_rows4_dot_i8_matmul(
                 &v_packed.blocks[group_start..group_start + blocks_per_row],
                 quantized_input,
-                Q8_0PackedRows4Interleave::I8,
+                use_hoisted_avx2,
             ));
         }
     }
@@ -9802,6 +9804,28 @@ fn x86_q8_packed_rows4_avx2_dot_hoist_enabled() -> bool {
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 fn x86_q8_packed_rows4_avx2_dot_hoist_enabled() -> bool {
+    false
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled() -> bool {
+    #[cfg(test)]
+    {
+        q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST")
+            && std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST_ENABLED: OnceLock<bool> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST_ENABLED.get_or_init(|| {
+            q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST")
+                && std::arch::is_x86_feature_detected!("avx2")
+        })
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn x86_q8_packed_rows4_avx2_dot_decode_hoist_enabled() -> bool {
     false
 }
 
@@ -13135,6 +13159,48 @@ mod tests {
         );
         assert_eq!(actual, expected);
         std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_HOIST");
+    }
+
+    #[test]
+    fn x86_q8_avx2_packed_rows4_decode_hoist_projection_matches_scalar_dot() {
+        let _env_guard = env_lock();
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST", "on");
+        let blocks_per_row = 2;
+        let packed = Q8_0PackedRows4 {
+            rows: 4,
+            blocks_per_row,
+            interleave: Q8_0PackedRows4Interleave::I8,
+            blocks: (0..blocks_per_row)
+                .map(|block_idx| Q8_0PackedRows4Block {
+                    scales: [0.25, 0.5, 0.75, 1.25],
+                    quants: std::array::from_fn(|idx| {
+                        (idx as i8)
+                            .wrapping_mul(3)
+                            .wrapping_add((block_idx as i8).wrapping_mul(17))
+                    }),
+                })
+                .collect(),
+        };
+        let quantized_input: Vec<Q8_0Block> = (0..blocks_per_row)
+            .map(|block_idx| Q8_0Block {
+                scale: 0.125,
+                quants: std::array::from_fn(|idx| {
+                    (idx as i8)
+                        .wrapping_mul(5)
+                        .wrapping_sub((block_idx as i8).wrapping_mul(13))
+                }),
+            })
+            .collect();
+        let expected = q8_0_packed_rows4_dot(
+            &packed.blocks,
+            &quantized_input,
+            Q8_0PackedRows4Interleave::I8,
+        );
+        let mut actual = [0.0_f32; 4];
+        q8_0_packed_rows4_single_input_projection_into(&packed, &quantized_input, &mut actual)
+            .unwrap();
+        assert_eq!(actual, expected);
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_AVX2_DOT_DECODE_HOIST");
     }
 
     #[test]
