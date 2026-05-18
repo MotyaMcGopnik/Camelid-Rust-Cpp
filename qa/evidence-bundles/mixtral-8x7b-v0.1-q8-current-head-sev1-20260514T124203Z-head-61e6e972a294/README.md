@@ -6,7 +6,7 @@ This bundle treats Mixtral as a first-class **active validation lane**, but it *
 
 ## Readiness
 
-- Ubuntu host disk/readiness was not blocked: `/dev/root` had 193G total / 88G available / 55% used, inodes 1% used, and 121GiB memory available (`host-readiness.txt`).
+- Ubuntu host disk/readiness was adequate: `/dev/root` had 193G total / 88G available / 55% used, inodes 1% used, and 121GiB memory available (`host-readiness.txt`).
 - Model checksum: `cdca4a8c09dfd722702f781d479695cda0d45e1bd1cd602ba1b6085ad921fc5f` (`model-sha256.txt`).
 - Metadata confirms sparse MoE shape: `llama.expert_count=8`, `llama.expert_used_count=2`, 32 blocks, Q8_0 expert tensors and F16 router tensors (`metadata-summary.json`).
 

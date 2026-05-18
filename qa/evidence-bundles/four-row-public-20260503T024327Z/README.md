@@ -21,7 +21,7 @@ Source evidence:
 
 Current-head rerun status:
 - Attempted a clean Ubuntu rerun from exported public head `9d091ce4d2f1d911f684333eda6575f28e1e9adf`.
-- Blocked at build time because Ubuntu host `cargo 1.75.0` cannot parse `Cargo.lock` v4.
+- Current-head rerun stopped at build time because the historical Ubuntu environment had `cargo 1.75.0`, which cannot parse `Cargo.lock` v4.
 - Failed rerun root: `target/full-support-20260503T023129Z`
 
 Support-claim guardrail:

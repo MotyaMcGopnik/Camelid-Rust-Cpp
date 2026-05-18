@@ -5,7 +5,7 @@ Generated: 2026-05-03T02:56:39Z
 Ubuntu target: `canonical-private-ubuntu-validation-host`
 Artifact source commit: `c5e6d7ee26a9aec6e7c8025ad2029a3904c38670`
 Public head target: `9d091ce4d2f1d911f684333eda6575f28e1e9adf`
-Current-head rebuild: **blocked** — Ubuntu host cargo 1.75.0 cannot parse Cargo.lock v4 (cargo build --release --bin backendinference failed before rerun).
+Current-head rebuild: **not rerun on current head** — the historical Ubuntu environment had cargo 1.75.0, which could not parse Cargo.lock v4 (`cargo build --release --bin backendinference` failed before rerun).
 
 Host facts:
 - `uname -a`: `Linux canonical-private-ubuntu-validation-host 6.17.0-1012-aws #12~24.04.1-Ubuntu SMP Mon Apr  6 17:36:28 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux`
