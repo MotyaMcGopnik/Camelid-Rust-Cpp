@@ -7724,8 +7724,13 @@ fn q8_0_packed_rows4_single_input_projection(
     CpuTensor::from_f32(name, vec![1, output_width], output)
 }
 
+fn x86_q8_packed_rows4_serial_decode_enabled() -> bool {
+    q8_0_env_flag_enabled_default_off("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE")
+}
+
 fn should_parallelize_x86_q8_packed_rows4_decode_output(output_width: usize) -> bool {
-    output_width >= X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS
+    !x86_q8_packed_rows4_serial_decode_enabled()
+        && output_width >= X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS
         && rayon::current_num_threads() > 1
 }
 
@@ -18765,6 +18770,27 @@ mod tests {
         }
         assert_eq!(actual.shape.dims, vec![1, output_rows]);
         assert_eq!(actual.data, expected);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn x86_q8_packed_rows4_serial_decode_gate_disables_decode_parallelism() {
+        let _env_guard = env_lock();
+        clear_dense_diagnostic_env();
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE");
+
+        let output_rows = X86_Q8_PACKED_ROWS4_DECODE_PARALLEL_MIN_OUTPUTS;
+        if rayon::current_num_threads() > 1 {
+            assert!(should_parallelize_x86_q8_packed_rows4_decode_output(
+                output_rows
+            ));
+        }
+
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE", "on");
+        assert!(!should_parallelize_x86_q8_packed_rows4_decode_output(
+            output_rows
+        ));
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_SERIAL_DECODE");
     }
 
     #[test]
