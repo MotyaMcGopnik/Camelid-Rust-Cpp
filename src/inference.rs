@@ -8019,9 +8019,31 @@ fn should_parallelize_q8_packed_rows4_matmul(total_output_groups: usize) -> bool
         && rayon::current_num_threads() > 1
 }
 
+fn x86_q8_packed_rows4_matmul_groups_per_chunk() -> usize {
+    #[cfg(test)]
+    {
+        env::var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK)
+    }
+    #[cfg(not(test))]
+    {
+        static X86_Q8_PACKED_ROWS4_MATMUL_CHUNK_GROUPS: OnceLock<usize> = OnceLock::new();
+        *X86_Q8_PACKED_ROWS4_MATMUL_CHUNK_GROUPS.get_or_init(|| {
+            env::var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK)
+        })
+    }
+}
+
 fn q8_packed_rows4_matmul_parallel_chunk_floats(total_output_groups: usize) -> usize {
     let groups_per_chunk =
-        total_output_groups.clamp(1, X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK);
+        total_output_groups.clamp(1, x86_q8_packed_rows4_matmul_groups_per_chunk());
     groups_per_chunk * 4
 }
 
@@ -12982,6 +13004,25 @@ mod tests {
     }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn x86_q8_packed_rows4_matmul_chunk_groups_env_override() {
+        let _env_guard = env_lock();
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK");
+        assert_eq!(
+            x86_q8_packed_rows4_matmul_groups_per_chunk(),
+            X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK
+        );
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "32");
+        assert_eq!(x86_q8_packed_rows4_matmul_groups_per_chunk(), 32);
+        assert_eq!(q8_packed_rows4_matmul_parallel_chunk_floats(128), 128);
+        std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "0");
+        assert_eq!(
+            x86_q8_packed_rows4_matmul_groups_per_chunk(),
+            X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK
+        );
+        std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK");
+    }
+
     #[test]
     fn x86_q8_avx2_packed_rows4_i8_matches_scalar_dot() {
         let _env_guard = env_lock();
