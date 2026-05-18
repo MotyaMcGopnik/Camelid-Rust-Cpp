@@ -392,6 +392,17 @@ assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 
 assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { id: 'llama32_3b_instruct_q8_0' }), true, '3B Q8_0 exact-row helpers should match only the promoted row')
 assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q4_K_M', quant: 'Q4_K_M' }, { id: 'llama32_3b_instruct_q8_0' }), false, '3B non-Q8 entries must not satisfy exact-row frontend card/readiness matching')
 assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Base Q8_0', quant: 'Q8_0' }, { id: 'llama32_3b_instruct_q8_0' }), false, '3B base/non-instruct entries must not satisfy the exact instruct support row')
+const llama32ThreeBQ4PathModel = { name: 'Llama 3.2 3B Instruct', id: 'llama32_3b_instruct_q8_0', model_path: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q4_0.gguf' }
+const llama32ThreeBQ4PathHint = findCompatibilityHint(capabilityFixture, llama32ThreeBQ4PathModel)
+assert.equal(llama32ThreeBQ4PathHint.kind, 'quant_mismatch', 'a canonical 3B row id must not override neighboring-quant evidence from the loaded GGUF path')
+assert.equal(llama32ThreeBQ4PathHint.observedQuant, 'Q40', '3B exact-row mismatch should carry the path-derived neighboring quant key')
+assert.match(compatibilityHintCopy(llama32ThreeBQ4PathHint), /appears to be Q4_0/, '3B exact-row mismatch copy should display the loaded artifact quant in GGUF-style form')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, llama32ThreeBQ4PathModel), false, '3B exact-row support requires the loaded artifact quant to match Q8_0, not just the browser row id')
+assert.equal(
+  getChatGateState(capabilityFixture, { ...localLoadedReady, ...llama32ThreeBQ4PathModel }, { active_model_id: 'llama32_3b_instruct_q8_0', loaded_now: true, generation_ready: true }).chatUnlocked,
+  false,
+  'runtime-green 3B rows must fail closed when the loaded GGUF path is a neighboring quant despite the canonical row id',
+)
 assert.equal(
   getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-3b', name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-3b', loaded_now: true, generation_ready: true }).chatUnlocked,
   true,

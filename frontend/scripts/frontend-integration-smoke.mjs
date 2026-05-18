@@ -509,6 +509,39 @@ try {
   assert.match(liveBackendIdChatMarkup, /Message Camelid…/, 'ready 3B live-backend-id chat should enable the composer instead of showing load-first copy')
   assert.doesNotMatch(liveBackendIdChatMarkup, /Load a model first|Choose a supported model/, 'ready 3B live-backend-id chat should not fall back to blocked chat UX')
 
+  const neighboringQuantPathModel = {
+    ...selectedModel,
+    quant: undefined,
+    model_path: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q4_0.gguf',
+  }
+  const neighboringQuantPathGate = getChatGateState(capabilities, neighboringQuantPathModel, readyRuntime)
+  assert.equal(neighboringQuantPathGate.runtimeReady, true, '3B neighboring-quant guard should still surface runtime readiness when active_model_id matches')
+  assert.equal(neighboringQuantPathGate.contractSupported, false, '3B neighboring GGUF quant must not inherit the canonical Q8_0 row from the browser id')
+  assert.equal(neighboringQuantPathGate.chatUnlocked, false, '3B neighboring GGUF quant must keep live chat locked even when runtime loaded_now/generation_ready are green')
+
+  const neighboringQuantPathChatMarkup = renderToStaticMarkup(React.createElement(ChatWorkspace, {
+    selectedConversation: null,
+    selectedModel: neighboringQuantPathModel,
+    selectedModelId: neighboringQuantPathModel.id,
+    setSelectedModelId: noop,
+    models: [neighboringQuantPathModel],
+    runtime: readyRuntime,
+    capabilities,
+    pendingConversation: null,
+    composer: 'This neighboring quant must remain blocked',
+    setComposer: noop,
+    saveToMemory: noop,
+    sendMessage: noop,
+    sending: false,
+    selectedModelRunnable: neighboringQuantPathGate.chatUnlocked,
+    setTab: noop,
+  }))
+
+  assert.match(neighboringQuantPathChatMarkup, /Runtime ready, support gated/, '3B neighboring-quant chat UX should expose runtime-green state without claiming support')
+  assert.match(neighboringQuantPathChatMarkup, /llama32_3b_instruct_q8_0: quant mismatch/, '3B neighboring-quant chat UX should name the exact row mismatch instead of showing ready chat')
+  assert.match(neighboringQuantPathChatMarkup, /scoped to Q8_0[\s\S]*appears to be Q4_0/, '3B neighboring-quant chat UX should explain that the loaded artifact quant does not match the support contract row')
+  assert.doesNotMatch(neighboringQuantPathChatMarkup, /Local chat ready|Message Camelid…|Demo starters/, '3B neighboring-quant rows must not render the live-chat ready UX')
+
   const backendReadyButUnsupported3BCapabilities = {
     ...capabilities,
     model_compatibility: capabilities.model_compatibility.map((target) => target.id === 'llama32_3b_instruct_q8_0'
