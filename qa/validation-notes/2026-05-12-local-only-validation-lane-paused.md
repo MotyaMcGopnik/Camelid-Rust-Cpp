@@ -6,9 +6,9 @@ Supersession note (2026-05-13): this file remains historical evidence for the 20
 
 The Ubuntu validation lane was operator-paused for Camelid promotion-grade runtime evidence on 2026-05-12. During that pause:
 
-- do not SSH into a validation host or substitute another remote validation box;
+- do not substitute local-only or substitute-remote runs for promotion-grade Ubuntu validation evidence;
 - treat promotion-grade runtime reruns as waiting on explicit operator authorization, not as locally reproducible on a Mac by default;
-- if regenerating historical scaffolds for this exact pause, preserve the historical `blocked_by_operator_shutdown` status as data; do not reuse that status as current host-access evidence;
+- if regenerating scaffolds today, use the current `evidence_needed` status unless a Tim-authorized validation/runtime lane is available; do not reuse historical pause wording as current host-access evidence;
 - keep local work to docs, frontend/readiness logic, evidence normalization, privacy scrub, lightweight guardrails, and code changes that have local tests;
 - keep support language exact-row only and fail closed unless docs, API/frontend surfaces, and row-specific passing artifacts all agree.
 

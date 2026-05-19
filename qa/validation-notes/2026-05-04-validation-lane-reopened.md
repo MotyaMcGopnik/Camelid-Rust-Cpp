@@ -11,7 +11,7 @@ Execution guardrails:
 - Use clean public `main` checkouts for new validation runs.
 - Preserve existing dirty remote worktrees; do not reset or overwrite them just to run current-head validation.
 - Use `scripts/with-rustup-cargo.sh` or an equivalent rustup-managed toolchain on Ubuntu hosts whose distro `/usr/bin/cargo` is too old for the checked-in Rust floor.
-- Generate full-support scaffolds with `node scripts/prepare-full-support-bundle.mjs ...`; while the 2026-05-12 pause is active, keep the default `blocked_by_operator_shutdown` status so generated runtime commands remain blocked.
+- Generate full-support scaffolds with `node scripts/prepare-full-support-bundle.mjs ...`; when runtime validation has not been attempted for the current run, keep the default `evidence_needed` status so generated runtime commands preserve the missing-evidence boundary without implying host failure.
 - Keep claims exact-row only. A reopened host is not evidence; only passing artifacts can move docs, API, or frontend language.
 
 Current promotion posture:

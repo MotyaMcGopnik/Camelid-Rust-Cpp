@@ -9,7 +9,7 @@ Repo lane: local/repo-safe only
 
 Tim requested a local-only validation pause for the Ubuntu validation lane. Until Tim explicitly says the validation host/runtime lane is back:
 
-- do not SSH into the validation host or any substitute remote validation host
+- do not substitute local-only or substitute-remote runs for promotion-grade Ubuntu validation evidence
 - do not run local Mac llama-server/reference-runtime workloads as a substitute
 - treat promotion-grade 1B/3B/8B runtime reruns as not attempted during the operator pause
 - keep 8B longer-context/performance validation unpromoted and uninferred
