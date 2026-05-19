@@ -125,6 +125,7 @@ Primary public evidence anchors for this lane:
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260518T1730Z-docs-claim-guard-sync/README.md` (docs/context claim guard sync: sanitized public evidence references and aligned default-off scheduler/control-plane wording without support-contract widening)
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260518T2118Z-docs-ubuntu-host-honesty/README.md` (docs/context claim guard: stale Ubuntu host-failure wording removed from public summaries; remote validation was not attempted in this run)
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260519T0450Z-docs-status-host-honesty/README.md` (docs/status host-honesty refresh: status notes now say no Ubuntu timing/profiling validation is recorded for local-only slices; remote validation was not attempted in this run)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260519T0704Z-docs-host-reporting/README.md` (docs host-reporting guard: contributor docs now require evidence-scoped Ubuntu validation status language; remote validation was not attempted in this run)
 - the retained/reject notes for bounded Ubuntu x86 Q8 experiments kept under `qa/evidence-bundles/`
 
 ## Product/runtime note
