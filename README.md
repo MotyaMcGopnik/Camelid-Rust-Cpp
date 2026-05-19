@@ -6,7 +6,7 @@
 
 Most local-model stacks are easy to demo and hard to trust. Camelid is a Rust-native local inference backend for GGUF language models built for the point where local AI becomes real infrastructure: products, internal platforms, regulated environments, and customer-facing workflows.
 
-Camelid does not treat “probably works” as “supported.” Support moves on evidence.
+Camelid does not treat “probably works” as “supported.” Support moves only when the evidence is green.
 
 ## Why organizations adopt Camelid
 
@@ -28,9 +28,9 @@ The hard problem in local AI is no longer just getting a model to run. The hard 
 
 Most local inference stacks optimize for breadth first and clarity later. Camelid takes the opposite approach: make support explicit, make readiness visible, and make the product fail closed when the evidence is not there.
 
-That discipline is not just a docs preference. It is the wedge.
+That is not just a docs preference. It is the product wedge.
 
-## Why people want to try it
+## What teams can use today
 
 Camelid already ships a serious local inference product surface:
 
@@ -49,7 +49,7 @@ Today, four exact Q8_0 rows are public and evidence-backed:
 
 Mixtral has one-token backend MoE runtime evidence but is not yet promoted to API/WebUI/frontend readiness. `Mistral-7B-Instruct-v0.3.Q8_0.gguf` is the active next exact-row bring-up lane.
 
-## Why this becomes a company
+## Why this can become a company
 
 Camelid is not trying to be another thin local-model wrapper. The wedge is operational trust.
 
