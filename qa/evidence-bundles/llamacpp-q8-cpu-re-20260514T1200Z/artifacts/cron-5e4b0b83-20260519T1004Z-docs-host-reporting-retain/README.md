@@ -20,7 +20,7 @@ Maintain support-contract honesty and documentation accuracy around Ubuntu valid
 - Removed stale validation-host wording from docs/evidence summaries and historical status notes encountered in this run.
 - Kept historical artifact filenames unchanged while ensuring retained summaries do not present current host-access state.
 - Added this retained docs/context slice to the Ubuntu x86 Q8 performance evidence list.
-- Did not add or imply Ubuntu throughput, support, portability, default-on behavior, or remote-host failure evidence.
+- Did not add or imply Ubuntu throughput, support, portability, default-on behavior, or current remote host-access evidence.
 - Remote validation was not attempted in this run.
 
 ## Retain/reject

@@ -4,7 +4,7 @@ Scope: follow-up hygiene for the same-host throughput harness on current `main`.
 
 ## Host readiness
 
-Initial SSH contact timed out before any remote command ran, so this pass did not claim that the host was unblocked on disk.
+Initial SSH contact timed out before any remote command ran, so this pass made no host-state claim from that first contact attempt.
 
 A later live retry on the approved canonical Ubuntu validation lane completed a read-only readiness probe at 2026-05-14T08:12:23Z. The probe showed the lane reachable and root storage no longer full (`91G` available, `53%` used). No source checkout was created, no build was started, and no benchmark or support-promotion validation was run from this readiness probe.
 
@@ -18,6 +18,6 @@ The throughput harness is tracked at `scripts/bench-llama3-same-host.mjs`, with 
 
 The harness is a bounded exact-row timing tool only. It does not promote production-throughput, Llama 3.2 1B, Mixtral, neighboring-row, portability, or broad-family support without separate row-specific evidence captured under those exact conditions.
 
-## Exact blocker for measurement
+## Measurement status
 
-Blocked before measurement: the lane is reachable and disk is no longer the immediate blocker, but this pass deliberately did not start a long-running same-host benchmark or capture a scrubbed evidence bundle. The same-host throughput comparison remains unpublished until a fresh source/runtime lane captures scrubbed row-specific parity and timing evidence.
+No retained measurement: the lane readiness probes completed, but this pass deliberately did not start a long-running same-host benchmark or capture a scrubbed evidence bundle. The same-host throughput comparison remains unpublished until a fresh source/runtime lane captures scrubbed row-specific parity and timing evidence.
