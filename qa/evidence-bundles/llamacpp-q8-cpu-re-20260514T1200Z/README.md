@@ -12,7 +12,7 @@ Claim guardrail: this report is the current Q8 reference truth for the Ubuntu x8
 - Refreshed llama.cpp grep evidence for Q8_0 vec-dot, repack/GEMV/GEMM hooks, x86 AVX2/AVX512/VNNI branches, `MUL_MAT` wiring, and OpenMP scheduling, plus Camelid grep evidence for the output packed-rows4 matmul flag, runtime-plan gating, backend-owned storage, and helper/test anchors.
 - Remote Ubuntu validation was attempted in that worker run but did not produce timing/profiling evidence; no `uname`/`lscpu`/Rust/Cargo probe or focused tests are recorded for the slice.
 - No code change, support promotion, portability claim, Ubuntu throughput claim, retained measured effect, or default-on behavior was added; the output packed-rows4 matmul slice remains default-off and local-only unless a future Ubuntu validation bundle records passing evidence.
-- Artifact: `artifacts/cron-95495a91-20260517T2207Z-x86-output-packed-rows4-canonical-host-blocker.txt` (historical filename; the retained summary makes no current host-failure claim).
+- Artifact: `artifacts/cron-95495a91-20260517T2207Z-x86-output-packed-rows4-canonical-host-blocker.txt` (historical filename; the retained summary makes no current remote validation-status claim).
 
 ## CAMELID DOCS UBUNTU X86 Q8 — cron 5e4b0b83, 2026-05-17T21:31Z
 

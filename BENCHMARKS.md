@@ -145,7 +145,7 @@ node scripts/bench-llama3-same-host.mjs \
 
 Use `--print-plan` with the same arguments to audit exact spawned commands, stdout keys, JSON schema, and metric bounds before starting servers. The harness reports bounded TTFT, elapsed-time, and streamed-chunk-derived decode estimates only; it does not promote production throughput, 1B, Mixtral, neighboring-row, portability, or broader-family support without separate row-specific evidence.
 
-Latest readiness note: `qa/validation-notes/2026-05-14-throughput-host-readiness-recheck.md` records that the approved Ubuntu lane is reachable and no longer blocked by full root storage, but no same-host benchmark has been run or published from that probe. Treat the apples-to-apples table as still missing until a scrubbed row-specific evidence bundle is committed.
+Latest readiness note: `qa/validation-notes/2026-05-14-throughput-host-readiness-recheck.md` records improved approved Ubuntu lane readiness after the full-root-storage condition, but no same-host benchmark has been run or published from that probe. Treat the apples-to-apples table as still missing until a scrubbed row-specific evidence bundle is committed.
 
 ## What should be added next
 

@@ -10,7 +10,7 @@ Keep support-contract honesty and documentation accuracy around Ubuntu validatio
 ## Feedback loop
 
 - Read Camelid operating context: `CONTEXT.md` and `docs/adr/0001-agentic-engineering-discipline.md`.
-- Grep guard for stale Ubuntu validation-host failure phrases: `logs/stale-host-wording-scan.log`.
+- Grep guard for stale Ubuntu validation-status phrases: `logs/stale-host-wording-scan.log`.
 - Diff review: `logs/dirty-diff.log`.
 
 ## Result

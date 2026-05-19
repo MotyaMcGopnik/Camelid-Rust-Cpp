@@ -5,12 +5,12 @@ Owner: cron `5e4b0b83-312c-4949-b085-21cf457183b9` DOCS CAMELID
 
 ## Target
 
-Purge stale Ubuntu validation-host failure wording encountered in status notes while maintaining support-contract honesty and documentation accuracy.
+Purge stale Ubuntu validation-status wording encountered in status notes while maintaining support-contract honesty and documentation accuracy.
 
 ## Feedback loop
 
 - Read Camelid operating context: `CONTEXT.md` and `docs/adr/0001-agentic-engineering-discipline.md`.
-- Grep guard for stale Ubuntu validation-host failure phrases: `logs/docs-host-honesty-scan.log` (no matches).
+- Grep guard for stale Ubuntu validation-status phrases: `logs/docs-host-honesty-scan.log` (no matches).
 - Diff review: `logs/dirty-diff.log`.
 
 ## Result
@@ -19,7 +19,7 @@ Purge stale Ubuntu validation-host failure wording encountered in status notes w
 - Reworded `docs/performance/ubuntu-x86-q8.md` to avoid implying host recovery; it now waits for recorded Ubuntu timing/profiling validation.
 - Did not add or imply Ubuntu throughput, support, portability, or default-on evidence.
 - Remote validation was not attempted in this run.
-- The exact canonical SSH command was not executed in this run, so no Ubuntu host failure is claimed.
+- The exact canonical SSH command was not executed in this run, so no Ubuntu host-access status is claimed.
 
 ## Retain/reject
 
