@@ -1,2 +1,1 @@
-# Sanitized: validation-host SSH command intentionally omitted from public evidence.
-# Equivalent private command checked local backend health and capabilities endpoints.
+<VALIDATION_HOST_SSH_REDACTED> 'set -euo pipefail; date -u; hostname; curl -fsS http://127.0.0.1:8181/v1/health; printf "\n---CAPABILITIES---\n"; curl -fsS http://127.0.0.1:8181/api/capabilities'
