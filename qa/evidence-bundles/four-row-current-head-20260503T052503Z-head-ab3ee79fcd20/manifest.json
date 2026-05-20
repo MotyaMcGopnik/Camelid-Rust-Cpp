@@ -410,7 +410,7 @@
         "The first bounded 512-context pack timed out on current head, so longer-context and performance/RSS evidence remain the blocker."
       ],
       "blockers": [
-        "512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.",
+        "512-context parity/performance on Ubuntu current head was not completed in this bundle; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.",
         "Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families."
       ],
       "tracks": [

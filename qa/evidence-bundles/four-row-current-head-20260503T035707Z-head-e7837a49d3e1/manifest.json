@@ -360,7 +360,7 @@
         "The first bounded 512-context pack timed out at /v1/chat/completions after 300000 ms on current head and remains the blocker."
       ],
       "blockers": [
-        "512-context parity is still blocked on Ubuntu current head; keep that failure preserved side-by-side with passing short smoke.",
+        "512-context parity on Ubuntu current head was not completed in this bundle; keep that failure preserved side-by-side with passing short smoke.",
         "Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families."
       ],
       "tracks": [

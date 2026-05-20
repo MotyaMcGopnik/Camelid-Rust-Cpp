@@ -16,7 +16,7 @@ Options:
   --repo-root <path>                 Repository root (default: current directory)
   --out-dir <path>                   Output bundle root (default: target/full-support-<utc>-head-<sha>)
   --utc <stamp>                      UTC stamp for the default output directory
-  --validation-host-status <status>  available | blocked_by_operator_shutdown (default: blocked_by_operator_shutdown)
+  --validation-host-status <status>  available | evidence_needed (default: evidence_needed)
   --help, -h                         Print this help without writing files
 `)
   process.exit(0)
@@ -26,13 +26,13 @@ const repoRoot = resolve(args.get('repo-root') || '.')
 const utcStamp = args.get('utc') || isoStamp(new Date())
 const gitHead = git(['rev-parse', 'HEAD'], repoRoot)
 const gitHeadShort = git(['rev-parse', '--short=12', 'HEAD'], repoRoot)
-const originMain = git(['rev-parse', 'origin/main'], repoRoot)
+const originMain = resolveOriginMain(repoRoot)
 const branch = git(['branch', '--show-current'], repoRoot)
 const outDir = resolve(args.get('out-dir') || join(repoRoot, 'target', `full-support-${utcStamp}-head-${gitHeadShort}`))
 const outDirRelative = relative(repoRoot, outDir) || '.'
-const validationHostStatus = args.get('validation-host-status') || 'blocked_by_operator_shutdown'
-if (!['available', 'blocked_by_operator_shutdown'].includes(validationHostStatus)) {
-  console.error(`unknown --validation-host-status ${JSON.stringify(validationHostStatus)}; expected available or blocked_by_operator_shutdown`)
+const validationHostStatus = args.get('validation-host-status') || 'evidence_needed'
+if (!['available', 'evidence_needed'].includes(validationHostStatus)) {
+  console.error(`unknown --validation-host-status ${JSON.stringify(validationHostStatus)}; expected available or evidence_needed`)
   process.exit(2)
 }
 const runtimeValidationAvailable = validationHostStatus === 'available'
@@ -71,7 +71,7 @@ const rows = [
     ],
     blockers: [
       'Fresh current-head API/WebUI/perf artifacts are still needed in a durable target/full-support root.',
-      ...hostShutdownBlockers(),
+      ...runtimeEvidenceNeededBlockers(),
       'Do not imply support for adjacent TinyLlama quantizations or other families.'
     ],
     tracks: [
@@ -148,7 +148,7 @@ const rows = [
     ],
     blockers: [
       'No durable current-head target/full-support evidence root exists yet for compact/broader/template/512/API-WebUI/perf together.',
-      ...hostShutdownBlockers('Promotion-grade 1B runtime evidence is blocked while Tim’s Ubuntu validation host is shut down.'),
+      ...runtimeEvidenceNeededBlockers('Promotion-grade 1B runtime evidence remains evidence-needed until a Tim-authorized Ubuntu validation lane records fresh current-head artifacts.'),
       'Do not imply neighboring Llama 3.2 rows or other quantizations are supported.'
     ],
     tracks: llamaTracks({
@@ -182,7 +182,7 @@ const rows = [
     ],
     blockers: [
       'Current public posture is exact-row smoke support only, not broader/full support.',
-      ...hostShutdownBlockers('Promotion-grade 3B runtime evidence is blocked while Tim’s Ubuntu validation host is shut down.'),
+      ...runtimeEvidenceNeededBlockers('Promotion-grade 3B runtime evidence remains evidence-needed until a Tim-authorized Ubuntu validation lane records fresh current-head artifacts.'),
       'Do not broaden beyond the exact 3B Instruct Q8_0 row without fresh Ubuntu artifacts and synchronized docs/API/frontend changes.'
     ],
     tracks: llamaTracks({
@@ -217,7 +217,7 @@ const rows = [
     blockers: [
       'Do not widen the single passing 512-context pack into broader context/full-support language; rerun broader context and performance/RSS evidence durably before promotion.',
       'Do not widen the chat-template-shapes pass into arbitrary GGUF/Jinja template support; it validates only the checked compact Llama 3 prompt shapes for the exact 8B row.',
-      ...hostShutdownBlockers('Promotion-grade 8B runtime evidence is blocked while Tim’s Ubuntu validation host is shut down.'),
+      ...runtimeEvidenceNeededBlockers('Promotion-grade 8B runtime evidence remains evidence-needed until a Tim-authorized Ubuntu validation lane records fresh current-head artifacts.'),
       'Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families.'
     ],
     tracks: llamaTracks({
@@ -271,15 +271,15 @@ const manifest = {
   },
   ubuntu_validation_guardrail: runtimeValidationAvailable
     ? 'Runtime tracks are runnable only on an approved Tim-authorized validation/runtime lane; keep Local Mac work to docs/recon/light prep unless Tim explicitly authorizes otherwise.'
-    : 'Validation lane paused by operator instruction: do not SSH to validation hosts, do not substitute a local Mac runtime rerun, and keep this scaffold blocked until Tim explicitly reopens an approved lane.',
-  validation_host_status: {
+    : 'Runtime validation is evidence-needed: run these tracks only on a Tim-authorized Ubuntu validation/runtime lane, do not substitute a local Mac runtime rerun, and state plainly when remote validation was not attempted in the current run.',
+  validation_evidence_status: {
     status: validationHostStatus,
     runtime_validation_available: runtimeValidationAvailable,
-    blocked_by_note: runtimeValidationAvailable ? null : validationNotePath,
-    blocked_rows: runtimeValidationAvailable ? [] : ['tinyllama_1_1b_chat_q8_0 recency rerun', 'llama32_1b_instruct_q8_0', 'llama32_3b_instruct_q8_0', 'llama3_8b_instruct_q8_0'],
+    evidence_note: runtimeValidationAvailable ? null : validationNotePath,
+    evidence_needed_rows: runtimeValidationAvailable ? [] : ['tinyllama_1_1b_chat_q8_0 recency rerun', 'llama32_1b_instruct_q8_0', 'llama32_3b_instruct_q8_0', 'llama3_8b_instruct_q8_0'],
     operator_instruction: runtimeValidationAvailable
       ? 'Runtime tracks were generated as runnable; execute only on the approved validation host or another Tim-authorized runtime lane.'
-      : 'Tim has shut down the Ubuntu validation server. Do not SSH to validation hosts and do not substitute local Mac llama-server/reference workloads until Tim explicitly reopens that lane.',
+      : 'Runtime validation is evidence-needed. Use only a Tim-authorized Ubuntu validation/runtime lane for promotion-grade reruns; do not substitute local Mac llama-server/reference workloads, and do not report host-access failure unless the canonical probe was executed in the current run and exact stderr is cited.',
   },
   required_tracks: ['compact-parity', 'broader-parity', 'chat-template-shapes', 'context-512', 'api-webui-smoke', 'perf-rss-portability'],
   prerequisites: {
@@ -353,7 +353,7 @@ function summarizeRow(outDir, row) {
     expect_contract_supported: row.expect_contract_supported,
     expect_webui_chat: row.expect_webui_chat,
     row_root: rowRootRelative,
-    validation_host_status: validationHostStatus,
+    validation_evidence_status: validationHostStatus,
     runtime_validation_available: runtimeValidationAvailable,
     carry_forward_bundle: row.carry_forward_bundle,
     notes: row.notes,
@@ -405,8 +405,8 @@ function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus
       status: runtimeValidationAvailable
         ? contextTrackStatus
         : contextTrackStatus === 'known_blocker'
-          ? 'known_blocker_and_validation_host_shutdown'
-          : 'blocked_by_validation_host_shutdown',
+          ? 'known_blocker_and_runtime_evidence_needed'
+          : 'runtime_evidence_needed',
       description: 'Run the bounded 512-context pack and preserve success or failure durably.',
       pack_path: 'qa/prompt-packs/llama3-context-512-smoke.json',
       notes: contextTrackNotes,
@@ -430,26 +430,26 @@ function llamaTracks({ modelFile, modelId, compatibilityRow, compatibilityStatus
 }
 
 function runtimeTrackStatus() {
-  return runtimeValidationAvailable ? 'ready_to_run' : 'blocked_by_validation_host_shutdown'
+  return runtimeValidationAvailable ? 'ready_to_run' : 'runtime_evidence_needed'
 }
 
-function hostShutdownBlockers(message = 'Fresh normalized runtime evidence is blocked while Tim’s Ubuntu validation host is shut down.') {
+function runtimeEvidenceNeededBlockers(message = 'Fresh normalized runtime evidence remains evidence-needed until a Tim-authorized Ubuntu validation lane records current-head artifacts.') {
   return runtimeValidationAvailable ? [] : [message]
 }
 
 function runtimeCommand(command) {
   if (runtimeValidationAvailable) return command
   return [
-    'cat >&2 <<\'CAMELID_RUNTIME_VALIDATION_BLOCKED\'',
-    'Camelid runtime validation is blocked for this generated bundle.',
-    'Tim has shut down the Ubuntu validation server; do not SSH to validation hosts and do not substitute local Mac llama-server/reference workloads until Tim explicitly reopens that lane.',
+    'cat >&2 <<\'CAMELID_RUNTIME_VALIDATION_EVIDENCE_NEEDED\'',
+    'Camelid runtime validation is evidence-needed for this generated bundle.',
+    'Runtime validation is evidence-needed; use only a Tim-authorized Ubuntu validation/runtime lane for promotion-grade reruns, do not substitute local Mac llama-server/reference workloads, and do not report host-access failure unless the canonical probe was executed in the current run and exact stderr is cited.',
     `Validation note: ${validationNotePath}`,
     '',
-    'Regenerate this bundle with --validation-host-status available only after Tim says the host/runtime lane is back.',
+    'Regenerate this bundle with --validation-host-status available only for a Tim-authorized Ubuntu validation/runtime lane.',
     '',
     'Original command preserved for review only:',
     command,
-    'CAMELID_RUNTIME_VALIDATION_BLOCKED',
+    'CAMELID_RUNTIME_VALIDATION_EVIDENCE_NEEDED',
     'exit 86',
   ].join('\n')
 }
@@ -560,7 +560,7 @@ function renderRunAll(rows) {
 }
 
 function renderReadme(manifest) {
-  const guardrails = manifest.validation_host_status.runtime_validation_available
+  const guardrails = manifest.validation_evidence_status.runtime_validation_available
     ? [
         'Runtime command scripts are runnable because this bundle was generated with an available validation lane; execute them only on the approved validation host or another Tim-authorized runtime lane.',
         'Use clean public `main` checkouts for reruns, and preserve dirty remote worktrees.',
@@ -568,17 +568,17 @@ function renderReadme(manifest) {
         'Preserve known blockers durably instead of deleting them; the 8B 512-context and chat-template-shapes passes are bounded packs only and broader performance/RSS evidence is still required.',
       ]
     : [
-        'Tim has shut down the Ubuntu validation server when this default bundle is generated; runtime command scripts exit blocked unless regenerated with `--validation-host-status available` after Tim explicitly says the lane is back.',
-        'Do not SSH to validation hosts, and do not substitute local Mac llama-server/reference workloads while the host-shutdown blocker is active.',
+        'Runtime validation is evidence-needed when this default bundle is generated; runtime command scripts exit without running until regenerated with `--validation-host-status available` for a Tim-authorized validation/runtime lane.',
+        'Do not substitute local Mac llama-server/reference workloads for Ubuntu validation evidence; if remote validation is not attempted in the current run, say that plainly rather than implying host failure.',
         'Keep claims exact-row only unless docs, API, frontend, and artifacts all agree.',
         'Preserve known blockers durably instead of deleting them; the 8B 512-context and chat-template-shapes passes are bounded packs only and broader performance/RSS evidence is still required.',
       ]
-  return `# Full-support current-head execution bundle\n\nGenerated: ${manifest.generated_utc}\n\nGit head: \`${manifest.git.head}\`\nOrigin/main: \`${manifest.git.origin_main}\`\nValidation host status: \`${manifest.validation_host_status.status}\`\nRuntime validation available: \`${manifest.validation_host_status.runtime_validation_available}\`\n\nThis bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.\n\nRequired tracks per row:\n- compact parity\n- broader parity\n- chat-template shapes\n- 512-context\n- API/WebUI smoke\n- perf/RSS/portability\n\nTop-level commands:\n- \`commands/build-current-head.sh\`\n- \`commands/capture-host-facts.sh\`\n- \`commands/run-all-rows.sh\`\n\nGuardrails:\n${guardrails.map(item => `- ${item}`).join('\n')}\n\nCarry-forward public references:\n- \`${manifest.carry_forward_public_refs.normalized_bundle_root}\`\n- \`${manifest.carry_forward_public_refs.perf_portability_envelope}\`\n- \`${manifest.carry_forward_public_refs.validation_note}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_broader_50tok_evidence}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_context_512_evidence}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_chat_template_shapes_evidence}\`\n`}
+  return `# Full-support current-head execution bundle\n\nGenerated: ${manifest.generated_utc}\n\nGit head: \`${manifest.git.head}\`\nOrigin/main: \`${manifest.git.origin_main}\`\nValidation evidence status: \`${manifest.validation_evidence_status.status}\`\nRuntime validation available: \`${manifest.validation_evidence_status.runtime_validation_available}\`\n\nThis bundle is a durable execution scaffold for the four exact rows Tim cares about. It does **not** widen support by itself. Its job is to normalize the evidence shape so each row has the same folders, command files, model SHA capture, and carry-forward references before or during Ubuntu reruns.\n\nRequired tracks per row:\n- compact parity\n- broader parity\n- chat-template shapes\n- 512-context\n- API/WebUI smoke\n- perf/RSS/portability\n\nTop-level commands:\n- \`commands/build-current-head.sh\`\n- \`commands/capture-host-facts.sh\`\n- \`commands/run-all-rows.sh\`\n\nGuardrails:\n${guardrails.map(item => `- ${item}`).join('\n')}\n\nCarry-forward public references:\n- \`${manifest.carry_forward_public_refs.normalized_bundle_root}\`\n- \`${manifest.carry_forward_public_refs.perf_portability_envelope}\`\n- \`${manifest.carry_forward_public_refs.validation_note}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_broader_50tok_evidence}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_context_512_evidence}\`\n- \`${manifest.carry_forward_public_refs.llama3_8b_chat_template_shapes_evidence}\`\n`}
 
 function renderRowReadme(row, manifest) {
   const tracks = manifest.tracks.map(track => `- ${track.id}: ${track.status} — ${track.description}`).join('\n')
   const blockers = row.blockers.map(blocker => `- ${blocker}`).join('\n')
-  return `# ${row.display_name}\n\nPublic status: ${row.public_status}\nExpected model SHA256: \`${row.expected_model_sha256}\`\nCarry-forward bundle: \`${row.carry_forward_bundle}\`\nValidation host status: \`${manifest.validation_host_status}\`\nRuntime validation available: \`${manifest.runtime_validation_available}\`\n\nTracks:\n${tracks}\n\nBlockers:\n${blockers}\n`}
+  return `# ${row.display_name}\n\nPublic status: ${row.public_status}\nExpected model SHA256: \`${row.expected_model_sha256}\`\nCarry-forward bundle: \`${row.carry_forward_bundle}\`\nValidation evidence status: \`${manifest.validation_evidence_status}\`\nRuntime validation available: \`${manifest.runtime_validation_available}\`\n\nTracks:\n${tracks}\n\nBlockers:\n${blockers}\n`}
 
 function repoCommand(command) {
   return `cd "$REPO_ROOT" && ${command}`
@@ -659,6 +659,28 @@ async function collectFiles(rootDir, currentDir, output) {
 
 function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+}
+
+function tryGit(args, cwd) {
+  try {
+    return git(args, cwd)
+  } catch {
+    return null
+  }
+}
+
+function resolveOriginMain(cwd) {
+  const candidates = [
+    'origin/main',
+    'refs/remotes/origin/main',
+    'main',
+    'refs/heads/main',
+  ]
+  for (const candidate of candidates) {
+    const resolved = tryGit(['rev-parse', '--verify', candidate], cwd)
+    if (resolved) return resolved
+  }
+  return 'unavailable: origin/main not fetched'
 }
 
 function gitLines(args, cwd) {

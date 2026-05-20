@@ -1,28 +1,28 @@
-# Validation note — host shutdown blocker and evidence-bundle privacy audit
+# Validation note — operator-paused validation lane and evidence-bundle privacy audit
 
 Date: 2026-05-03
 Repo head oriented: `7f1f565b4e3c`
 
 ## Operating constraint
 
-Tim intentionally shut down the canonical Ubuntu validation host.
+This is a historical note for an operator-paused Ubuntu validation lane on 2026-05-03. Do not treat it as current host-access evidence.
 
-Until Tim explicitly says that host is back:
+Until Tim explicitly authorizes a validation-lane rerun:
 
 - do **not** SSH into the validation host or any substitute remote validation box
-- treat promotion-grade exact-row runtime reruns as blocked
-- do **not** try to substitute local Mac llama-server or reference-runtime runs for that blocked lane unless Tim explicitly authorizes it
+- treat promotion-grade exact-row runtime reruns as waiting on operator authorization
+- do **not** try to substitute local Mac llama-server or reference-runtime runs for that lane unless Tim explicitly authorizes it
 
-That means current-head 1B/3B/8B parity, API, WebUI, and memory/perf reruns stay blocked by host shutdown even though the docs/frontend/API normalization work should continue locally.
+That means current-head 1B/3B/8B parity, API, WebUI, and memory/perf reruns needed fresh operator-approved validation before promotion, even though the docs/frontend/API normalization work could continue locally.
 
 ## Safe local work that should continue
 
-While the host is down, the useful lane is local/repo-safe progress only:
+During that operator pause, the useful lane was local/repo-safe progress only:
 
 - keep `README.md`, `STATUS.md`, `COMPATIBILITY.md`, `/api/capabilities`, and frontend readiness copy aligned on exact-row validation wording
 - keep the normalized current-head bundle manifests/commands ready for the next Ubuntu rerun window
 - privacy-scrub durable evidence manifests and record anything that still leaks private host/home-path details
-- keep blocker tracking explicit so nobody overclaims broad Llama-family support while the runtime lane is blocked
+- keep validation-lane tracking explicit so nobody overclaims broad Llama-family support without fresh runtime evidence
 
 ## Privacy audit finding and local scrub follow-up
 
@@ -66,17 +66,17 @@ node scripts/audit-evidence-bundle-privacy.mjs \
   --out target/evidence-bundle-privacy-audit-20260503.json
 ```
 
-## Current blocker framing
+## Current validation framing
 
-For the four-row full-support push, the blocker stack is now:
+For the four-row full-support push, the evidence stack was:
 
-1. canonical Ubuntu validation host is offline by operator choice
-2. remote current-head Llama runtime reruns are therefore blocked
-3. 8B longer-context/performance remains a separate technical blocker even after the host comes back
+1. remote current-head Llama runtime reruns needed explicit operator authorization
+2. local Mac runs were not substitutes for the Ubuntu validation lane
+3. 8B longer-context/performance remained a separate technical constraint even after remote reruns resumed
 
-The privacy-scrub lane is now locally cleaned up and documented, but the runtime-validation lane remains blocked until Tim explicitly brings the Ubuntu host back.
+The privacy-scrub lane was locally cleaned up and documented, but runtime-validation promotion still required a fresh operator-approved Ubuntu validation pass.
 
-## Resume plan once the host returns
+## Resume plan once operator authorization exists
 
 When Tim explicitly re-enables the Ubuntu validation host, resume in this order:
 

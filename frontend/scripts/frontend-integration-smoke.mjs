@@ -20,6 +20,7 @@ const server = await createServer({
 try {
   const { default: ChatWorkspace } = await server.ssrLoadModule('/src/views/ChatWorkspace.jsx')
   const { default: ApiView } = await server.ssrLoadModule('/src/views/ApiView.jsx')
+  const { default: SystemView } = await server.ssrLoadModule('/src/views/SystemView.jsx')
   const { default: ModelsView } = await server.ssrLoadModule('/src/views/ModelsView.jsx')
   const { default: TopBar } = await server.ssrLoadModule('/src/components/TopBar.jsx')
   const { getChatGateState } = await server.ssrLoadModule('/src/lib/chatGate.js')
@@ -143,6 +144,9 @@ try {
   }))
 
   assert.match(streamingMarkup, /data-streaming-state="active"/, 'streaming assistant rows should render an active streaming state')
+  assert.match(streamingMarkup, /Live chat exact-row readiness[\s\S]*Runtime[\s\S]*Local chat ready[\s\S]*Support[\s\S]*Exact row supported[\s\S]*Capabilities[\s\S]*Template ready · Throughput not promoted/, 'non-empty live 3B chats should keep runtime, exact-row support, and row-scoped capability lanes visible after messages exist')
+  assert.match(streamingMarkup, /Row-scoped \/api\/capabilities evidence; it does not widen model-native context/, 'live 3B capability lanes must avoid widening exact-row support into broader claims')
+  assert.match(streamingMarkup, /COMPATIBILITY\.md and \/api\/capabilities agree/, 'live 3B chat readiness must name the exact-row support-contract requirement')
   assert.match(streamingMarkup, /data-streaming-code-state="open"/, 'open streaming fences should expose the active code state')
   assert.match(streamingMarkup, /Still generating — code block incomplete/, 'open streaming code should visibly say it is incomplete')
   assert.match(streamingMarkup, /Streaming code response/, 'streaming code rows should keep an active live-generation label')
@@ -285,6 +289,19 @@ try {
   assert.doesNotMatch(exactReadyMarkup, /arbitrary-template behavior|arbitrary\/Jinja templates/, 'API support surface should not repeat resolved template/Jinja caveats after row-scoped template evidence is green')
   assert.doesNotMatch(exactReadyMarkup, /normalizing model-native\/larger context; arbitrary\/Jinja template behavior; production throughput/, 'API compatibility list next-step copy should filter resolved template/Jinja caveats while retaining production-throughput blockers')
   assert.match(exactReadyMarkup, /Supported API feature rows/, 'API view should render supported feature rows from /api/capabilities')
+
+  const exactReadySystemMarkup = renderToStaticMarkup(React.createElement(SystemView, {
+    runtime: readyRuntime,
+    selectedModel,
+    capabilities,
+  }))
+
+  assert.match(exactReadySystemMarkup, /Selected exact-row local \/v1 ready/, 'System endpoint status should go green only when the selected 3B exact row and runtime readiness both match')
+  assert.match(exactReadySystemMarkup, /Runs now for this selected GGUF because loaded_now=true, generation_ready=true, active_model_id matches, and the exact \/api\/capabilities row is supported\./, 'System chat-completions copy should name the full 3B exact-row readiness gate')
+  assert.match(exactReadySystemMarkup, /Endpoint\/chat gate:[\s\S]*Ready: runtime readiness and exact-row support both match\./, 'System selected exact-row evidence should expose the retained chat/API gate')
+  assert.match(exactReadySystemMarkup, /Template\/Jinja readiness[\s\S]*Template readiness is green for this supported exact row/, 'System should render 3B template/Jinja lane evidence from /api/capabilities')
+  assert.match(exactReadySystemMarkup, /Throughput readiness[\s\S]*Bounded row-scoped performance\/RSS evidence is present/, 'System should keep bounded 3B performance evidence separate from production-throughput promotion')
+  assert.doesNotMatch(exactReadySystemMarkup, /# Use only after \/v1\/health returns generation_ready=true/, 'System curl should not imply generation_ready alone is sufficient for 3B UX chat')
   assert.match(exactReadyMarkup, /chat completions/, 'API view should display provider-scoped feature ids as neutral capability names')
   assert.match(exactReadyMarkup, /standard-compatible streaming stays enabled\./, 'API view should sanitize provider-specific feature notes before rendering')
 
@@ -335,6 +352,8 @@ try {
   }))
 
   assert.match(aliasTopBarMarkup, /Runtime chat gate[\s\S]*Llama 3\.2 3B Instruct Q8_0/, 'TopBar runtime readiness should resolve the active model through runtime_model_name aliases')
+  assert.match(aliasTopBarMarkup, /llama32_3b_instruct_q8_0: supported current gate/, 'TopBar support detail should prioritize the active exact 3B row instead of the first supported row')
+  assert.doesNotMatch(aliasTopBarMarkup, /tinyllama_1_1b_chat_q8_0: supported current gate/, 'TopBar support detail must not point at TinyLlama when a 3B exact row is active')
   assert.doesNotMatch(aliasTopBarMarkup, /Nothing loaded now/, 'TopBar must not show an empty runtime state for alias-selected loaded 3B rows')
 
   const modelsMarkup = renderToStaticMarkup(React.createElement(ModelsView, {
@@ -364,6 +383,30 @@ try {
   assert.match(modelsMarkup, /Loaded exact-row match/, 'Tracked 3B card should mark the alias model as the loaded exact-row match')
   assert.match(modelsMarkup, /3B API\/WebUI smoke passed/, 'Models view should keep 3B end-to-end WebUI evidence visible on the exact row card')
   assert.doesNotMatch(modelsMarkup, /This browser\/runtime list does not currently show the exact 3B row/, 'Alias runtime matches must not fall through to the missing-3B acceptance placeholder')
+
+  const staleRuntimeModelsMarkup = renderToStaticMarkup(React.createElement(ModelsView, {
+    runtime: { ...readyRuntime, loaded_now: false },
+    capabilities,
+    refreshDashboard: noop,
+    registerForm: { id: '', name: '', model_path: '', runtime_model_name: '' },
+    setRegisterForm: noop,
+    externalForm: { id: '', name: '', source: '', api_base: '', api_key: '', model_name: '' },
+    setExternalForm: noop,
+    registerModel: noop,
+    connectExternalModel: noop,
+    models: [aliasSelectedModel],
+    selectedModelId: aliasSelectedModel.id,
+    setSelectedModelId: noop,
+    loadingModelId: '',
+    activateModel: noop,
+    unloadCurrentModel: noop,
+    installModel: noop,
+    installCatalogModel: noop,
+    cancelModelDownload: noop,
+  }))
+
+  assert.match(staleRuntimeModelsMarkup, /Runtime still needed/, 'Tracked 3B card must use the shared chat gate and stay blocked when runtime loaded_now=false')
+  assert.doesNotMatch(staleRuntimeModelsMarkup, /Chat unlockable/, 'Tracked 3B card must not present stale browser generation_ready state as WebUI chat support')
 
   const neighboringQuantAcceptanceRecord = {
     ...aliasSelectedModel,
@@ -615,6 +658,18 @@ try {
   assert.match(backendReadyButUnsupported3BChatMarkup, /Load a model first/, 'support-gated 3B composer should stay disabled instead of accepting prompts')
   assert.doesNotMatch(backendReadyButUnsupported3BChatMarkup, /Local chat ready|Message Camelid…|Demo starters/, 'support-gated 3B rows must not render the live-chat ready UX')
 
+  const backendReadyButUnsupported3BSystemMarkup = renderToStaticMarkup(React.createElement(SystemView, {
+    runtime: liveBackendIdRuntime,
+    selectedModel: liveBackendIdModel,
+    capabilities: backendReadyButUnsupported3BCapabilities,
+  }))
+
+  assert.match(backendReadyButUnsupported3BSystemMarkup, /Runtime ready, support gated/, 'System should keep runtime-green 3B rows visible without making unsupported exact rows API/chat-ready')
+  assert.match(backendReadyButUnsupported3BSystemMarkup, /Blocked for UX chat until loaded_now=true, generation_ready=true, active_model_id matches, and this exact row is supported\./, 'System should block chat completions copy when the exact 3B row is downgraded')
+  assert.match(backendReadyButUnsupported3BSystemMarkup, /Endpoint\/chat gate:[\s\S]*llama32_3b_instruct_q8_0: groundwork backend evidence only; loaded_now=true, generation_ready=true, exact row supported=false\./, 'System selected exact-row evidence should show runtime-green/support-red state for downgraded 3B rows')
+  assert.match(backendReadyButUnsupported3BSystemMarkup, /# Blocked for UX chat until selected exact row evidence and runtime readiness both match/, 'System curl should stay blocked for runtime-ready unsupported 3B rows')
+  assert.doesNotMatch(backendReadyButUnsupported3BSystemMarkup, /Selected exact-row local \/v1 ready|Ready: runtime readiness and exact-row support both match/, 'System must not present downgraded 3B rows as exact-row API/chat-ready')
+
   assert.match(exactReadyMarkup, /responses stream/, 'API view should normalize provider-scoped dotted feature ids before rendering')
   assert.match(exactReadyMarkup, /hosted model-style streamed response compatibility stays provider-neutral/, 'API view should neutralize hosted-brand feature notes before rendering')
   assert.match(exactReadyMarkup, /Guarded feature row; do not label it hosted model or hosted model compatible from API metadata\./, 'API view should also neutralize guarded feature metadata before rendering')
@@ -680,6 +735,7 @@ try {
     loaded_now: true,
     generation_ready: true,
     quant: 'Q8_0',
+    model_path: '/models/custom-exact-row-q8-0.gguf',
   }
   const genericExactCapabilities = {
     support_contract: capabilities.support_contract,

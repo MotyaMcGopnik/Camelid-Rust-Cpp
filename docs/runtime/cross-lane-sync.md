@@ -6,6 +6,7 @@ Rules:
 - Do not mix evidence across platforms.
 - Ubuntu numbers are Ubuntu-only.
 - Mac numbers are Mac-only.
+- Report Ubuntu validation status as evidence status, not host-access status. If remote validation was not attempted for the current slice, say so; do not imply any negative host-access state unless the canonical SSH probe was run in the same slice and the stderr is captured in the evidence bundle.
 - Architecture lessons can be shared.
 - Kernel implementations cannot be blindly copied.
 - Mac must not copy AVX2 assumptions.
@@ -70,13 +71,16 @@ Owner: Cross-lane sync owner; Product/ExecutionPlan owner implements UX/runtime 
 
 ## Current Ubuntu x86 Q8 status
 
-- Active priority: runtime/config hot-path overhead, not new Q8 kernel or owner experiments.
+- Current evidence posture: keep public status evidence-scoped. This sync note does not establish host availability or failure; where no current remote run was attempted, say that no Ubuntu timing/profiling validation is recorded for the slice.
+- Latest docs/context host-reporting retained audit (`qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260520T1244Z-docs-context-host-reporting-audit/README.md`) passed the public docs/context scan for stale host-access wording and private host aliases. Remote validation was not attempted in that docs-only audit.
+- Recent retained control-plane/scheduler hygiene includes the FFN-down GEMM4 row-group min-input-groups guard. That evidence is default-off, synthetic scheduler evidence only; it is not broad throughput, support, portability, RSS, or default-on evidence.
+- Runtime/config hot-path overhead remains a benchmark-validity lesson: path sanity must precede new Q8 kernel or owner experiments.
 - `f65eac8` runtime-plan candidate is rejected: it timed out and still showed `getenv` / env-lock contention dominating.
 - Surgical root cause found: `x86_q8_kernel_avx2_enabled()` was reading `CAMELID_X86_Q8_KERNEL` inside hot Q8 dot paths, effectively per Q8 block / packed rows4 group.
 - Surgical fix branch: `camelid-runtime-overhead`.
 - Surgical fix commit: `d9ad412 Cache x86 Q8 kernel gate outside hot dot loops`.
-- Before/after proof for `d9ad412` is in progress; do not retain until warm timing, parity, path sanity, and top-symbol evidence pass.
-- FFN-down owner and attention-output owner remain paused. FFN-down owner is suspect for request hangs/no-response behavior.
+- This document records no retained before/after timing/profiling promotion for `d9ad412`; do not treat it as an accepted performance result until warm timing, parity, path sanity, and top-symbol evidence pass.
+- Owner/kernel A/B work should not resume from this sync note alone; require fresh same-host path sanity plus parity/timing evidence for the exact default-off flag under test.
 - `3244b35` is rejected as an active packed-runtime baseline: packed-runtime smoke timed out and safe/control was catastrophically slow.
 - `80f6271` is an infrastructure anchor only, not a usable performance baseline.
 - `83063cf` is historical retained evidence only, not a packed-runtime implementation baseline.
@@ -131,28 +135,28 @@ Owner: Cross-lane sync owner; Product/ExecutionPlan owner implements UX/runtime 
 ## Active baselines / anchors
 
 - Ubuntu active retained evidence: historical `83063cf` only for old retained sanity; not a packed-runtime baseline.
-- Ubuntu active runtime-overhead candidate: `d9ad412` pending proof.
+- Ubuntu default-off scheduler guard: FFN-down GEMM4 row-group min-input-groups threshold retained for the bounded synthetic scheduler surface only; model-backed same-host timing remains evidence-needed before any throughput claim.
+- Ubuntu runtime-overhead candidate: `d9ad412` remains evidence-needed in this sync note; no retained before/after timing/profiling promotion is recorded here.
 - Mac active auto path: retained direct-pack/I8MM-style path with packed-prefill off.
 - Mac packed-prefill: rejected for promotion, default-off/experimental only.
 
 ## Rejected or paused paths
 
-- `CAMELID_X86_Q8_FFNDOWN_GEMM4=on`: rejected; parity preserved but wall/ffn_down regressed.
+- Older FFN-down GEMM4 shorthand experiments: rejected for promotion where parity held but wall/`ffn_down` timing regressed; use only the current documented default-off flags when a fresh evidence bundle names the exact gate and shape.
 - `3244b35` as active packed-runtime baseline: rejected; timeout/catastrophic safe-control timing.
 - `f65eac8`: rejected runtime-overhead candidate; `getenv`/env-lock still dominated and request timed out.
-- FFN-down owner: paused; suspect for request hangs/no-response until separately fixed.
-- Attention-output owner: paused/rejected for now; server/harness issue narrowed away from it, but do not resume until runtime overhead is fixed.
+- FFN-down owner and attention-output owner: do not resume from stale status alone; require fresh exact-flag evidence with path sanity, parity, timing, and a clean harness/server distinction.
 - Mac packed-prefill promotion: rejected; default-off/experimental only.
 
 ## What each lane should not repeat
 
-- Ubuntu: do not benchmark against wrong histories or missing gates; do not proceed without path sanity.
+- Ubuntu: do not benchmark against wrong histories or missing gates; do not proceed without path sanity. If the canonical SSH command was not attempted in the current run, report remote validation as not attempted rather than implying host outage/auth failure.
 - Mac: do not promote RSS-only improvements; audit env/config hot-path overhead before trusting kernel wins.
 - Product: do not let runtime path selection become an unobservable env-var pile.
 
 ## Next action per lane
 
-- Ubuntu: finish before/after proof for `d9ad412` with path sanity, warm timing, top symbols, counters, and parity.
+- Ubuntu: record the next model-backed same-host FFN-down timing/profiling proof for the retained default-off scheduler guard, or explicitly mark remote validation as not attempted; keep `d9ad412` performance promotion evidence-needed until a retained before/after bundle exists.
 - Mac: audit hot inference paths for env/config/rwlock reads and ensure selected plan/path are visible before benchmarks.
 - Product/ExecutionPlan: keep turning validated paths into explicit profiles and health/capability visibility.
 - Sync owner: post short cross-lane digests whenever either lane finds a major lesson, accepted path, rejected path, or benchmark-validity rule.

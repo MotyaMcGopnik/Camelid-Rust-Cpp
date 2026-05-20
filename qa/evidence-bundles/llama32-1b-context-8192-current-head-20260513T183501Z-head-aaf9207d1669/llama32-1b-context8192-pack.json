@@ -10,7 +10,7 @@
   "prompts": [
     {
       "id": "roughly-8192-token-recall",
-      "note": "Canonical Ubuntu current-head attempt to determine whether the exact 1B row can move beyond 4096 or must be blocked with proof.",
+      "note": "Canonical Ubuntu current-head attempt to determine whether the exact 1B row can move beyond 4096 or must remain unpromoted with proof.",
       "messages": [
         {
           "role": "system",

@@ -26,7 +26,7 @@ The retained assertion bundle proves the WebUI:
 - PASS: model-state smoke.
 - PASS: UI regression smoke.
 - PASS: Vite production build.
-- BLOCKED remote live backend check: SSH reached the canonical Ubuntu host, but `curl http://127.0.0.1:8181/v1/health` failed with connection refused (exit 7).
+- Remote live backend check not retained: historical note says SSH reached the canonical Ubuntu host, but `curl http://127.0.0.1:8181/v1/health` failed with connection refused (exit 7).
 
 ## Retain/reject decision
 
