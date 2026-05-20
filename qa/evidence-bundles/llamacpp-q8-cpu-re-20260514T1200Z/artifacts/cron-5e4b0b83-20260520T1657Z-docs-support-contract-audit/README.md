@@ -13,11 +13,11 @@ Commands run from the docs worktree:
 ```bash
 rg -n -S '(Ubuntu|ubuntu|canonical).*?(blocked|down|unavailable|Permission denied \(publickey\))|(blocked|down|unavailable|Permission denied \(publickey\)).*?(Ubuntu|ubuntu|canonical)' CONTEXT.md docs README* qa/evidence-bundles/*/README.md qa/evidence-bundles/*/summary.json
 rg -n -S 'Permission denied \(publickey\)|Ubuntu (is )?(blocked|down|unavailable)|ubuntu (is )?(blocked|down|unavailable)|canonical Ubuntu host (is )?(blocked|down|unavailable)|canonical host (is )?(blocked|down|unavailable)' CONTEXT.md docs README* qa/evidence-bundles/*/README.md qa/evidence-bundles/*/summary.json
-rg -n -S 'ec2-[0-9]|compute\.amazonaws\.com|16\.146\.143\.184|ubuntu\.pem' CONTEXT.md docs README*
+rg -n -S '<private-host-reference-patterns>' CONTEXT.md docs README*
 rg -n -S 'production-ready|fully supported|support-contract supported|default-on|throughput claim|RSS claim' docs README* CONTEXT.md
 ```
 
-Raw outputs are preserved in `scan.txt` and `narrow-scan.txt`.
+Raw outputs are preserved in `scan.txt` and `narrow-scan.txt`; exact private host/key strings are intentionally not repeated in this artifact.
 
 ## Result
 
