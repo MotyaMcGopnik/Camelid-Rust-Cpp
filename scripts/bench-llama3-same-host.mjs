@@ -280,7 +280,7 @@ function boundedMetrics() {
     'decode_tok_per_s and ms_per_token_after_first: derived from completion_tokens_estimate after first content',
     'marker_presence: exact expected marker observed in measured output text, optionally enforced with --require-marker',
     'camelid_backend_generate_ms and camelid_backend_first_content_ms: opt-in backend timings when CAMELID_STREAM_TIMING_DIAGNOSTICS=on',
-    'camelid_backend_q8_calls and q8 timing counters: opt-in Q8 scheduler diagnostics when Camelid Q8 scheduler telemetry is also enabled',
+    'camelid_backend_q8_calls and q8 timing counters: opt-in Q8 scheduler diagnostics when Camelid Q8 scheduler telemetry is also enabled; call count includes single-projection, fused gate/up, FFN-down decode, and route-table counters',
     'resource_snapshots: host memory/load/storage snapshots before start, before measured runs, and after measured runs',
     'server_lifecycle: Camelid/llama-server startup timing, model-load timing, reuse/preloaded status, and warmup behavior',
   ]
@@ -465,7 +465,7 @@ async function consumeSseResponse({ response, started, label }) {
     backend_first_content_ms: round(Number(backendTiming?.timings_ms?.first_content)),
     backend_q8_gemm_compute_us: round(Number(backendTiming?.q8_schedule?.q8_gemm_compute_us)),
     backend_q8_pack_us: round(Number(backendTiming?.q8_schedule?.activation_quantize_pack_us)),
-    backend_q8_calls: round(Number(backendTiming?.q8_schedule?.i8mm_single_projection_calls)),
+    backend_q8_calls: q8ScheduleCallCount(backendTiming?.q8_schedule),
     decode_tok_per_s: decodeWindowMs && completionTokens > 0 ? round((completionTokens / decodeWindowMs) * 1000) : null,
     ms_per_token_after_first: decodeWindowMs && completionTokens > 0 ? round(decodeWindowMs / completionTokens) : null,
   }
@@ -701,6 +701,31 @@ function estimatePromptTokens(text) {
 function average(values) {
   if (!values.length) return null
   return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function q8ScheduleCallCount(q8Schedule) {
+  if (!q8Schedule || typeof q8Schedule !== 'object') return null
+  const direct = [
+    q8Schedule.i8mm_single_projection_calls,
+    q8Schedule.i8mm_fused_gate_up_calls,
+    q8Schedule.ffn_down_decode_consumer_taken,
+    q8Schedule.ffn_down_vnni_decode_taken,
+  ]
+  let directTotal = 0
+  for (const value of direct) {
+    const number = Number(value)
+    if (Number.isFinite(number)) directTotal += number
+  }
+  const routes = q8Schedule.projection_routes ?? q8Schedule.output_projection_by_route
+  let routeTotal = 0
+  if (routes && typeof routes === 'object') {
+    for (const route of Object.values(routes)) {
+      const calls = Number(route?.calls)
+      if (Number.isFinite(calls)) routeTotal += calls
+    }
+  }
+  const total = Math.max(directTotal, routeTotal)
+  return total > 0 ? round(total) : null
 }
 
 function round(value) {

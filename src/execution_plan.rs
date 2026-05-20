@@ -9,6 +9,8 @@ const MANAGED_ENV_KEYS: &[&str] = &[
     "CAMELID_MAC_Q8_REPACK",
     "CAMELID_MAC_Q8_PREFILL_I8MM",
     "CAMELID_MAC_Q8_SCHED",
+    "CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER",
+    "CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER",
     "CAMELID_FORWARD_RSS_TIMINGS",
     "CAMELID_X86_Q8_REPACK",
     "CAMELID_X86_Q8_KERNEL",
@@ -27,6 +29,7 @@ const MANAGED_ENV_KEYS: &[&str] = &[
     "CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED",
     "CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2",
     "CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER",
+    "CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE",
     "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
     "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
 ];
@@ -243,6 +246,22 @@ fn select_macos_q8_plan(
     reasons.push("validated macOS Apple Silicon Q8_0 runtime repack enabled".into());
     reasons.push("parallel linear enabled by execution plan".into());
 
+    if env_flag_enabled("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER") {
+        env_updates.insert("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER", Some("on"));
+        reasons.push("Mac FFN-down decode consumer gate enabled by explicit opt-in".into());
+    } else {
+        env_updates.insert("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER", Some("off"));
+        reasons.push("Mac FFN-down decode consumer remains default-off".into());
+    }
+
+    if env_flag_enabled("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER") {
+        env_updates.insert("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER", Some("on"));
+        reasons.push("Mac FFN gate/up decode consumer gate enabled by explicit opt-in".into());
+    } else {
+        env_updates.insert("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER", Some("off"));
+        reasons.push("Mac FFN gate/up decode consumer remains default-off".into());
+    }
+
     let prefill_i8mm_requested = env_flag_enabled("CAMELID_MAC_Q8_PREFILL_I8MM");
     let prefill_path = if i8mm && prefill_i8mm_requested {
         env_updates.insert("CAMELID_MAC_Q8_PREFILL_I8MM", Some("on"));
@@ -358,36 +377,77 @@ fn select_linux_x86_q8_plan(
     env_updates.insert("CAMELID_PARALLEL_LINEAR", Some("on"));
     env_updates.insert("CAMELID_X86_Q8_REPACK", Some("on"));
     env_updates.insert("CAMELID_X86_Q8_KERNEL", Some("avx2"));
+    let optional_x86_q8_gate = |name| {
+        if env_flag_enabled(name) {
+            Some("on")
+        } else {
+            Some("off")
+        }
+    };
     env_updates.insert(
         "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
-        Some("off"),
+        optional_x86_q8_gate("CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER"),
     );
     env_updates.insert(
         "CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER",
-        Some("off"),
+        optional_x86_q8_gate("CAMELID_X86_Q8_ATTENTION_OUTPUT_DECODE_CONSUMER"),
     );
     env_updates.insert(
         "CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL",
-        Some("off"),
+        optional_x86_q8_gate("CAMELID_X86_Q8_ATTENTION_OUTPUT_PACKED_ROWS4_MATMUL"),
     );
-    env_updates.insert("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", Some("off"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER",
+        optional_x86_q8_gate("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER"),
+    );
     env_updates.insert(
         "CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL",
-        Some("off"),
+        optional_x86_q8_gate("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL"),
     );
-    env_updates.insert("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", Some("off"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL",
+        optional_x86_q8_gate("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+    );
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
-        Some("off"),
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL"),
     );
-    env_updates.insert("CAMELID_X86_Q8_FFN_GATE_UP_SINGLE_OWNER", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2", Some("off"));
-    env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER", Some("off"));
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
+        optional_x86_q8_gate("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE"),
+    );
+    env_updates.insert(
+        "CAMELID_X86_Q8_FFN_GATE_UP_SINGLE_OWNER",
+        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_SINGLE_OWNER"),
+    );
     env_updates.insert("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER", Some("off"));
     env_updates.insert("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER", Some("off"));
     reasons.push("validated Ubuntu/Linux x86_64 Rust Q8 runtime repack enabled".into());
@@ -752,6 +812,8 @@ mod tests {
             "CAMELID_MAC_Q8_REPACK",
             "CAMELID_MAC_Q8_PREFILL_I8MM",
             "CAMELID_MAC_Q8_SCHED",
+            "CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER",
+            "CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER",
             "CAMELID_X86_Q8_REPACK",
             "CAMELID_X86_Q8_KERNEL",
             "CAMELID_X86_Q8_ATTENTION_PROJECTION_DECODE_CONSUMER",
@@ -769,6 +831,7 @@ mod tests {
             "CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED",
             "CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2",
             "CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER",
+            "CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE",
             "CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER",
             "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         ] {
@@ -833,6 +896,18 @@ mod tests {
             outcome.env_updates.get("CAMELID_MAC_Q8_SCHED"),
             Some(&Some("off"))
         );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
         assert!(!outcome.env_updates.contains_key("CAMELID_X86_Q8_KERNEL"));
         clear_profile_env();
     }
@@ -861,6 +936,65 @@ mod tests {
         assert_eq!(
             outcome.env_updates.get("CAMELID_MAC_Q8_SCHED"),
             Some(&Some("packed_prefill"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        clear_profile_env();
+    }
+
+    #[test]
+    fn mac_ffn_decode_consumer_plan_gates_are_default_off_and_opt_in() {
+        let _guard = env_lock();
+        clear_profile_env();
+        let default_outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(10),
+            platform("macos", "aarch64", &["dotprod", "i8mm"]),
+        );
+        assert_eq!(
+            default_outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            default_outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("off"))
+        );
+
+        clear_profile_env();
+        env::set_var("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER", "on");
+        let opt_in_outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(10),
+            platform("macos", "aarch64", &["dotprod", "i8mm"]),
+        );
+        assert_eq!(
+            opt_in_outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            opt_in_outcome
+                .env_updates
+                .get("CAMELID_MAC_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("on"))
         );
         clear_profile_env();
     }
@@ -1068,6 +1202,12 @@ mod tests {
         assert_eq!(
             outcome
                 .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE"),
+            Some(&Some("off"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
                 .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_OWNER"),
             Some(&Some("off"))
         );
@@ -1075,6 +1215,63 @@ mod tests {
             outcome
                 .env_updates
                 .get("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
+            Some(&Some("off"))
+        );
+        clear_profile_env();
+    }
+
+    #[test]
+    fn ubuntu_experimental_preserves_explicit_x86_q8_gate_opt_ins() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_PROFILE", "experimental");
+        env::set_var("CAMELID_X86_Q8_REPACK", "on");
+        env::set_var("CAMELID_X86_Q8_KERNEL", "avx2");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE", "on");
+        let outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(16),
+            platform("linux", "x86_64", &["avx2", "avx512f"]),
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_GEMM4_PREFILL"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL"),
             Some(&Some("off"))
         );
         clear_profile_env();
@@ -1099,6 +1296,7 @@ mod tests {
         env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED", "on");
         env::set_var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2", "on");
         env::set_var("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER", "on");
+        env::set_var("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE", "on");
 
         PlannerEnv::capture().apply(&BTreeMap::new());
 
@@ -1117,6 +1315,7 @@ mod tests {
         assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_ROW_GROUP_SCHED").is_err());
         assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_GEMM4_AVX2").is_err());
         assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_SINGLE_OWNER").is_err());
+        assert!(env::var("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE").is_err());
         clear_profile_env();
     }
 

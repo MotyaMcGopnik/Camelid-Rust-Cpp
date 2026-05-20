@@ -46,6 +46,7 @@ try {
   assert.ok(plan.method.bounded_metrics.some((metric) => metric.includes('not tokenizer-ground-truth tokens')))
   assert.ok(plan.method.bounded_metrics.some((metric) => metric.includes('marker_presence')))
   assert.ok(plan.method.bounded_metrics.some((metric) => metric.includes('camelid_backend_generate_ms')))
+  assert.ok(plan.method.bounded_metrics.some((metric) => metric.includes('FFN-down decode')))
   assert.match(plan.outputs.guardrail, /--require-marker/)
   assert.match(plan.claim_boundary, /does not widen support/)
   assert.match(plan.claim_boundary, /production-throughput/)
