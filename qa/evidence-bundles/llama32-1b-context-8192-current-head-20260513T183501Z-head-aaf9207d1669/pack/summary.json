@@ -35,7 +35,7 @@
         }
       ],
       "render_mode": "compact",
-      "note": "Canonical Ubuntu current-head attempt to determine whether the exact 1B row can move beyond 4096 or must be blocked with proof.",
+      "note": "Canonical Ubuntu current-head attempt to determine whether the exact 1B row can move beyond 4096 or must remain unpromoted with proof.",
       "max_tokens": 5,
       "target_context_window": 8192,
       "artifact_dir": "target/tpm-llama32-1b-context8192-head-aaf9207d1669-20260513T182739Z/pack/llama32-1b-q8-current-head-aaf9207d1669-roughly-8192-token-recall",

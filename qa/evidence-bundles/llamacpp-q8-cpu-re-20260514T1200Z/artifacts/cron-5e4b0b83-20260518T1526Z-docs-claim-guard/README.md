@@ -19,6 +19,6 @@ Scope: Ubuntu x86_64 dense Llama Q8_0 docs/context only. No Mac, Apple Silicon, 
 ## Scrub / claim boundary
 
 - Public docs use `<validation-host>`/sanitized wording only and omit private IPs, private hostnames, credential file paths, remote worktree paths, and local absolute checkout paths.
-- The same-host guard numbers are retained only as a rejection/blocked-promotion note: Camelid avg TTFT `2349.10 ms` / total `2349.46 ms`; llama.cpp avg TTFT `186.84 ms` / total `381.04 ms`; retain current baseline only.
+- The same-host guard numbers are retained only as a rejection/no-promotion note: Camelid avg TTFT `2349.10 ms` / total `2349.46 ms`; llama.cpp avg TTFT `186.84 ms` / total `381.04 ms`; retain current baseline only.
 - The canonical-host execution-plan probe is not cited as proof for local route-resolver work because the host checkout was older than the local tree.
 - No README support-matrix change, support-contract promotion, API/frontend readiness claim, broad model-family claim, portability claim, or default-on acceleration claim was added.

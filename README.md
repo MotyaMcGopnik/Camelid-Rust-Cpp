@@ -155,7 +155,7 @@ The maintainer matrix now includes four exact Q8_0 supported rows with checked r
 ### Read this boundary carefully
 
 - Support does **not** inherit across model sizes, variants, quantizations, tokenizer lanes, or nearby GGUFs.
-- Support language currently means only the exact supported rows above; Mistral has no support claim yet and may only be discussed as the exact active validation row above. The Mixtral row may only be described as one-token backend MoE runtime evidence with later-generation/API/WebUI/frontend readiness blocked.
+- Support language currently means only the exact supported rows above; Mistral has no support claim yet and may only be discussed as the exact active validation row above. The Mixtral row may only be described as one-token backend MoE runtime evidence with later-generation/API/WebUI/frontend readiness not yet established.
 - Checked context packs do **not** imply model-native or broader context support.
 - Template and bounded perf/RSS evidence for current supported rows is exact-row scoped; it does **not** imply broad arbitrary/Jinja-template behavior, production throughput, neighboring GGUFs, portability, or broader context support.
 - The next exact-row 8B, `Mistral-7B-Instruct-v0.3.Q8_0.gguf`, and `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` gaps are broader context, portability, repeated durability evidence, and normalized support bundles; Mistral also still needs explicit contract promotion after fail-closed API/WebUI/RSS readiness, and Mixtral must first fix later-generation divergence and the continuation hang before any API/WebUI/frontend support claim.

@@ -13,5 +13,5 @@ Tracks:
 - perf-rss-portability: ready_to_run — Capture host facts, versions, model SHA, smoke timing, and backend RSS snapshots in one portable note.
 
 Blockers:
-- 512-context parity/performance on Ubuntu current head is still blocked; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.
+- 512-context parity/performance on Ubuntu current head was not completed in this bundle; preserve the failure durably side-by-side with passing short smoke and rerun after fixes.
 - Do not broaden to neighboring Llama sizes, quantizations, longer contexts, or other template families.

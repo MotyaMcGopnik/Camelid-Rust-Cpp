@@ -363,6 +363,6 @@
   },
   "notes": [
     "Exact-row support claims remain limited to the listed row only.",
-    "Bundle normalized from on-disk Ubuntu artifacts; current public-head rerun is still blocked by the Ubuntu cargo toolchain."
+    "Bundle normalized from on-disk Ubuntu artifacts; no current public-head rerun is claimed here because the historical Ubuntu cargo toolchain could not parse Cargo.lock v4."
   ]
 }

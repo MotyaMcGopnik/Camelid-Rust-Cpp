@@ -16,7 +16,7 @@ Every public surface should tell the same four-row story:
 Next-family public language is locked to row-by-row evidence, not family-wide support:
 
 - Mistral 7B Instruct: “In active validation for `Mistral-7B-Instruct-v0.3.Q8_0.gguf`; not supported yet.”
-- Mixtral 8x7B Instruct: “Bounded one-token backend MoE runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; later-generation/API/WebUI/frontend readiness is blocked.”
+- Mixtral 8x7B Instruct: “Bounded one-token backend MoE runtime evidence exists for `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf`; later-generation/API/WebUI/frontend readiness is not yet established.”
 - Qwen 2.5 7B Instruct: “Planned exact-row candidate for `Qwen2.5-7B-Instruct-Q8_0.gguf`; not supported yet.”
 - Gemma 2 9B Instruct: “Planned exact-row candidate for `gemma-2-9b-it-Q8_0.gguf`; not supported yet.”
 
