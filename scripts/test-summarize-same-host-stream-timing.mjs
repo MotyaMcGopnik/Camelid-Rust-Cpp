@@ -98,6 +98,11 @@ try {
   assert.equal(report.projection_routes[0].elapsed_ms_mean, 18)
   assert.equal(report.projection_routes[0].calls.mean, 8)
   assert.equal(report.projection_routes[0].output_width.mean, 128256)
+  assert.ok(report.projection_routes.some((route) => (
+    route.key === 'ffn_down.x86_vnni_decode_consumer'
+    && route.calls.mean === 3
+    && route.output_width.mean === 8192
+  )))
   assert.equal(report.output_projection_routes[0].key, 'logits.q8_0_borrowed_packed_rows4')
   assert.equal(report.projection_layer_routes[0].key, 'layer_5.ffn_down.mac_decode_consumer')
   assert.equal(report.projection_layer_routes[0].elapsed_ms_mean, 12)
@@ -106,6 +111,11 @@ try {
   assert.equal(report.projection_route_denials[0].key, 'ffn_gate_up.decode_consumer.stream_diagnostics_collect_projection_details')
   assert.equal(report.projection_route_denials[0].denials.mean, 28)
   assert.equal(report.projection_route_denials[0].output_width.mean, 8192)
+  assert.ok(report.projection_route_denials.some((denial) => (
+    denial.key === 'ffn_down.x86_vnni_decode_consumer.gate_off'
+    && denial.denials.mean === 2
+    && denial.output_width.mean === 8192
+  )))
   assert.equal(report.layer_role_hotspots[0].stage, 'generation')
   assert.equal(report.layer_role_hotspots[0].layer_index, 5)
   assert.equal(report.layer_role_hotspots[0].role, 'attention_output')
@@ -207,6 +217,15 @@ function run(label, firstByte, backendFirstContent, clientTtft, generate, residu
         },
         projection_route_calls: 8,
         projection_routes: {
+          'ffn_down.x86_vnni_decode_consumer': {
+            role: 'ffn_down',
+            route: 'x86_vnni_decode_consumer',
+            calls: 3,
+            rows: 3,
+            input_width: 3072,
+            output_width: 8192,
+            elapsed_us: 3000,
+          },
           'logits.q8_0_borrowed_packed_rows4': {
             role: 'logits',
             route: 'q8_0_borrowed_packed_rows4',
@@ -240,6 +259,15 @@ function run(label, firstByte, backendFirstContent, clientTtft, generate, residu
           },
         },
         projection_route_denials: {
+          'ffn_down.x86_vnni_decode_consumer.gate_off': {
+            role: 'ffn_down',
+            route: 'x86_vnni_decode_consumer',
+            reason: 'gate_off',
+            denials: 2,
+            rows: 2,
+            input_width: 3072,
+            output_width: 8192,
+          },
           'ffn_gate_up.decode_consumer.stream_diagnostics_collect_projection_details': {
             role: 'ffn_gate_up',
             route: 'decode_consumer',

@@ -219,7 +219,7 @@ function analyzeCamelidRun(run, index) {
     client_first_byte_minus_role_yield_ms: delta(clientFirstByte, roleYield),
     client_first_content_minus_content_yield_ms: delta(clientTtft, firstContentYield),
     client_done_minus_final_yield_ms: delta(finite(run.total_elapsed_ms), finalYield),
-    q8_calls: finite(run.backend_q8_calls ?? run?.backend_timing?.q8_schedule?.i8mm_single_projection_calls),
+    q8_calls: q8ScheduleCallCount(run.backend_q8_calls, q8Schedule),
     q8_total_gemm_us: finite(run.backend_q8_gemm_compute_us ?? q8Schedule.q8_gemm_compute_us),
     q8_total_pack_us: finite(run.backend_q8_pack_us ?? q8Schedule.activation_quantize_pack_us),
     q8_fused_gate_up_calls: finite(q8Schedule.i8mm_fused_gate_up_calls),
@@ -680,6 +680,33 @@ function parseArgs(argv) {
 function finite(value) {
   const number = Number(value)
   return Number.isFinite(number) ? number : null
+}
+
+function q8ScheduleCallCount(explicitValue, q8Schedule) {
+  const explicit = finite(explicitValue)
+  if (explicit !== null) return explicit
+  if (!q8Schedule || typeof q8Schedule !== 'object') return null
+  const direct = [
+    q8Schedule.i8mm_single_projection_calls,
+    q8Schedule.i8mm_fused_gate_up_calls,
+    q8Schedule.ffn_down_decode_consumer_taken,
+    q8Schedule.ffn_down_vnni_decode_taken,
+  ]
+  let directTotal = 0
+  for (const value of direct) {
+    const number = finite(value)
+    if (number !== null) directTotal += number
+  }
+  const routes = q8Schedule.projection_routes ?? q8Schedule.output_projection_by_route
+  let routeTotal = 0
+  if (routes && typeof routes === 'object') {
+    for (const route of Object.values(routes)) {
+      const calls = finite(route?.calls)
+      if (calls !== null) routeTotal += calls
+    }
+  }
+  const total = Math.max(directTotal, routeTotal)
+  return total > 0 ? total : null
 }
 
 function delta(left, right) {
