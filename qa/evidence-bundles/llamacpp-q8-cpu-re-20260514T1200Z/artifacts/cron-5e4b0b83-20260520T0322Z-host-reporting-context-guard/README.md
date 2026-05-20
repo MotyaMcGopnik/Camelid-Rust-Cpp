@@ -8,7 +8,7 @@
 - Files changed: `CONTEXT.md`, `docs/runtime/cross-lane-sync.md`.
 - Gate/env: local macOS docs-only gate; remote validation was not attempted in this run.
 - Baseline: docs had a same-host guard definition and cross-lane benchmark cautions but no shared glossary term for current-run canonical host reporting.
-- Results: `git diff --check` passed; scan log records no explicit `Ubuntu is blocked`, `Ubuntu is down`, `Ubuntu is unavailable`, or Ubuntu `Permission denied (publickey)` host-status sentence in `README.md`, `CONTEXT.md`, `docs`, `frontend/scripts`, `src`, or `scripts`.
+- Results: `git diff --check` passed; scan log records no explicit stale Ubuntu host-failure status sentence in `README.md`, `CONTEXT.md`, `docs`, `frontend/scripts`, `src`, or `scripts`.
 - Retain/reject: retained docs/context slice.
 - Next tracer bullet: if remote validation is needed, run the canonical SSH command in that same run and cite exact stderr on failure; otherwise state remote validation was not attempted.
 

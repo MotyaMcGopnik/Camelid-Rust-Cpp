@@ -144,6 +144,7 @@ Primary public evidence anchors for this lane:
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260519T1439Z-docs-cross-lane-evidence-status/README.md` (docs cross-lane evidence-status refresh: `docs/runtime/cross-lane-sync.md` now scopes Ubuntu status as evidence status, keeps `d9ad412` evidence-needed, and states remote validation was not attempted in this run)
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260519T1647Z-docs-host-reporting-neutral/README.md` (docs host-reporting neutral wording: public docs now require evidence-scoped host-status language and include the canonical probe command; remote validation was not attempted in this run)
 - `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260519T2020Z-docs-evidence-needed-status/README.md` (docs/scaffold evidence-needed status cleanup: generated full-support scaffolds and validation notes now avoid stale host-state wording; remote validation was not attempted in this run)
+- `qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260520T0714Z-docs-host-reporting-safe-slice/README.md` (docs/context safe slice: prior example wording in host-reporting evidence was de-quoted, public docs scan passed, and remote validation was not attempted in this run)
 - the retained/reject notes for bounded Ubuntu x86 Q8 experiments kept under `qa/evidence-bundles/`
 
 ## Product/runtime note
