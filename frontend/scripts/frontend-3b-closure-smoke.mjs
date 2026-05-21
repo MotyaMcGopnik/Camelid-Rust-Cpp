@@ -108,6 +108,31 @@ assert.equal(catalogThreeBHint.exact, true, '3B catalog cards must not render fa
 assert.equal(isCompatibilitySupportedForModel(capabilities, exactThreeBModel), true, 'supported 3B rows require an exact row plus Q8_0 evidence')
 const quantMismatchHint = findCompatibilityHint(capabilities, { ...exactThreeBModel, quant: 'Q4_K_M' })
 assert.equal(compatibilityHintLabel(quantMismatchHint), 'llama32_3b_instruct_q8_0: quant mismatch', '3B exact-row surfaces must name quant mismatch instead of falling back to another supported row')
+const spoofedThreeBRowIdWrongArtifact = {
+  ...exactThreeBModel,
+  id: 'llama32_3b_instruct_q8_0',
+  name: 'llama32_3b_instruct_q8_0',
+  runtime_model_name: 'llama32_3b_instruct_q8_0',
+  model_path: '/models/not-Llama-3.2-3B-Instruct-Q8_0.gguf',
+  quant: 'Q8_0',
+}
+const spoofedThreeBHint = findCompatibilityHint(capabilities, spoofedThreeBRowIdWrongArtifact)
+assert.equal(compatibilityHintLabel(spoofedThreeBHint), 'llama32_3b_instruct_q8_0: exact GGUF not verified', '3B exact-row support must not unlock from a saved row id without the exact GGUF filename')
+assert.equal(isCompatibilitySupportedForModel(capabilities, spoofedThreeBRowIdWrongArtifact), false, '3B row-id spoofing with a neighboring GGUF path must fail closed')
+assert.equal(
+  getChatGateState(capabilities, spoofedThreeBRowIdWrongArtifact, { ...runtime, active_model_id: 'llama32_3b_instruct_q8_0' }).chatUnlocked,
+  false,
+  '3B WebUI chat must stay blocked when the active runtime row id is spoofed but artifact identity does not match',
+)
+const spoofedThreeBNameWrongArtifact = {
+  ...exactThreeBModel,
+  id: 'local-wrong-artifact',
+  name: 'Llama 3.2 3B Instruct Q8_0',
+  runtime_model_name: 'local-wrong-artifact',
+  model_path: '/models/Llama-3.2-3B-Instruct-Q8_0-neighbor.gguf',
+  quant: 'Q8_0',
+}
+assert.equal(compatibilityHintLabel(findCompatibilityHint(capabilities, spoofedThreeBNameWrongArtifact)), 'llama32_3b_instruct_q8_0: exact GGUF not verified', '3B model-size labels still need the exact GGUF artifact identity')
 assert.equal(compatibilityHintMatchesExactTarget(capabilities, exactThreeBModel, llama32ThreeBTarget), true, 'ModelsView exact-row matching must accept the canonical 3B row')
 assert.equal(modelRuntimeIdMatches(exactThreeBModel, runtime), true, '3B backend active_model_id must match the selected runtime row')
 assert.equal(isRunnableInCurrentRuntime(exactThreeBModel, runtime), true, '3B runtime readiness must require the active backend row and generation_ready=true')

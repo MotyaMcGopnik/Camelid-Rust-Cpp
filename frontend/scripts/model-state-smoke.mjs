@@ -395,11 +395,19 @@ const promotedOneBFixture = {
   model_compatibility: capabilityFixture.model_compatibility.map((row) => row.id === 'llama32_1b_instruct_q8_0' ? { ...row, status: 'supported_current_gate' } : row),
 }
 assert.equal(isCompatibilitySupportedForModel(promotedOneBFixture, { name: 'Llama 3.2 1B Instruct' }), false, 'exact-size Llama rows still need quant evidence even after promotion')
-const llama32ThreeBHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' })
+const llama32ThreeBExactArtifactModel = {
+  name: 'Llama 3.2 3B Instruct Q8_0',
+  model_path: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q8_0.gguf',
+  quant: 'Q8_0',
+}
+const llama32ThreeBHint = findCompatibilityHint(capabilityFixture, llama32ThreeBExactArtifactModel)
 assert.equal(llama32ThreeBHint.target.id, 'llama32_3b_instruct_q8_0', 'Llama 3.2 3B must match its exact row rather than inheriting the 8B row')
 assert.equal(compatibilityHintLabel(llama32ThreeBHint), 'llama32_3b_instruct_q8_0: supported exact row smoke')
-assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }), true, 'exact promoted 3B rows are supported only with exact size/instruct/quant evidence')
-assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { id: 'llama32_3b_instruct_q8_0' }), true, '3B Q8_0 exact-row helpers should match only the promoted row')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, llama32ThreeBExactArtifactModel), true, 'exact promoted 3B rows are supported only with exact size/instruct/quant/artifact evidence')
+assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, llama32ThreeBExactArtifactModel, { id: 'llama32_3b_instruct_q8_0' }), true, '3B Q8_0 exact-row helpers should match only the promoted row')
+const llama32ThreeBNameOnlyHint = findCompatibilityHint(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' })
+assert.equal(compatibilityHintLabel(llama32ThreeBNameOnlyHint), 'llama32_3b_instruct_q8_0: exact GGUF not verified', '3B name-only rows must not unlock without the exact GGUF filename')
+assert.equal(isCompatibilitySupportedForModel(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }), false, '3B name-size-quant evidence alone is not enough without exact artifact identity')
 assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Instruct Q4_K_M', quant: 'Q4_K_M' }, { id: 'llama32_3b_instruct_q8_0' }), false, '3B non-Q8 entries must not satisfy exact-row frontend card/readiness matching')
 assert.equal(compatibilityHintMatchesExactTarget(capabilityFixture, { name: 'Llama 3.2 3B Base Q8_0', quant: 'Q8_0' }, { id: 'llama32_3b_instruct_q8_0' }), false, '3B base/non-instruct entries must not satisfy the exact instruct support row')
 const llama32ThreeBQ4PathModel = { name: 'Llama 3.2 3B Instruct', id: 'llama32_3b_instruct_q8_0', model_path: '<ubuntu-model-path>/Llama-3.2-3B-Instruct-Q4_0.gguf' }
@@ -415,8 +423,13 @@ assert.equal(
 )
 assert.equal(
   getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-3b', name: 'Llama 3.2 3B Instruct Q8_0', quant: 'Q8_0' }, { active_model_id: 'llama32-3b', loaded_now: true, generation_ready: true }).chatUnlocked,
+  false,
+  'Llama 3.2 3B name-only rows should not unlock supported WebUI chat even when runtime-green',
+)
+assert.equal(
+  getChatGateState(capabilityFixture, { ...localLoadedReady, id: 'llama32-3b', ...llama32ThreeBExactArtifactModel }, { active_model_id: 'llama32-3b', loaded_now: true, generation_ready: true }).chatUnlocked,
   true,
-  'Llama 3.2 3B exact rows should unlock supported WebUI chat when runtime-green',
+  'Llama 3.2 3B exact artifact rows should unlock supported WebUI chat when runtime-green',
 )
 const liveScalarThreeBModel = {
   ...localLoadedReady,
