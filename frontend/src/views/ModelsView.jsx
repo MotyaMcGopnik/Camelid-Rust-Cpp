@@ -828,6 +828,9 @@ export default function ModelsView({
                 const selected = selectedModelId === localMatch?.id
                 const busy = localMatch && loadingModelId === localMatch.id
                 const errorCopy = modelErrorCopy(localMatch)
+                const catalogCompatibilityHint = findCompatibilityHint(capabilities, localMatch, item)
+                const catalogExactTarget = isExactCompatibilityHint(catalogCompatibilityHint) ? catalogCompatibilityHint.target : null
+                const catalogExactSupported = Boolean(catalogExactTarget && isSupportedCapabilityStatus(catalogExactTarget.status))
 
                 return (
                   <article key={item.catalog_id} className={`model-card models-model-card models-catalog-card-clean ${active ? 'active-model-card' : ''} ${selected ? 'selected-model-card' : ''}`}>
@@ -843,6 +846,7 @@ export default function ModelsView({
                       {active && <div className="pin-badge">Loaded now</div>}
                       {selected && <div className="pin-badge">Next chat</div>}
                       {item.quant && <div className="pin-badge">Catalog quant: {item.quant}</div>}
+                      {catalogExactTarget && <div className={`pin-badge ${catalogExactSupported ? 'ready' : 'warm'}`}>{catalogExactTarget.id}: {catalogExactSupported ? 'supported exact row' : formatCapabilityStatus(catalogExactTarget.status)}</div>}
                       {hasLocalModelPath(localMatch) && <div className="pin-badge">Saved locally</div>}
                     </div>
 

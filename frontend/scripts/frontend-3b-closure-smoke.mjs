@@ -97,6 +97,14 @@ assert.equal(exactHint.target.id, 'llama32_3b_instruct_q8_0', '3B closure must r
 assert.equal(exactHint.exact, true, '3B closure must be an exact compatibility hint, not a family fallback')
 assert.equal(compatibilityHintLabel(exactHint), 'llama32_3b_instruct_q8_0: supported exact row smoke')
 assert.match(compatibilityHintCopy(exactHint), /runtime generation still requires loaded_now=true and generation_ready=true/)
+const catalogThreeBHint = findCompatibilityHint(capabilities, null, {
+  name: 'Llama 3.2 3B Instruct Q8_0',
+  repo_id: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
+  filename: 'Llama-3.2-3B-Instruct-Q8_0.gguf',
+  quant: 'Q8_0',
+})
+assert.equal(catalogThreeBHint.target.id, 'llama32_3b_instruct_q8_0', '3B catalog cards must resolve the exact supported row from catalog filename + Q8_0 evidence')
+assert.equal(catalogThreeBHint.exact, true, '3B catalog cards must not render family-level support from catalog metadata')
 assert.equal(isCompatibilitySupportedForModel(capabilities, exactThreeBModel), true, 'supported 3B rows require an exact row plus Q8_0 evidence')
 const quantMismatchHint = findCompatibilityHint(capabilities, { ...exactThreeBModel, quant: 'Q4_K_M' })
 assert.equal(compatibilityHintLabel(quantMismatchHint), 'llama32_3b_instruct_q8_0: quant mismatch', '3B exact-row surfaces must name quant mismatch instead of falling back to another supported row')
@@ -222,6 +230,8 @@ assert.match(modelsSource, /matchesLlama32ThreeBTarget\(model, capabilities\)/, 
 assert.match(modelsSource, /Fill import form with exact path/, 'ModelsView must provide the exact 3B import path affordance when the row is absent locally')
 assert.match(modelsSource, /Chat unlockable/, 'ModelsView must expose the retained exact-row chat-unlock state')
 assert.match(modelsSource, /matchedChatGate\s*=\s*matchedModel \? getChatGateState\(capabilities, matchedModel, runtime\) : null/, 'ModelsView retained 3B row cards must use the shared chat gate for loaded_now and generation_ready checks')
+assert.match(modelsSource, /catalogCompatibilityHint\s*=\s*findCompatibilityHint\(capabilities, localMatch, item\)/, 'ModelsView catalog cards must resolve exact-row support through the shared capability matcher')
+assert.match(modelsSource, /catalogExactTarget\.id[\s\S]*supported exact row/, 'ModelsView catalog cards must visibly label exact supported rows without widening catalog metadata into broad support')
 assert.match(apiSource, /Selected exact-row evidence/, 'API view must surface selected 3B exact-row evidence')
 assert.match(apiSource, /selectedChatGate\s*=\s*getChatGateState\(capabilities, selectedModel, runtime\)/, 'API view must use the shared exact-row chat gate for 3B endpoint readiness')
 assert.match(apiSource, /selectedExactRowReady\s*=\s*selectedChatGate\.chatUnlocked/, 'API view must not reimplement 3B endpoint readiness separately from Chat/System')
