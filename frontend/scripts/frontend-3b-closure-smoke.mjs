@@ -14,6 +14,7 @@ import {
   compatibilityHintMatchesExactTarget,
   exactRowSupportLanes,
   findCompatibilityHint,
+  frontendSupportContractCopy,
   isCompatibilitySupportedForModel,
   rowSupportBoundaryCopy,
   rowSupportNextStepCopy,
@@ -105,6 +106,19 @@ const catalogThreeBHint = findCompatibilityHint(capabilities, null, {
 })
 assert.equal(catalogThreeBHint.target.id, 'llama32_3b_instruct_q8_0', '3B catalog cards must resolve the exact supported row from catalog filename + Q8_0 evidence')
 assert.equal(catalogThreeBHint.exact, true, '3B catalog cards must not render family-level support from catalog metadata')
+const catalogThreeBWrongArtifactHint = findCompatibilityHint(capabilities, null, {
+  name: 'Llama 3.2 3B Instruct Q8_0',
+  repo_id: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
+  filename: 'Llama-3.2-3B-Instruct-Q8_0-neighbor.gguf',
+  quant: 'Q8_0',
+})
+assert.equal(compatibilityHintLabel(catalogThreeBWrongArtifactHint), 'llama32_3b_instruct_q8_0: exact GGUF not verified', '3B catalog cards must not turn an exact title plus a neighboring GGUF filename into support')
+assert.equal(isCompatibilitySupportedForModel(capabilities, null, {
+  name: 'Llama 3.2 3B Instruct Q8_0',
+  repo_id: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
+  filename: 'Llama-3.2-3B-Instruct-Q8_0-neighbor.gguf',
+  quant: 'Q8_0',
+}), false, '3B catalog support must fail closed when the exact GGUF filename is missing')
 assert.equal(isCompatibilitySupportedForModel(capabilities, exactThreeBModel), true, 'supported 3B rows require an exact row plus Q8_0 evidence')
 const quantMismatchHint = findCompatibilityHint(capabilities, { ...exactThreeBModel, quant: 'Q4_K_M' })
 assert.equal(compatibilityHintLabel(quantMismatchHint), 'llama32_3b_instruct_q8_0: quant mismatch', '3B exact-row surfaces must name quant mismatch instead of falling back to another supported row')
@@ -224,6 +238,8 @@ assert.doesNotMatch(rowSupportBoundaryCopy(llama32ThreeBTarget, capabilities.api
 assert.match(rowSupportBoundaryCopy(llama32ThreeBTarget, capabilities.api_features), /production|throughput/i, '3B boundary copy must keep production-throughput caveats visible')
 assert.doesNotMatch(rowSupportNextStepCopy(llama32ThreeBTarget, capabilities.api_features), /arbitrary|Jinja/i, '3B next-step copy should not repeat resolved template/Jinja caveats')
 assert.match(rowSupportNextStepCopy(llama32ThreeBTarget, capabilities.api_features), /production|throughput/i, '3B next-step copy must keep production-throughput caveats visible')
+assert.doesNotMatch(frontendSupportContractCopy(capabilities), /arbitrary|Jinja/i, '3B support-contract copy should remove resolved row-scoped template/Jinja caveats when every supported exact row has row evidence')
+assert.match(frontendSupportContractCopy(capabilities), /production|throughput/i, '3B support-contract copy must keep production-throughput unpromoted until the exact row reports production-throughput evidence')
 
 assert.equal(LLAMA32_3B_ACCEPTANCE_TARGET.id, 'llama-3.2-3b-instruct-q8')
 assert.match(LLAMA32_3B_ACCEPTANCE_TARGET.model_path, /Llama-3\.2-3B-Instruct-Q8_0\.gguf$/)
