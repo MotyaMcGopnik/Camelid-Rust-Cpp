@@ -8,6 +8,23 @@ Most local-model stacks are easy to demo and hard to trust. Camelid is a Rust-na
 
 Camelid does not treat “probably works” as “supported.” Support moves only when the evidence is green.
 
+## Benchmark highlights
+
+Camelid is working toward 1:1 behavioral parity with llama.cpp while keeping the implementation Rust-native. The goal is simple: match the trusted local-inference baseline, show exactly where Camelid already agrees with it, and keep closing the remaining performance gap with measured Rust runtime work.
+
+Current retained highlights:
+
+| What we measured | llama.cpp | Camelid | Takeaway |
+| --- | ---: | ---: | --- |
+| Exact-row generation parity | Reference output | **Matched token IDs and text** across the promoted Q8_0 rows | Correctness is already green for TinyLlama 1.1B, Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B checked envelopes. |
+| Llama 3.2 3B Q8_0 guarded stream run | 5.60s total | **3.01s total** | Best retained experimental stream result: Camelid was **46.4% faster** with marker guards passing for both runtimes. |
+| Llama 3.2 3B Q8_0 x86 route-map run | 374.88ms total | **413.42ms total** | Closest retained same-host x86 result: Camelid landed **within 10.3%** while the Q8 route work remains experimental. |
+| Llama 3.2 3B Q8_0 opt-in parallel Q8 probe | Camelid baseline: 13.96s | **12.20s** | Rust-side Q8 work cut first-token generate time by **12.6%** in the retained direction probe. |
+
+> **Benchmark boundary:** these are retained highlights, not a broad production-throughput claim. Optimized paths stay evidence-gated and default-off until parity, repeatability, portability, and support-contract checks all agree.
+
+Public evidence anchors include [`STATUS.md`](STATUS.md) and the [`Llama 3.2 3B parallel Q8 first-token manifest`](qa/evidence-bundles/llama32-3b-parallel-q8-first-token-20260505T140400Z-head-ffc22b85214f/manifest.json). Same-host raw benchmark artifacts are retained in validation evidence and must be scrubbed before publication.
+
 ## Why organizations adopt Camelid
 
 Organizations adopt Camelid because local AI needs more than raw inference. They need a product contract they can trust: what works, what does not, and whether the runtime, API, and UI all tell the same truth.
