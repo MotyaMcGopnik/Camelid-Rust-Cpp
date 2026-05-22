@@ -6,6 +6,19 @@
 
 The project has a working server, OpenAI-compatible completions/chat endpoints, exact-row capability reporting, and a React/Vite WebUI. The core product rule is simple: a model row is supported only when runtime behavior, validation artifacts, API readiness, frontend readiness, and docs all agree.
 
+## Benchmark Highlights
+
+Camelid is working toward 1:1 behavioral parity with llama.cpp while keeping the implementation Rust-native. The first goal is verification, not speed theater: match the trusted local-inference baseline for exact rows, prove generated-token agreement where Camelid already agrees with it, and only then promote faster paths.
+
+| Scope | Model / run | Camelid path | llama.cpp | Camelid | Takeaway |
+| --- | --- | --- | --- | --- | --- |
+| Verification first | Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Q8_0 checked envelopes | Default supported path | Reference token IDs and text | Matching generated token IDs and text inside supported envelopes | Support moves only where exact-row parity, API, WebUI, and evidence agree. |
+| Apple Silicon retained candidate | Llama 3.2 3B Q8_0 short request | Default-off Q8 lane | about 530 ms total | about 478 ms total | Narrow same-host result; total wall time improved, but first-token latency still trails llama.cpp. |
+| Headline guarded stream run | Llama 3.2 3B Q8_0 | Confirmed experimental highlight | 5.60 s total | 3.01 s total | 46.4% faster with marker guards passing for both runtimes. |
+| Current Ubuntu target | Llama 3.2 3B Q8_0 x86 route-map run | Default-off Rust Q8 optimization lane | 374.88 ms total | 413.42 ms total | Camelid trails by 10.3%; this is the active measured optimization target. |
+
+> **Benchmark boundary:** these are retained highlights, not a broad production-throughput claim. Optimized paths are evidence-gated and default-off. Camelid promotes code to the default path only after exact-row parity, repeatability, portability, and support-contract checks all agree.
+
 ## What Works Today
 
 Camelid can:
@@ -21,7 +34,7 @@ Camelid does **not** bundle model weights. Full local chat requires a supported 
 
 ![Camelid WebUI chat surface](docs/assets/camelid-readme-chat-surface-dark.png)
 
-*Camelid WebUI chat surface with local readiness and support-contract gating.*
+*Camelid dark, collapsed-rail chat surface with local readiness and support-contract gating.*
 
 ## Support Matrix
 
