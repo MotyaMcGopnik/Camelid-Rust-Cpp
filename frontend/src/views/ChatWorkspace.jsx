@@ -511,6 +511,7 @@ export default function ChatWorkspace({
   const lastUpdated = selectedConversation?.updated_at ? formatDate(selectedConversation.updated_at) : null
   const modelPickerTitle = selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what Camelid should use for this chat.'
   const selectedChatGate = getChatGateState(capabilities, selectedModel, runtime)
+  const apiUnavailable = runtime?.status === 'offline'
   const selectedRuntimeReady = selectedChatGate.runtimeReady
   const selectedModelCapabilitySupported = selectedChatGate.contractSupported || isCompatibilitySupportedForModel(capabilities, selectedModel)
   const supportBlocked = selectedRuntimeReady && !selectedModelCapabilitySupported
@@ -523,6 +524,8 @@ export default function ChatWorkspace({
     : 'Choose a model before inferring any support boundary. Camelid will not promote filenames or saved paths into compatibility claims.'
   const selectedModelMeta = supportBlocked
     ? 'Load a supported model to chat'
+    : apiUnavailable
+      ? 'API unavailable'
     : !selectedModelRunnable
       ? describeModelState(selectedModel)
       : selectedChatGate.runtimeLoaded
@@ -531,38 +534,49 @@ export default function ChatWorkspace({
   const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !generationActive
   const capabilityLaneStatus = getChatCapabilityLaneCopy(selectedChatGate, capabilities)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
-  const runnableModels = models.filter((model) => getChatGateState(capabilities, model, runtime).chatUnlocked)
-  const runtimeStatusLabel = selectedModelRunnable
+  const runtimeStatusLabel = apiUnavailable
+    ? 'API unavailable'
+    : selectedModelRunnable
     ? 'Local chat ready'
     : selectedRuntimeReady
       ? 'Runtime ready, support gated'
       : runtime?.loaded_now
         ? 'Loaded, not generation-ready'
         : 'No generation-ready model'
-  const runtimeStatusCopy = selectedModelRunnable
+  const runtimeStatusCopy = apiUnavailable
+    ? 'Camelid did not respond. Start the server or check the API base before loading a model.'
+    : selectedModelRunnable
     ? `${selectedModelName} is loaded now and generation_ready=true.`
     : selectedRuntimeReady
       ? 'The runtime is ready; Camelid still needs an exact supported row before chat unlocks.'
       : runtime?.loaded_now
         ? 'Wait for generation_ready=true before sending prompts.'
         : 'Load a local GGUF from Library to start the readiness check.'
-  const supportStatusLabel = selectedModelCapabilitySupported
+  const supportStatusLabel = apiUnavailable
+    ? 'Contract unavailable'
+    : selectedModelCapabilitySupported
     ? selectedCompatibilityLabel
     : selectedModel
       ? selectedCompatibilityLabel
       : 'Choose model first'
-  const supportStatusCopy = selectedModelCapabilitySupported
+  const supportStatusCopy = apiUnavailable
+    ? 'The /api/capabilities contract could not be read while the API is unavailable.'
+    : selectedModelCapabilitySupported
     ? `${selectedCompatibilityLabel}. COMPATIBILITY.md and /api/capabilities agree for this model and quant.`
     : selectedModel
       ? selectedCompatibilityCopy
       : 'Camelid does not infer broad support from filenames, families, or saved paths.'
   const readinessFinePrint = selectedModelRunnable
     ? 'Ready for this loaded exact row. Broader scope details stay in /api/capabilities instead of the chat composer.'
+    : apiUnavailable
+      ? 'Chat unlocks after the Camelid API responds and the selected model passes runtime and support-contract readiness.'
     : 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
   const emptyHeroEyebrow = 'Camelid'
-  const readinessState = selectedModelRunnable ? 'ready' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
+  const readinessState = selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
     ? 'Ready'
+    : apiUnavailable
+      ? 'API unavailable'
     : supportBlocked
       ? 'Choose a supported model'
       : selectedModel
@@ -570,11 +584,15 @@ export default function ChatWorkspace({
         : 'Choose a model to begin'
   const productHeroTitle = selectedModelRunnable
     ? 'How can I help?'
+    : apiUnavailable
+      ? 'Connect Camelid to begin.'
     : supportBlocked
       ? 'Choose a supported model.'
       : 'Load a model to begin.'
   const productHeroSummary = selectedModelRunnable
     ? 'Ask anything, or start from one of the prompts below. Camelid is running the selected exact row locally.'
+    : apiUnavailable
+      ? 'The frontend is ready, but the Camelid API is not responding. Start the local server and the chat surface will update automatically.'
     : supportBlocked
       ? 'The runtime is available, but chat stays locked until the selected model has an exact supported row.'
       : 'Load a generation-ready GGUF model to unlock local chat. Camelid will keep showing what is missing until then.'
@@ -584,7 +602,7 @@ export default function ChatWorkspace({
   }
 
   const renderReadinessPills = (extraClass = '', ariaLabel = 'Chat readiness and support boundary') => (
-    <div className={`chat-readiness-pill-row chat-readiness-strip-live ${extraClass} is-${readinessState}`} aria-label={ariaLabel}>
+    <div className={`chat-readiness-pill-row chat-readiness-strip-live ${extraClass} is-${readinessState}`} aria-label={ariaLabel} aria-live="polite">
       <div className="chat-readiness-pill" title={runtimeStatusCopy}>
         <span>Runtime</span>
         <strong>{runtimeStatusLabel}</strong>
@@ -609,19 +627,29 @@ export default function ChatWorkspace({
       )
     }
 
+    const modelOptionLabel = (model) => {
+      const gate = getChatGateState(capabilities, model, runtime)
+      if (gate.chatUnlocked) return `${model.name} · Ready`
+      if (apiUnavailable) return `${model.name} · API unavailable`
+      if (gate.runtimeReady) return `${model.name} · Support gated`
+      if (gate.runtimeLoaded) return `${model.name} · Loading`
+      return `${model.name} · Not loaded`
+    }
+
     return (
       <label className="composer-model-picker" title={modelPickerTitle}>
         <span className="composer-tool-label">Model</span>
         <select
           className="composer-model-select"
           aria-label="Choose model for chat"
-          value={selectedModel?.id || selectedModelId}
+          value={selectedModel?.id || selectedModelId || ''}
           onChange={(e) => setSelectedModelId(e.target.value)}
           disabled={generationActive}
         >
-          {runnableModels.map((model) => (
+          {!selectedModel && <option value="">Choose model</option>}
+          {models.map((model) => (
             <option key={model.id} value={model.id}>
-              {model.name}
+              {modelOptionLabel(model)}
             </option>
           ))}
         </select>
@@ -672,7 +700,7 @@ export default function ChatWorkspace({
               )}
 
               <div className="composer composer-assistant composer-assistant-stage composer-assistant-stage-clean composer-assistant-product">
-                <textarea className="composer-input composer-input-assistant composer-input-assistant-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
+                <textarea className="composer-input composer-input-assistant composer-input-assistant-stage" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : apiUnavailable ? 'Camelid API unavailable' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
                 <div className="composer-assistant-footer composer-assistant-footer-stage composer-assistant-footer-stage-clean">
                   <div className="composer-assistant-tools composer-assistant-tools-stage composer-assistant-tools-stage-clean">
                     {renderModelPicker()}
@@ -745,7 +773,7 @@ export default function ChatWorkspace({
 
       {!isFreshThread && (
         <div className="composer composer-assistant composer-assistant-floating">
-          <textarea className="composer-input composer-input-assistant" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask Camelid' : 'Choose a ready model first'} disabled={generationActive || !selectedModelRunnable} />
+          <textarea className="composer-input composer-input-assistant" value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask Camelid' : apiUnavailable ? 'Camelid API unavailable' : 'Choose a ready model first'} disabled={generationActive || !selectedModelRunnable} />
           <div className="composer-assistant-footer">
             <div className="composer-assistant-tools">
               {renderModelPicker()}
