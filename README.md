@@ -6,37 +6,6 @@
 
 The project has a working server, OpenAI-compatible completions/chat endpoints, exact-row capability reporting, and a React/Vite WebUI. The core product rule is simple: a model row is supported only when runtime behavior, validation artifacts, API readiness, frontend readiness, and docs all agree.
 
-## Current Status
-
-As of 2026-05-22, Camelid is useful but deliberately narrow:
-
-- **Working product surface:** Rust GGUF loader/runtime, `/v1/completions`, `/v1/chat/completions`, `/api/capabilities`, model load/readiness APIs, and a chat-first WebUI.
-- **Supported exact rows:** TinyLlama 1.1B Chat Q8_0, Llama 3.2 1B Instruct Q8_0, Llama 3.2 3B Instruct Q8_0, and Llama 3 8B Instruct Q8_0 have row-specific evidence inside the documented envelopes.
-- **Next row:** `Mistral-7B-Instruct-v0.3.Q8_0.gguf` has strong validation evidence, including tokenizer/template, 1-token, 50-token, bounded-context, and fail-closed API/WebUI/RSS checks, but it is **not supported yet** until the contract is explicitly promoted across docs/API/frontend.
-- **Blocked row:** `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` has bounded one-token backend MoE runtime evidence, but later-generation divergence and a continuation HTTP hang still block support.
-- **Performance posture:** correctness is ahead of throughput. Apple Silicon and Ubuntu x86 Q8 acceleration work exists behind default-off gates; it is not a default-on production-throughput claim.
-
-## Benchmark Highlights
-
-- **Working product surface:** Rust GGUF loader/runtime, `/v1/completions`, `/v1/chat/completions`, `/api/capabilities`, model load/readiness APIs, and a chat-first WebUI.
-- **Supported exact rows:** TinyLlama 1.1B Chat Q8_0, Llama 3.2 1B Instruct Q8_0, Llama 3.2 3B Instruct Q8_0, and Llama 3 8B Instruct Q8_0 have row-specific evidence inside the documented envelopes.
-- **Next row:** `Mistral-7B-Instruct-v0.3.Q8_0.gguf` has strong validation evidence, including tokenizer/template, 1-token, 50-token, bounded-context, and fail-closed API/WebUI/RSS checks, but it is **not supported yet** until the contract is explicitly promoted across docs/API/frontend.
-- **Blocked row:** `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` has bounded one-token backend MoE runtime evidence, but later-generation divergence and a continuation HTTP hang still block support.
-- **Performance posture:** correctness is ahead of throughput. Apple Silicon and Ubuntu x86 Q8 acceleration work exists behind default-off gates; it is not a default-on production-throughput claim.
-
-## What Works Today
-
-Camelid can:
-
-- load supported local GGUF model files
-- generate through OpenAI-compatible completions and chat-completions APIs
-- report exact-row model compatibility through `/api/capabilities`
-- keep unsupported or unproven rows fail-closed
-- expose the same support boundary in the WebUI
-- validate supported rows against llama.cpp-backed parity artifacts before public support language moves
-
-Public evidence anchors include [`STATUS.md`](STATUS.md) and the [`Llama 3.2 3B parallel Q8 first-token manifest`](qa/evidence-bundles/llama32-3b-parallel-q8-first-token-20260505T140400Z-head-ffc22b85214f/manifest.json).
-
 ## What Works Today
 
 Camelid can:
