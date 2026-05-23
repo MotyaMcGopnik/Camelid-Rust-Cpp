@@ -6481,6 +6481,21 @@ textarea.composer-input-assistant {
   background: var(--color-warning);
 }
 
+.chat-readiness-pill.is-ready::before {
+  background: var(--color-ready);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-ready) 13%, transparent);
+}
+
+.chat-readiness-pill.is-waiting::before {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+.chat-readiness-pill.is-blocked::before {
+  background: var(--color-error);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+
 .chat-readiness-pill span {
   color: var(--color-text-muted);
   font-size: 0.68rem;
@@ -6498,6 +6513,60 @@ textarea.composer-input-assistant {
 
 .chat-readiness-pill-wide {
   max-width: min(100%, 390px);
+}
+
+.chat-surface-notice {
+  width: min(100%, 860px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 auto;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 58%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  box-shadow: var(--shadow-inset);
+}
+
+.chat-surface-notice-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-text-muted) 11%, transparent);
+}
+
+.chat-surface-notice.is-ready .chat-surface-notice-dot {
+  background: var(--color-ready);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-ready) 13%, transparent);
+}
+
+.chat-surface-notice.is-waiting .chat-surface-notice-dot,
+.chat-surface-notice.is-idle .chat-surface-notice-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+.chat-surface-notice.is-blocked .chat-surface-notice-dot,
+.chat-surface-notice.is-offline .chat-surface-notice-dot {
+  background: var(--color-error);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+
+.chat-surface-notice strong {
+  display: block;
+  color: var(--color-text);
+  font-size: 0.9rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.chat-surface-notice p {
+  margin: 3px 0 0;
+  color: color-mix(in srgb, var(--color-text-muted) 88%, var(--color-text) 12%);
+  font-size: 0.82rem;
+  line-height: 1.42;
 }
 
 .chat-layout-empty .composer-assistant-product,
@@ -6728,6 +6797,19 @@ textarea.composer-input-assistant {
   .chat-layout-empty .composer-assistant-product {
     padding: 13px;
     border-radius: 20px;
+  }
+
+  .chat-surface-notice {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 11px 12px;
+  }
+
+  .chat-surface-notice .ghost-button {
+    grid-column: 2;
+    justify-self: start;
+    min-height: 34px;
   }
 
   .chat-layout-empty .composer-assistant-stage-clean .composer-input-assistant-stage {

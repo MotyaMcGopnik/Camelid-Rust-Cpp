@@ -39,6 +39,13 @@ function getChatCapabilityLaneCopy(selectedChatGate, capabilities) {
   }
 }
 
+function readinessTone({ ready = false, blocked = false, offline = false, waiting = false } = {}) {
+  if (ready) return 'ready'
+  if (offline || blocked) return 'blocked'
+  if (waiting) return 'waiting'
+  return 'idle'
+}
+
 const normalizeCodeLanguage = (value) => {
   const language = String(value || '').trim().replace(/[^a-zA-Z0-9_+#.-].*$/, '')
   if (!language) return 'Code'
@@ -329,6 +336,24 @@ function LiveGenerationBadge({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL })
   )
 }
 
+function ChatSurfaceNotice({ state, title, copy, actionLabel, onAction }) {
+  if (!title && !copy) return null
+  return (
+    <div className={`chat-surface-notice is-${state}`} role="status" aria-live="polite">
+      <span className="chat-surface-notice-dot" aria-hidden="true" />
+      <div>
+        {title && <strong>{title}</strong>}
+        {copy && <p>{copy}</p>}
+      </div>
+      {actionLabel && onAction && (
+        <button type="button" className="ghost-button ghost-button-quiet" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function AssistantMarkdownInner({ content, streaming = false }) {
   const normalized = String(content || '').replace(/\r\n/g, '\n')
   const blocks = []
@@ -607,6 +632,41 @@ export default function ChatWorkspace({
     : supportBlocked
       ? 'The runtime is available, but chat stays locked until the selected model has an exact supported row.'
       : 'Load a generation-ready GGUF model to unlock local chat. Camelid will keep showing what is missing until then.'
+  const surfaceNoticeTitle = selectedModelRunnable
+    ? ''
+    : apiUnavailable
+      ? 'Camelid API is unavailable'
+      : supportBlocked
+        ? 'Exact support row required'
+        : selectedModel
+          ? 'Runtime readiness pending'
+          : 'Choose a model'
+  const surfaceNoticeCopy = selectedModelRunnable
+    ? ''
+    : apiUnavailable
+      ? 'The chat UI is ready, but the local API needs to respond before prompts can be sent.'
+      : supportBlocked
+        ? 'The runtime is ready, but Camelid will not unlock chat until the selected model and quant match a supported /api/capabilities row.'
+        : selectedModel
+          ? selectedModelGateSummary
+          : 'Add or select a local GGUF model from Models, then load it into the Camelid runtime.'
+  const runtimeTone = readinessTone({
+    ready: selectedModelRunnable,
+    offline: apiUnavailable,
+    waiting: Boolean(runtime?.loaded_now || selectedModel),
+  })
+  const supportTone = readinessTone({
+    ready: selectedModelCapabilitySupported && !apiUnavailable,
+    offline: apiUnavailable,
+    blocked: supportBlocked,
+    waiting: Boolean(selectedModel),
+  })
+  const capabilityTone = readinessTone({
+    ready: selectedChatGate.contractSupported && !apiUnavailable,
+    offline: apiUnavailable,
+    blocked: supportBlocked,
+    waiting: Boolean(selectedModel),
+  })
   const handleDemoPrompt = (prompt) => {
     if (generationActive || !selectedModelRunnable) return
     setComposer(prompt)
@@ -614,15 +674,15 @@ export default function ChatWorkspace({
 
   const renderReadinessPills = (extraClass = '', ariaLabel = 'Chat readiness and support boundary') => (
     <div className={`chat-readiness-pill-row chat-readiness-strip-live ${extraClass} is-${readinessState}`} aria-label={ariaLabel} aria-live="polite">
-      <div className="chat-readiness-pill" title={runtimeStatusCopy}>
+      <div className={`chat-readiness-pill is-${runtimeTone}`} title={runtimeStatusCopy}>
         <span>Runtime</span>
         <strong>{runtimeStatusLabel}</strong>
       </div>
-      <div className="chat-readiness-pill" title={supportStatusCopy}>
+      <div className={`chat-readiness-pill is-${supportTone}`} title={supportStatusCopy}>
         <span>Support</span>
         <strong>{supportStatusLabel}</strong>
       </div>
-      <div className="chat-readiness-pill chat-readiness-pill-wide" title={capabilityLaneStatus.copy}>
+      <div className={`chat-readiness-pill chat-readiness-pill-wide is-${capabilityTone}`} title={capabilityLaneStatus.copy}>
         <span>Capabilities</span>
         <strong>{capabilityLaneStatus.label}</strong>
       </div>
@@ -714,6 +774,16 @@ export default function ChatWorkspace({
                 renderReadinessPills()
               )}
 
+              {!selectedModelRunnable && (
+                <ChatSurfaceNotice
+                  state={readinessState}
+                  title={surfaceNoticeTitle}
+                  copy={surfaceNoticeCopy}
+                  actionLabel={readinessActionLabel}
+                  onAction={() => setTab(readinessActionTab)}
+                />
+              )}
+
               {selectedModelRunnable && (
                 <div className="demo-prompt-panel" aria-label="Prompt starters">
                   <span>Starters</span>
@@ -758,16 +828,13 @@ export default function ChatWorkspace({
             )}
 
             {!selectedModelRunnable && (
-              <div className="setup-card setup-card-inline setup-card-assistant">
-                <div>
-                  <p className="panel-kicker">Before you chat</p>
-                  <h2>{supportBlocked ? 'Support contract needs an exact row' : 'Choose a runnable model'}</h2>
-                  <p className="hero-summary">{supportBlocked ? `${selectedCompatibilityLabel}. ${selectedCompatibilityCopy}` : selectedModelGateSummary}</p>
-                </div>
-                <div className="composer-actions single-action-row">
-                  <button className="primary-button" onClick={() => setTab(readinessActionTab)}>{readinessActionLabel}</button>
-                </div>
-              </div>
+              <ChatSurfaceNotice
+                state={readinessState}
+                title={surfaceNoticeTitle}
+                copy={surfaceNoticeCopy}
+                actionLabel={readinessActionLabel}
+                onAction={() => setTab(readinessActionTab)}
+              />
             )}
 
             <div className="chat-thread chat-thread-assistant">
