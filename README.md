@@ -15,7 +15,7 @@ Camelid is working toward 1:1 behavioral parity with llama.cpp while keeping the
 | Verification first | Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Q8_0 checked envelopes | Default supported path | Reference token IDs and text | Matching generated token IDs and text inside supported envelopes | Support moves only where exact-row parity, API, WebUI, and evidence agree. |
 | Apple Silicon retained candidate | Llama 3.2 3B Q8_0 short request | Default-off Q8 lane | about 530 ms total | about 478 ms total | Narrow same-host result; total wall time improved, but first-token latency still trails llama.cpp. |
 | Headline guarded stream run | Llama 3.2 3B Q8_0 | Confirmed experimental highlight | 5.60 s total | 3.01 s total | 46.4% faster with marker guards passing for both runtimes. |
-| Current Ubuntu target | Llama 3.2 3B Q8_0 x86 route-map run | Default-off Rust Q8 optimization lane | 374.88 ms total | 413.42 ms total | Camelid trails by 10.3%; this is the active measured optimization target. |
+| Current Ubuntu target | Llama 3.2 3B Q8_0 current-main same-host run | Default-off Rust Q8 optimization lane | about 502 ms total | about 8.67 s total | Current retained same-host evidence is negative: marker guards passed, but Camelid trails substantially, so this remains active bottleneck work rather than a speed claim. |
 
 > **Benchmark boundary:** these are retained highlights, not a broad production-throughput claim. Optimized paths are evidence-gated and default-off. Camelid promotes code to the default path only after exact-row parity, repeatability, portability, and support-contract checks all agree.
 
@@ -76,7 +76,7 @@ The current workstream is focused on widening support without weakening the cont
 Camelid's speed story is still in progress. The best current performance evidence is narrow and default-off:
 
 - Apple Silicon Q8 work has a retained Llama 3.2 3B short-request candidate that improved total wall time in a bounded run, but first-token latency and decode-heavy runs still need work before production-throughput language is justified.
-- Ubuntu x86 Q8 work has packed storage, AVX2/VNNI-oriented kernels, route telemetry, and FFN decode-chain experiments behind gates, but no broad default-on speed claim.
+- Ubuntu x86 Q8 work has packed storage, AVX2/VNNI-oriented kernels, route telemetry, and FFN decode-chain experiments behind gates. The latest retained current-main same-host run is a negative timing artifact, so there is no broad default-on speed claim.
 
 For details, see [`docs/performance/ubuntu-x86-q8.md`](docs/performance/ubuntu-x86-q8.md) and [`STATUS.md`](STATUS.md#ubuntu-x86-q8-acceleration-update).
 
