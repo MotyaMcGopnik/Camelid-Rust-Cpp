@@ -36,6 +36,7 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
   const generationReady = Boolean(runtime?.generation_ready)
   const loadedNow = Boolean(runtime?.loaded_now)
   const selectedRuntimeMatches = modelRuntimeIdMatches(selectedModel, runtime)
+  const q8Runtime = runtime?.q8_runtime
   const selectedExactRowReady = selectedChatGate.chatUnlocked
   const readinessPillCopy = selectedExactRowReady
     ? 'Selected exact row ready'
@@ -134,6 +135,8 @@ export default function ApiView({ runtime, selectedModel, capabilities }) {
             <p><b>loaded_now:</b> {loadedNow ? 'true' : 'false'}</p>
             <p><b>generation_ready:</b> {generationReady ? 'true' : 'false'}</p>
             <p><b>active_model_id:</b> {runtime?.active_model_id || 'none'}</p>
+            <p><b>q8_policy:</b> {q8Runtime?.policy || 'unavailable'}</p>
+            <p>{q8Runtime?.note || 'Q8 storage policy is reported by /v1/health when the runtime is online.'}</p>
           </div>
 
           <div className="api-card">

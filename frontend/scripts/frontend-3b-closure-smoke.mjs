@@ -284,6 +284,7 @@ assert.match(chatSource, /getChatCapabilityLaneCopy\(selectedChatGate, capabilit
 assert.match(chatSource, /Row-scoped \/api\/capabilities evidence; it does not widen model-native context/, 'live 3B capability copy must not widen support beyond the exact row')
 assert.match(chatSource, /LiveGenerationBadge/, 'live 3B chat must keep an active streaming badge after first content arrives')
 assert.match(chatSource, /StreamingLoader/, 'live 3B chat must keep an accessible pre-token loader')
+assert.equal((chatSource.match(/aria-label="Message Camelid"/g) || []).length, 2, 'live 3B chat must render exactly one composer textarea in the empty state and one in the active-thread state')
 assert.match(modelsSource, /matchesLlama32ThreeBTarget\(model, capabilities\)/, 'ModelsView 3B acceptance target must hide only on exact target match')
 assert.match(modelsSource, /Fill import form with exact path/, 'ModelsView must provide the exact 3B import path affordance when the row is absent locally')
 assert.match(modelsSource, /Chat unlockable/, 'ModelsView must expose the retained exact-row chat-unlock state')

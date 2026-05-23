@@ -216,6 +216,15 @@ function getReadinessRows(model, runtime) {
   ]
 }
 
+function q8RuntimePolicyLabel(q8Runtime) {
+  if (!q8Runtime) return ''
+  if (q8Runtime.policy === 'forced_lazy_file_backed_q8') return 'forced lazy Q8'
+  if (q8Runtime.policy === 'lazy_q8_linear_default_or_auto_retain') return 'auto-retain eligible'
+  if (q8Runtime.policy === 'eager_f32_with_retained_q8_blocks') return 'f32 + retained Q8'
+  if (q8Runtime.policy === 'eager_cpu_materialization') return 'eager f32'
+  return q8Runtime.policy
+}
+
 function ReadinessGrid({ model, runtime, includePath = false }) {
   const rows = getReadinessRows(model, runtime)
   const localPath = model?.model_path || model?.path || ''
@@ -615,6 +624,7 @@ export default function ModelsView({
           <div className="models-card-tags">
             <div className={`pin-badge ${runtime?.loaded_now ? 'ready' : ''}`}>loaded_now: {runtime?.loaded_now ? 'true' : 'false'}</div>
             <div className={`pin-badge ${runtime?.generation_ready ? 'ready' : ''}`}>generation_ready: {runtime?.generation_ready ? 'true' : 'false'}</div>
+            {runtime?.q8_runtime && <div className={`pin-badge ${runtime.q8_runtime.retain_q8_blocks ? 'ready' : 'warm'}`}>q8: {q8RuntimePolicyLabel(runtime.q8_runtime)}</div>}
           </div>
           {activeLocalModel && <ReadinessGrid model={activeLocalModel} runtime={runtime} includePath />}
           {runtime?.loaded_now && (

@@ -39,7 +39,7 @@ use crate::{
         LlamaOutputProjectionDiagnostic, LlamaQ8ScheduleTelemetry, LlamaSampler, SamplingConfig,
     },
     model::{DenseLlamaDims, LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
-    tensor::{CpuTensor, Q8_0Block, TensorStore},
+    tensor::{parse_byte_count_env, CpuTensor, Q8_0Block, TensorStore},
     tokenizer::Tokenizer,
     BackendError,
 };
@@ -191,7 +191,17 @@ pub struct HealthResponse {
     pub loaded_now: bool,
     pub generation_ready: bool,
     pub active_model_id: Option<String>,
+    pub q8_runtime: Q8RuntimeHealth,
     pub execution_plan: Option<ExecutionPlan>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Q8RuntimeHealth {
+    pub policy: &'static str,
+    pub lazy_q8_linear: bool,
+    pub retain_q8_blocks: bool,
+    pub file_cache_bytes: Option<u64>,
+    pub note: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -777,6 +787,7 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         loaded_now,
         generation_ready,
         active_model_id: model.as_ref().map(|m| m.id.clone()),
+        q8_runtime: q8_runtime_health(),
         execution_plan: state.execution_plan.read().await.clone(),
     })
 }
@@ -1861,6 +1872,53 @@ fn lazy_q8_linear_materialization_enabled() -> bool {
         }
         Ok(_) | Err(env::VarError::NotPresent) => true,
         Err(_) => true,
+    }
+}
+
+fn q8_file_cache_bytes_for_health() -> Option<u64> {
+    parse_byte_count_env("CAMELID_Q8_0_FILE_CACHE_BYTES").map(|value| value as u64)
+}
+
+fn q8_lazy_env_value_disabled(value: &str) -> bool {
+    value.eq_ignore_ascii_case("0")
+        || value.eq_ignore_ascii_case("false")
+        || value.eq_ignore_ascii_case("off")
+        || value.eq_ignore_ascii_case("disabled")
+}
+
+fn q8_lazy_env_present_and_enabled() -> bool {
+    matches!(env::var(LAZY_Q8_LINEAR_ENV), Ok(value) if !q8_lazy_env_value_disabled(&value))
+}
+
+fn q8_runtime_health() -> Q8RuntimeHealth {
+    let lazy_q8_linear = lazy_q8_linear_materialization_enabled();
+    let retain_q8_blocks = cpu_weight_materialization_retains_q8_blocks();
+    let forced_lazy = q8_lazy_env_present_and_enabled();
+    let policy = if forced_lazy {
+        "forced_lazy_file_backed_q8"
+    } else if lazy_q8_linear {
+        "lazy_q8_linear_default_or_auto_retain"
+    } else if retain_q8_blocks {
+        "eager_f32_with_retained_q8_blocks"
+    } else {
+        "eager_cpu_materialization"
+    };
+    let note = if forced_lazy {
+        "Q8_0 linears are explicitly forced to file-backed lazy reads; retained-block settings do not override that loader path."
+    } else if lazy_q8_linear {
+        "Q8_0 linears are lazy by policy unless the loader auto-retains a fitting compact Q8 model."
+    } else if retain_q8_blocks {
+        "Lazy Q8_0 linears are disabled and Q8_0 source blocks are retained alongside eager f32 CPU weights."
+    } else {
+        "Lazy Q8_0 linears are disabled; CPU weights may be eagerly materialized within the configured budget."
+    };
+
+    Q8RuntimeHealth {
+        policy,
+        lazy_q8_linear,
+        retain_q8_blocks,
+        file_cache_bytes: q8_file_cache_bytes_for_health(),
+        note,
     }
 }
 
@@ -4968,6 +5026,53 @@ mod tests {
         let estimated = estimate_cpu_weight_materialization_bytes(&binding).unwrap();
 
         assert_eq!(estimated, 0);
+    }
+
+    #[test]
+    fn q8_runtime_health_reports_forced_lazy_before_retain() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::set_var(LAZY_Q8_LINEAR_ENV, "1");
+        std::env::set_var(RETAIN_Q8_BLOCKS_ENV, "1");
+
+        let health = q8_runtime_health();
+
+        assert_eq!(health.policy, "forced_lazy_file_backed_q8");
+        assert!(health.lazy_q8_linear);
+        assert!(health.retain_q8_blocks);
+        assert!(health.note.contains("do not override"));
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
+    }
+
+    #[test]
+    fn q8_runtime_health_reports_default_auto_retain_candidate_policy() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
+        std::env::set_var("CAMELID_Q8_0_FILE_CACHE_BYTES", "64 MiB");
+
+        let health = q8_runtime_health();
+
+        assert_eq!(health.policy, "lazy_q8_linear_default_or_auto_retain");
+        assert!(health.lazy_q8_linear);
+        assert!(!health.retain_q8_blocks);
+        assert_eq!(health.file_cache_bytes, Some(64 * 1024 * 1024));
+        std::env::remove_var("CAMELID_Q8_0_FILE_CACHE_BYTES");
+    }
+
+    #[test]
+    fn q8_runtime_health_reports_eager_retained_duplicate_policy() {
+        let _env_guard = crate::test_support::env_lock();
+        std::env::set_var(LAZY_Q8_LINEAR_ENV, "0");
+        std::env::set_var(RETAIN_Q8_BLOCKS_ENV, "1");
+
+        let health = q8_runtime_health();
+
+        assert_eq!(health.policy, "eager_f32_with_retained_q8_blocks");
+        assert!(!health.lazy_q8_linear);
+        assert!(health.retain_q8_blocks);
+        std::env::remove_var(RETAIN_Q8_BLOCKS_ENV);
+        std::env::remove_var(LAZY_Q8_LINEAR_ENV);
     }
 
     #[test]

@@ -29,10 +29,15 @@ const threads = parseOptionalPositiveInt(args.get('threads') || process.env.CAME
 const requireMarker = args.has('require-marker') || process.env.CAMELID_BENCH_REQUIRE_MARKER === '1'
 const expectedMarker = args.get('expected-marker') || process.env.CAMELID_BENCH_EXPECTED_MARKER || 'CMLD-BENCH'
 const uniquePrompt = args.has('unique-prompt') || process.env.CAMELID_BENCH_UNIQUE_PROMPT === '1'
+const minMarkerTokens = parsePositiveInt(process.env.CAMELID_BENCH_MIN_MARKER_TOKENS || '8', 'CAMELID_BENCH_MIN_MARKER_TOKENS')
 
 if (args.has('help') || args.has('h')) {
   console.log(usage())
   process.exit(0)
+}
+
+if (requireMarker && maxTokens < minMarkerTokens) {
+  throw new Error(`--require-marker needs --max-tokens >= ${minMarkerTokens}; got ${maxTokens}. Lower budgets can truncate ${JSON.stringify(expectedMarker)} before the guard can pass.`)
 }
 
 const benchmarkMessages = [

@@ -76,6 +76,19 @@ try {
   assert.match(uniquePlan.commands.harness, /--unique-prompt/)
   assert.match(uniquePlan.commands.harness, /--require-marker --expected-marker CMLD-UNIQUE/)
 
+  const truncatedMarkerRun = spawnSync(process.execPath, [
+    script,
+    '--print-plan',
+    '--model', '/tmp/Camelid Test/Llama-3.2-1B-Instruct-Q8_0.gguf',
+    '--model-id', 'llama32-1b-q8-plan',
+    '--row-id', 'llama32_1b_instruct_q8_0',
+    '--max-tokens', '4',
+    '--require-marker',
+  ], { encoding: 'utf8' })
+
+  assert.notEqual(truncatedMarkerRun.status, 0)
+  assert.match(truncatedMarkerRun.stderr, /--require-marker needs --max-tokens >= 8/)
+
   const helpRun = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8' })
   assert.equal(helpRun.status, 0, helpRun.stderr)
   assert.match(helpRun.stdout, /--print-plan/)

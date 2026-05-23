@@ -364,6 +364,7 @@ function makeDashboard({ health, models, currentModel, capabilities, conversatio
       loaded_now: Boolean(health?.loaded_now ?? health?.active_model_id),
       active_model_id: health?.active_model_id || null,
       generation_ready: Boolean(health?.generation_ready),
+      q8_runtime: health?.q8_runtime || null,
       status: health?.ok ? 'online' : 'offline',
       api_base: apiBase,
       current_model: currentModel || null,
