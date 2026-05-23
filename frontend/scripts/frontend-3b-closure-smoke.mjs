@@ -147,6 +147,14 @@ const spoofedThreeBNameWrongArtifact = {
   quant: 'Q8_0',
 }
 assert.equal(compatibilityHintLabel(findCompatibilityHint(capabilities, spoofedThreeBNameWrongArtifact)), 'llama32_3b_instruct_q8_0: exact GGUF not verified', '3B model-size labels still need the exact GGUF artifact identity')
+const spoofedThreeBSourceWrongArtifact = {
+  ...spoofedThreeBNameWrongArtifact,
+  id: 'local-wrong-artifact-with-source',
+  runtime_model_name: 'local-wrong-artifact-with-source',
+  source: 'bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q8_0.gguf',
+}
+assert.equal(compatibilityHintLabel(findCompatibilityHint(capabilities, spoofedThreeBSourceWrongArtifact)), 'llama32_3b_instruct_q8_0: exact GGUF not verified', '3B source metadata must not override the actual local GGUF filename used by runtime gating')
+assert.equal(isCompatibilitySupportedForModel(capabilities, spoofedThreeBSourceWrongArtifact), false, '3B support must fail closed when source metadata names the exact GGUF but model_path names a neighboring artifact')
 assert.equal(compatibilityHintMatchesExactTarget(capabilities, exactThreeBModel, llama32ThreeBTarget), true, 'ModelsView exact-row matching must accept the canonical 3B row')
 assert.equal(modelRuntimeIdMatches(exactThreeBModel, runtime), true, '3B backend active_model_id must match the selected runtime row')
 assert.equal(isRunnableInCurrentRuntime(exactThreeBModel, runtime), true, '3B runtime readiness must require the active backend row and generation_ready=true')
@@ -290,9 +298,11 @@ assert.match(apiSource, /selectedExactRowReady\s*=\s*selectedChatGate\.chatUnloc
 assert.match(apiSource, /selectedExactRowReady/, 'API view endpoint readiness must use selected exact-row readiness, not broad family evidence')
 assert.match(apiSource, /selectedCompatibilityTarget\.frontend_readiness_gate/, 'API view must render the 3B frontend readiness gate from /api/capabilities')
 assert.match(systemSource, /selectedChatGate\s*=\s*getChatGateState\(capabilities, selectedModel, runtime\)/, 'System view must use the shared exact-row chat gate for 3B readiness surfaces')
+assert.match(systemSource, /selectedCompatibilityHint\s*=\s*selectedChatGate\.hint \|\| findCompatibilityHint\(capabilities, selectedModel\)/, 'System selected exact-row evidence must stay anchored to the shared chat gate compatibility hint')
 assert.match(systemSource, /selectedExactRowReady\s*=\s*selectedChatGate\.chatUnlocked/, 'System view must not promote /v1 chat readiness from generation_ready alone')
 assert.match(systemSource, /Blocked for UX chat until selected exact row evidence and runtime readiness both match/, 'System curl copy must stay blocked until 3B exact-row support and runtime readiness both match')
 assert.match(systemSource, /Endpoint\/chat gate:/, 'System selected 3B evidence must show the retained endpoint/chat readiness gate')
+assert.match(systemSource, /rowSupportNextStepCopy\(target, apiFeatures\)/, 'System compatibility rows must render filtered exact-row next-step copy instead of raw blocker text')
 assert.match(topBarSource, /exactHintDetail\(activeChatGate\.hint\) \|\| exactHintDetail\(selectedChatGate\.hint\)/, 'TopBar support contract detail must prioritize the active/selected exact 3B hint label, including quant-mismatch and quant-missing blockers')
 assert.match(topBarSource, /exactTargetFromHint\(activeChatGate\.hint\)[\s\S]*exactTargetFromHint\(selectedChatGate\.hint\)[\s\S]*getCurrentCompatibilityTarget/, 'TopBar support contract detail must fall back to the first current gate row only after active/selected exact-row hints')
 

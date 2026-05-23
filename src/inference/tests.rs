@@ -1334,6 +1334,7 @@ fn clear_dense_diagnostic_env() {
         "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
         "CAMELID_X86_Q8_FFN_DOWN_PACKED_ROWS4_MATMUL",
         "CAMELID_X86_Q8_PACKED_ROWS4_MATMUL",
+        "CAMELID_X86_Q8_OUTPUT_AMX_PREFILL",
         "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
     ] {
         std::env::remove_var(key);
@@ -1649,6 +1650,7 @@ fn q8_0_hot_path_uses_resolved_plan_not_current_env() {
             attention_qkv_decode_group_chunking: false,
             attention_qkv_packed_rows4_matmul: false,
             output_packed_rows4_matmul: false,
+            output_amx_prefill: false,
             output_decode_owner: false,
             ffn_gate_up_decode_consumer: false,
             ffn_gate_up_decode_group_chunking: false,
@@ -1760,6 +1762,7 @@ fn resolved_runtime_plan_captures_q8_env_once() {
     std::env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER", "yes");
     std::env::set_var("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL", "on");
     std::env::set_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", "on");
+    std::env::set_var("CAMELID_X86_Q8_OUTPUT_AMX_PREFILL", "on");
     std::env::set_var("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER", "on");
     std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER", "true");
     std::env::set_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_GROUP_CHUNKING", "on");
@@ -1791,6 +1794,7 @@ fn resolved_runtime_plan_captures_q8_env_once() {
     assert!(plan.q8.attention_qkv_decode_consumer);
     assert!(plan.q8.attention_qkv_packed_rows4_matmul);
     assert!(plan.q8.output_packed_rows4_matmul);
+    assert!(plan.q8.output_amx_prefill);
     assert!(plan.q8.output_decode_owner);
     assert!(plan.q8.ffn_gate_up_decode_consumer);
     assert!(plan.q8.ffn_gate_up_decode_group_chunking);
@@ -1810,6 +1814,7 @@ fn resolved_runtime_plan_captures_q8_env_once() {
     std::env::remove_var("CAMELID_X86_Q8_ATTENTION_QKV_DECODE_CONSUMER");
     std::env::remove_var("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL");
     std::env::remove_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL");
+    std::env::remove_var("CAMELID_X86_Q8_OUTPUT_AMX_PREFILL");
     std::env::remove_var("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER");
     std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER");
     std::env::remove_var("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_GROUP_CHUNKING");
@@ -1847,6 +1852,10 @@ fn resolved_runtime_plan_captures_q8_env_once() {
     assert!(
         plan.q8.output_packed_rows4_matmul,
         "resolved plan should cache the output packed-rows4 matmul gate"
+    );
+    assert!(
+        plan.q8.output_amx_prefill,
+        "resolved plan should cache the output AMX prefill gate"
     );
     assert!(
         plan.q8.output_decode_owner,
@@ -1960,6 +1969,10 @@ fn runtime_profile_defaults_keep_experimental_q8_gates_closed() {
         assert!(
             !plan.q8.output_packed_rows4_matmul,
             "{profile} should not enable output packed-rows4 matmul by default"
+        );
+        assert!(
+            !plan.q8.output_amx_prefill,
+            "{profile} should not enable output AMX prefill by default"
         );
         assert!(
             !plan.q8.output_decode_owner,
@@ -2544,6 +2557,7 @@ fn q8_attention_consumer_plan(
             attention_qkv_decode_group_chunking: false,
             attention_qkv_packed_rows4_matmul: false,
             output_packed_rows4_matmul: false,
+            output_amx_prefill: false,
             output_decode_owner: false,
             ffn_gate_up_decode_consumer: false,
             ffn_gate_up_decode_group_chunking: false,
@@ -3458,6 +3472,7 @@ fn ffn_down_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
             attention_qkv_decode_group_chunking: false,
             attention_qkv_packed_rows4_matmul: false,
             output_packed_rows4_matmul: false,
+            output_amx_prefill: false,
             output_decode_owner: false,
             ffn_gate_up_decode_consumer: false,
             ffn_gate_up_decode_group_chunking: false,
@@ -3506,6 +3521,7 @@ fn ffn_down_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
             attention_qkv_decode_group_chunking: false,
             attention_qkv_packed_rows4_matmul: false,
             output_packed_rows4_matmul: false,
+            output_amx_prefill: false,
             output_decode_owner: false,
             ffn_gate_up_decode_consumer: false,
             ffn_gate_up_decode_group_chunking: false,
@@ -3558,6 +3574,7 @@ fn ffn_gate_up_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
             attention_qkv_decode_group_chunking: false,
             attention_qkv_packed_rows4_matmul: false,
             output_packed_rows4_matmul: false,
+            output_amx_prefill: false,
             output_decode_owner: false,
             ffn_gate_up_decode_consumer: enabled,
             ffn_gate_up_decode_group_chunking: false,
@@ -4037,6 +4054,71 @@ fn x86_q8_ffn_decode_chain_is_default_off_and_matches_split_consumers() {
     reset_q8_schedule_telemetry();
     std::env::remove_var(Q8_SCHEDULE_TELEMETRY_ENV);
     std::env::remove_var("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn q8_ffn_decode_chain_uses_vnni_down_when_gated() {
+    let _env_guard = env_lock();
+    clear_dense_diagnostic_env();
+    if !x86_q8_vnni_decode_cpu_supported() {
+        std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE");
+        return;
+    }
+
+    std::env::set_var(Q8_SCHEDULE_TELEMETRY_ENV, "on");
+    reset_q8_schedule_telemetry();
+
+    let (input, packed_gate, packed_up, _expected_gate_up) = runtime_packed_ffn_gate_up_case();
+    let (_down_input, packed_down, _expected_down) = runtime_vnni_packed_ffn_down_case();
+    let mut plan = ffn_decode_chain_plan();
+    plan.q8.ffn_down_vnni_decode = true;
+
+    let activated = gated_ffn_activation_with_plan(
+        &input,
+        &packed_gate,
+        &packed_up,
+        "expected_activated",
+        &ffn_gate_up_consumer_plan(true),
+        false,
+    )
+    .unwrap();
+    let expected = try_x86_q8_ffn_down_decode_consumer_path(
+        &activated.tensor,
+        &packed_down,
+        "expected_down",
+        "ffn_down",
+        &ffn_down_vnni_decode_plan(true),
+    )
+    .unwrap()
+    .expect("standalone VNNI FFN-down decode output");
+    reset_q8_schedule_telemetry();
+
+    let actual = try_x86_q8_ffn_decode_chain_path(
+        &input,
+        &packed_gate,
+        &packed_up,
+        &packed_down,
+        "layer_0_ffn_activated",
+        "layer_0_ffn_down",
+        &plan,
+    )
+    .unwrap()
+    .expect("x86 FFN decode chain should cover VNNI-packed down projection");
+
+    assert_eq!(actual.tensor.shape.dims, expected.shape.dims);
+    assert_slice_close_with_tolerance(&actual.tensor.data, &expected.data, 5e-4);
+    let telemetry = snapshot_q8_schedule_telemetry();
+    assert_eq!(telemetry.ffn_decode_chain_taken, 1);
+    assert_eq!(telemetry.ffn_down_vnni_decode_taken, 1);
+    assert_eq!(telemetry.ffn_down_vnni_decode_reject_no_vnni_pack, 0);
+    assert!(telemetry
+        .output_projection_by_route
+        .contains_key("ffn_down.x86_vnni_decode_consumer"));
+
+    reset_q8_schedule_telemetry();
+    std::env::remove_var(Q8_SCHEDULE_TELEMETRY_ENV);
+    std::env::remove_var("CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE");
 }
 
 #[test]

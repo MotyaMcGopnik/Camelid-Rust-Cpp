@@ -1,6 +1,6 @@
 # Camelid Status
 
-Last updated: 2026-05-22
+Last updated: 2026-05-23
 
 `STATUS.md` is Camelid's current release-evidence checkpoint. It records what Camelid can prove today, what moved recently, and what still blocks the next support change. Treat it as a briefing memo, not a diary. Detailed historical run logs, older validation slices, and superseded tactical notes now live in [`STATUS_ARCHIVE_2026-04.md`](STATUS_ARCHIVE_2026-04.md).
 
@@ -90,6 +90,8 @@ Current public takeaways:
 - Latest docs/context guard keeps FFN-down GEMM4 AVX2 and output-route-resolver work in the evidence-needed lane: the same-host guard still rejects any Camelid speed promotion, and output route cleanup is implementation guidance only until local plus canonical Ubuntu gates prove it.
 - Latest retained default-off hygiene slices are narrow: FFN-down GEMM4 row-group scheduling has a min-input-groups guard for the shallow-prefill synthetic surface, and ExecutionPlan now clears the FFN gate/up single-owner env gate. These are scheduler/control-plane guards only; they do not widen throughput, support, portability, API/frontend readiness, or default-on claims.
 - Latest default-off VNNI decode slice adds llama.cpp-style Q8_0 tile16 packing and an `M == 1` FFN-down route behind `CAMELID_X86_Q8_FFN_DOWN_VNNI_DECODE`. Local fallback/telemetry tests pass, and same-host Ubuntu unit validation proves the raw tile layout plus `ffn_down.x86_vnni_decode_consumer` route selection/counters. This is implementation groundwork only; no same-host timing win, default-on change, support expansion, or throughput claim is made until the retained benchmark/parity bundle exists.
+- Latest retained current-main same-host timing (`qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-95495a91-20260522T1620Z-main-samehost-bench/README.md`) is a negative Ubuntu x86 Q8 artifact for Llama 3.2 3B Q8_0: marker guardrails passed, but Camelid averaged about `8669.83 ms` TTFT / `8670.1 ms` total against llama.cpp at about `309.52 ms` TTFT / `502.09 ms` total, so it is retained as current bottleneck evidence only.
+- The follow-on FFN decode-chain same-host artifacts on current `origin/main` keep the same boundary: the missing-gate run showed `ffn_decode_chain_taken=0`, and the complete-gate run proved route use plus one-token parity, but Camelid still trailed llama.cpp (`5703.86 ms` TTFT and `2008 ms` backend generate versus llama.cpp `162.56 ms` TTFT and `284.37 ms` total). These artifacts guide the next route/gate fix and do not promote throughput, support, portability, larger context, neighboring rows, broad Llama-family claims, or any default-on path.
 - Latest docs host-reporting retained audit (`qa/evidence-bundles/llamacpp-q8-cpu-re-20260514T1200Z/artifacts/cron-5e4b0b83-20260520T1024Z-docs-host-reporting-retained-audit/README.md`) kept the canonical Ubuntu reporting rule green with a focused stale host-failure wording scan across public docs/source/status. Remote validation was not attempted in that docs-only run, so it makes no host availability or failure claim.
 
 Boundaries that remain in force:

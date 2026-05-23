@@ -39,6 +39,13 @@ function getChatCapabilityLaneCopy(selectedChatGate, capabilities) {
   }
 }
 
+function readinessTone({ ready = false, blocked = false, offline = false, waiting = false } = {}) {
+  if (ready) return 'ready'
+  if (offline || blocked) return 'blocked'
+  if (waiting) return 'waiting'
+  return 'idle'
+}
+
 const normalizeCodeLanguage = (value) => {
   const language = String(value || '').trim().replace(/[^a-zA-Z0-9_+#.-].*$/, '')
   if (!language) return 'Code'
@@ -295,9 +302,9 @@ const ACTIVE_STREAMING_LABEL = 'Streaming response'
 const OPEN_CODE_STREAMING_LABEL = 'Streaming code response'
 
 const DEMO_PROMPTS = [
-  'Build a tiny arcade maze game in one self-contained HTML file',
-  'Create a glassy launch page with animated CSS and one working button',
-  'Write a compact Python snake game using tkinter',
+  'Summarize this implementation plan and call out the risks',
+  'Draft a concise release note from these changes',
+  'Turn this checklist into a prioritized next-step plan',
 ]
 
 const streamingStatusLabel = (phase, elapsedSeconds, isOpenCode = false) => {
@@ -325,6 +332,24 @@ function LiveGenerationBadge({ elapsedSeconds, label = ACTIVE_STREAMING_LABEL })
       <span className="message-live-dot" aria-hidden="true" />
       <span>{label}</span>
       <span>{elapsedSeconds}s</span>
+    </div>
+  )
+}
+
+function ChatSurfaceNotice({ state, title, copy, actionLabel, onAction }) {
+  if (!title && !copy) return null
+  return (
+    <div className={`chat-surface-notice is-${state}`} role="status" aria-live="polite">
+      <span className="chat-surface-notice-dot" aria-hidden="true" />
+      <div>
+        {title && <strong>{title}</strong>}
+        {copy && <p>{copy}</p>}
+      </div>
+      {actionLabel && onAction && (
+        <button type="button" className="ghost-button ghost-button-quiet" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
     </div>
   )
 }
@@ -368,6 +393,8 @@ const isInterruptedPlaceholderMessage = (message) => {
 }
 
 const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsedSeconds, priorUserPrompt }) {
+  const [copied, setCopied] = useState(false)
+  const copiedResetRef = useRef(null)
   const messageContent = cleanLegacyDemoCapCopy(message.content)
   const assistantStreaming = message.role === 'assistant' && Boolean(message.streaming)
   const isOpenStreamingCode = assistantStreaming && hasOpenCodeFence(messageContent)
@@ -377,6 +404,18 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
   const showStreamingStatus = assistantStreaming && !messageContent
   const showLiveGenerationBadge = assistantStreaming && Boolean(messageContent)
   const showLengthWarning = message.role === 'assistant' && !assistantStreaming && message.finish_reason === 'length'
+  const showMessageActions = message.role === 'assistant' && Boolean(String(messageContent || '').trim())
+
+  useEffect(() => () => {
+    if (copiedResetRef.current) window.clearTimeout(copiedResetRef.current)
+  }, [])
+
+  const handleCopyMessage = async () => {
+    await copyText(messageContent)
+    setCopied(true)
+    if (copiedResetRef.current) window.clearTimeout(copiedResetRef.current)
+    copiedResetRef.current = window.setTimeout(() => setCopied(false), 1600)
+  }
 
   return (
     <article
@@ -393,6 +432,13 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
             : null
           : <p>{messageContent}</p>}
         {showLiveGenerationBadge && <LiveGenerationBadge elapsedSeconds={generationElapsedSeconds} label={liveStatusLabel} />}
+        {showMessageActions && (
+          <div className="message-actions" aria-label="Message actions">
+            <button type="button" className="message-action-button" onClick={handleCopyMessage}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        )}
         {showLengthWarning && (
           <div className="message-finish-warning" role="status">
             Stopped before completing. Ask “continue” for a complete file.
@@ -432,6 +478,7 @@ export default function ChatWorkspace({
 }) {
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
   const chatBottomRef = useRef(null)
+  const composerRef = useRef(null)
   const autoFollowGenerationRef = useRef(true)
   const composerReadinessId = 'camelid-chat-readiness-note'
   const rawVisibleMessages = useMemo(
@@ -460,6 +507,9 @@ export default function ChatWorkspace({
     visibleMessages.map((message) => `${message.id}:${message.streaming ? 'streaming' : 'done'}:${String(message.content || '').length}`).join('|')
     + `|awaiting:${awaitingAssistant ? '1' : '0'}|active:${generationActive ? '1' : '0'}`
   ), [awaitingAssistant, generationActive, visibleMessages])
+  const isFreshThread = selectedConversation
+    ? (visibleMessages.length === 0 && !pendingPrompt && !awaitingAssistant && !hasStreamingAssistant)
+    : (!pendingPrompt && !awaitingAssistant && !hasStreamingAssistant)
 
   useEffect(() => {
     if (!generationActive) {
@@ -494,9 +544,13 @@ export default function ChatWorkspace({
     return () => window.cancelAnimationFrame(frame)
   }, [generationActive, streamingScrollSignature])
 
-  const isFreshThread = selectedConversation
-    ? (visibleMessages.length === 0 && !pendingPrompt && !awaitingAssistant && !hasStreamingAssistant)
-    : (!pendingPrompt && !awaitingAssistant && !hasStreamingAssistant)
+  useLayoutEffect(() => {
+    const input = composerRef.current
+    if (!input) return
+    input.style.height = 'auto'
+    input.style.height = `${Math.min(input.scrollHeight, 220)}px`
+  }, [composer, isFreshThread, selectedConversation?.id])
+
   const handleComposerKeyDown = async (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -572,6 +626,16 @@ export default function ChatWorkspace({
     : apiUnavailable
       ? 'Chat unlocks after the Camelid API responds and the selected model passes runtime and support-contract readiness.'
     : 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
+  const selectedModelIssue = selectedModel?.load_error || selectedModel?.install_error || ''
+  const readinessActionTab = apiUnavailable ? 'api' : 'library'
+  const readinessActionLabel = apiUnavailable ? 'Open API' : 'Open Models'
+  const selectedModelGateSummary = selectedModel
+    ? selectedModelRunnable
+      ? 'Selected model is ready for Camelid chat.'
+      : selectedModelIssue
+        ? selectedModelIssue
+        : describeModelState(selectedModel)
+    : 'Choose a model before starting a Camelid chat.'
   const emptyHeroEyebrow = 'Camelid'
   const readinessState = selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
@@ -591,12 +655,47 @@ export default function ChatWorkspace({
       ? 'Choose a supported model.'
       : 'Load a model to begin.'
   const productHeroSummary = selectedModelRunnable
-    ? 'Ask anything, or start from one of the prompts below. Camelid is running the selected exact row locally.'
+    ? 'Send a prompt through the selected local model. Camelid keeps the exact-row readiness boundary visible while you work.'
     : apiUnavailable
       ? 'The frontend is ready, but the Camelid API is not responding. Start the local server and the chat surface will update automatically.'
     : supportBlocked
       ? 'The runtime is available, but chat stays locked until the selected model has an exact supported row.'
       : 'Load a generation-ready GGUF model to unlock local chat. Camelid will keep showing what is missing until then.'
+  const surfaceNoticeTitle = selectedModelRunnable
+    ? ''
+    : apiUnavailable
+      ? 'Camelid API is unavailable'
+      : supportBlocked
+        ? 'Exact support row required'
+        : selectedModel
+          ? 'Runtime readiness pending'
+          : 'Choose a model'
+  const surfaceNoticeCopy = selectedModelRunnable
+    ? ''
+    : apiUnavailable
+      ? 'The chat UI is ready, but the local API needs to respond before prompts can be sent.'
+      : supportBlocked
+        ? 'The runtime is ready, but Camelid will not unlock chat until the selected model and quant match a supported /api/capabilities row.'
+        : selectedModel
+          ? selectedModelGateSummary
+          : 'Add or select a local GGUF model from Models, then load it into the Camelid runtime.'
+  const runtimeTone = readinessTone({
+    ready: selectedModelRunnable,
+    offline: apiUnavailable,
+    waiting: Boolean(runtime?.loaded_now || selectedModel),
+  })
+  const supportTone = readinessTone({
+    ready: selectedModelCapabilitySupported && !apiUnavailable,
+    offline: apiUnavailable,
+    blocked: supportBlocked,
+    waiting: Boolean(selectedModel),
+  })
+  const capabilityTone = readinessTone({
+    ready: selectedChatGate.contractSupported && !apiUnavailable,
+    offline: apiUnavailable,
+    blocked: supportBlocked,
+    waiting: Boolean(selectedModel),
+  })
   const handleDemoPrompt = (prompt) => {
     if (generationActive || !selectedModelRunnable) return
     setComposer(prompt)
@@ -604,15 +703,15 @@ export default function ChatWorkspace({
 
   const renderReadinessPills = (extraClass = '', ariaLabel = 'Chat readiness and support boundary') => (
     <div className={`chat-readiness-pill-row chat-readiness-strip-live ${extraClass} is-${readinessState}`} aria-label={ariaLabel} aria-live="polite">
-      <div className="chat-readiness-pill" title={runtimeStatusCopy}>
+      <div className={`chat-readiness-pill is-${runtimeTone}`} title={runtimeStatusCopy}>
         <span>Runtime</span>
         <strong>{runtimeStatusLabel}</strong>
       </div>
-      <div className="chat-readiness-pill" title={supportStatusCopy}>
+      <div className={`chat-readiness-pill is-${supportTone}`} title={supportStatusCopy}>
         <span>Support</span>
         <strong>{supportStatusLabel}</strong>
       </div>
-      <div className="chat-readiness-pill chat-readiness-pill-wide" title={capabilityLaneStatus.copy}>
+      <div className={`chat-readiness-pill chat-readiness-pill-wide is-${capabilityTone}`} title={capabilityLaneStatus.copy}>
         <span>Capabilities</span>
         <strong>{capabilityLaneStatus.label}</strong>
       </div>
@@ -639,7 +738,7 @@ export default function ChatWorkspace({
 
     const runnableModels = models.filter((model) => getChatGateState(capabilities, model, runtime).chatUnlocked)
     const waitingModels = models.filter((model) => !getChatGateState(capabilities, model, runtime).chatUnlocked)
-    const selectedRunnableModelId = runnableModels.some((model) => model.id === selectedModel?.id) ? selectedModel.id : ''
+    const selectedPickerModelId = models.some((model) => model.id === selectedModel?.id) ? selectedModel.id : ''
 
     return (
       <label className={`composer-model-picker is-${readinessState}`} title={modelPickerTitle}>
@@ -647,16 +746,29 @@ export default function ChatWorkspace({
         <select
           className="composer-model-select"
           aria-label="Choose model for chat"
-          value={selectedRunnableModelId}
+          value={selectedPickerModelId}
           onChange={(e) => setSelectedModelId(e.target.value)}
           disabled={generationActive}
         >
-          {(!selectedModel || !runnableModels.length) && <option value="">{waitingModels.length ? 'No ready models' : 'Choose model'}</option>}
-          {runnableModels.map((model) => (
-            <option key={model.id} value={model.id}>
-              {modelOptionLabel(model)}
-            </option>
-          ))}
+          {!selectedModel && <option value="">Choose model</option>}
+          {runnableModels.length > 0 && (
+            <optgroup label="Ready">
+              {runnableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {modelOptionLabel(model)}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {waitingModels.length > 0 && (
+            <optgroup label="Needs readiness">
+              {waitingModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {modelOptionLabel(model)}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </label>
     )
@@ -691,9 +803,19 @@ export default function ChatWorkspace({
                 renderReadinessPills()
               )}
 
+              {!selectedModelRunnable && (
+                <ChatSurfaceNotice
+                  state={readinessState}
+                  title={surfaceNoticeTitle}
+                  copy={surfaceNoticeCopy}
+                  actionLabel={readinessActionLabel}
+                  onAction={() => setTab(readinessActionTab)}
+                />
+              )}
+
               {selectedModelRunnable && (
                 <div className="demo-prompt-panel" aria-label="Prompt starters">
-                  <span>Starters</span>
+                  <span>Prompt starters</span>
                   <div className="demo-prompt-strip">
                     {DEMO_PROMPTS.map((prompt) => (
                       <button key={prompt} type="button" className="demo-prompt-chip" onClick={() => handleDemoPrompt(prompt)} disabled={generationActive}>
@@ -705,17 +827,19 @@ export default function ChatWorkspace({
               )}
 
               <div className="composer composer-assistant composer-assistant-stage composer-assistant-stage-clean composer-assistant-product">
-                <textarea className="composer-input composer-input-assistant composer-input-assistant-stage" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : apiUnavailable ? 'Camelid API unavailable' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
+                <textarea ref={composerRef} className="composer-input composer-input-assistant composer-input-assistant-stage" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : apiUnavailable ? 'Camelid API unavailable' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
+                <textarea ref={composerRef} className="composer-input composer-input-assistant composer-input-assistant-stage" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={selectedModelRunnable ? 'Message Camelid…' : apiUnavailable ? 'Camelid API unavailable' : 'Load a model first'} disabled={generationActive || !selectedModelRunnable} />
                 <div className="composer-assistant-footer composer-assistant-footer-stage composer-assistant-footer-stage-clean">
                   <div className="composer-assistant-tools composer-assistant-tools-stage composer-assistant-tools-stage-clean">
                     {renderModelPicker()}
-                    {!selectedModelRunnable && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Models</button>}
+                    {!selectedModelRunnable && <button className="ghost-button ghost-button-quiet" onClick={() => setTab(readinessActionTab)}>{readinessActionLabel}</button>}
                   </div>
                   <div className="composer-assistant-actions composer-assistant-actions-stage">
-                    <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
+                    <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
                   </div>
                 </div>
                 <p id={composerReadinessId} className={`composer-assistant-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
+                {!selectedModelRunnable && <p className="composer-assistant-readiness-detail">{selectedModelGateSummary}</p>}
               </div>
             </div>
           </div>
@@ -734,16 +858,13 @@ export default function ChatWorkspace({
             )}
 
             {!selectedModelRunnable && (
-              <div className="setup-card setup-card-inline setup-card-assistant">
-                <div>
-                  <p className="panel-kicker">Before you chat</p>
-                  <h2>{supportBlocked ? 'Support contract needs an exact row' : 'Choose a runnable model'}</h2>
-                  <p className="hero-summary">{supportBlocked ? `${selectedCompatibilityLabel}. ${selectedCompatibilityCopy}` : describeModelState(selectedModel)}</p>
-                </div>
-                <div className="composer-actions single-action-row">
-                  <button className="primary-button" onClick={() => setTab('library')}>Open Library</button>
-                </div>
-              </div>
+              <ChatSurfaceNotice
+                state={readinessState}
+                title={surfaceNoticeTitle}
+                copy={surfaceNoticeCopy}
+                actionLabel={readinessActionLabel}
+                onAction={() => setTab(readinessActionTab)}
+              />
             )}
 
             <div className="chat-thread chat-thread-assistant">
@@ -778,7 +899,8 @@ export default function ChatWorkspace({
 
       {!isFreshThread && (
         <div className="composer composer-assistant composer-assistant-floating">
-          <textarea className="composer-input composer-input-assistant" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Ask Camelid' : apiUnavailable ? 'Camelid API unavailable' : 'Choose a ready model first'} disabled={generationActive || !selectedModelRunnable} />
+          <textarea ref={composerRef} className="composer-input composer-input-assistant" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Message Camelid…' : apiUnavailable ? 'Camelid API unavailable' : 'Choose a ready model first'} disabled={generationActive || !selectedModelRunnable} />
+          <textarea ref={composerRef} className="composer-input composer-input-assistant" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={3} placeholder={selectedModelRunnable ? 'Message Camelid…' : apiUnavailable ? 'Camelid API unavailable' : 'Choose a ready model first'} disabled={generationActive || !selectedModelRunnable} />
           <div className="composer-assistant-footer">
             <div className="composer-assistant-tools">
               {renderModelPicker()}
@@ -786,11 +908,12 @@ export default function ChatWorkspace({
               {!demoMode && selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={generationActive}>Save to memory</button>}
             </div>
             <div className="composer-assistant-actions">
-              {!selectedModelRunnable && <button className="ghost-button" onClick={() => setTab('library')}>Open Models</button>}
-              <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
+              {!selectedModelRunnable && <button className="ghost-button" onClick={() => setTab(readinessActionTab)}>{readinessActionLabel}</button>}
+              <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
             </div>
           </div>
           <p id={composerReadinessId} className={`composer-assistant-readiness-note composer-assistant-readiness-note-floating is-${readinessState}`}>{readinessFinePrint}</p>
+          {!selectedModelRunnable && <p className="composer-assistant-readiness-detail composer-assistant-readiness-detail-floating">{selectedModelGateSummary}</p>}
         </div>
       )}
     </section>
