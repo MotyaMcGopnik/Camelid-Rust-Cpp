@@ -32,6 +32,7 @@ for pattern in "${patterns[@]}"; do
     ':!target' \
     ':!frontend/dist' \
     ':!frontend/node_modules' \
+    ':!tests/api_vertical_slice.rs' \
     ':!scripts/check-public-scrub.sh' \
     ':!scripts/test-audit-evidence-bundle-privacy.mjs' || true)
   if [[ -n "$matches" ]]; then
