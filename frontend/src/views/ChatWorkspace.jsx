@@ -572,6 +572,16 @@ export default function ChatWorkspace({
     : apiUnavailable
       ? 'Chat unlocks after the Camelid API responds and the selected model passes runtime and support-contract readiness.'
     : 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
+  const selectedModelIssue = selectedModel?.load_error || selectedModel?.install_error || ''
+  const readinessActionTab = apiUnavailable ? 'api' : 'library'
+  const readinessActionLabel = apiUnavailable ? 'Open API' : 'Open Models'
+  const selectedModelGateSummary = selectedModel
+    ? selectedModelRunnable
+      ? 'Selected model is ready for Camelid chat.'
+      : selectedModelIssue
+        ? selectedModelIssue
+        : describeModelState(selectedModel)
+    : 'Choose a model before starting a Camelid chat.'
   const emptyHeroEyebrow = 'Camelid'
   const readinessState = selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
@@ -639,7 +649,7 @@ export default function ChatWorkspace({
 
     const runnableModels = models.filter((model) => getChatGateState(capabilities, model, runtime).chatUnlocked)
     const waitingModels = models.filter((model) => !getChatGateState(capabilities, model, runtime).chatUnlocked)
-    const selectedRunnableModelId = runnableModels.some((model) => model.id === selectedModel?.id) ? selectedModel.id : ''
+    const selectedPickerModelId = models.some((model) => model.id === selectedModel?.id) ? selectedModel.id : ''
 
     return (
       <label className={`composer-model-picker is-${readinessState}`} title={modelPickerTitle}>
@@ -647,16 +657,29 @@ export default function ChatWorkspace({
         <select
           className="composer-model-select"
           aria-label="Choose model for chat"
-          value={selectedRunnableModelId}
+          value={selectedPickerModelId}
           onChange={(e) => setSelectedModelId(e.target.value)}
           disabled={generationActive}
         >
-          {(!selectedModel || !runnableModels.length) && <option value="">{waitingModels.length ? 'No ready models' : 'Choose model'}</option>}
-          {runnableModels.map((model) => (
-            <option key={model.id} value={model.id}>
-              {modelOptionLabel(model)}
-            </option>
-          ))}
+          {!selectedModel && <option value="">Choose model</option>}
+          {runnableModels.length > 0 && (
+            <optgroup label="Ready">
+              {runnableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {modelOptionLabel(model)}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {waitingModels.length > 0 && (
+            <optgroup label="Needs readiness">
+              {waitingModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {modelOptionLabel(model)}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </label>
     )
@@ -709,13 +732,14 @@ export default function ChatWorkspace({
                 <div className="composer-assistant-footer composer-assistant-footer-stage composer-assistant-footer-stage-clean">
                   <div className="composer-assistant-tools composer-assistant-tools-stage composer-assistant-tools-stage-clean">
                     {renderModelPicker()}
-                    {!selectedModelRunnable && <button className="ghost-button ghost-button-quiet" onClick={() => setTab('library')}>Open Models</button>}
+                    {!selectedModelRunnable && <button className="ghost-button ghost-button-quiet" onClick={() => setTab(readinessActionTab)}>{readinessActionLabel}</button>}
                   </div>
                   <div className="composer-assistant-actions composer-assistant-actions-stage">
                     <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
                   </div>
                 </div>
                 <p id={composerReadinessId} className={`composer-assistant-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
+                {!selectedModelRunnable && <p className="composer-assistant-readiness-detail">{selectedModelGateSummary}</p>}
               </div>
             </div>
           </div>
@@ -738,10 +762,10 @@ export default function ChatWorkspace({
                 <div>
                   <p className="panel-kicker">Before you chat</p>
                   <h2>{supportBlocked ? 'Support contract needs an exact row' : 'Choose a runnable model'}</h2>
-                  <p className="hero-summary">{supportBlocked ? `${selectedCompatibilityLabel}. ${selectedCompatibilityCopy}` : describeModelState(selectedModel)}</p>
+                  <p className="hero-summary">{supportBlocked ? `${selectedCompatibilityLabel}. ${selectedCompatibilityCopy}` : selectedModelGateSummary}</p>
                 </div>
                 <div className="composer-actions single-action-row">
-                  <button className="primary-button" onClick={() => setTab('library')}>Open Library</button>
+                  <button className="primary-button" onClick={() => setTab(readinessActionTab)}>{readinessActionLabel}</button>
                 </div>
               </div>
             )}
@@ -786,11 +810,12 @@ export default function ChatWorkspace({
               {!demoMode && selectedModelRunnable && <button className="ghost-button subtle-action" onClick={saveToMemory} disabled={generationActive}>Save to memory</button>}
             </div>
             <div className="composer-assistant-actions">
-              {!selectedModelRunnable && <button className="ghost-button" onClick={() => setTab('library')}>Open Models</button>}
+              {!selectedModelRunnable && <button className="ghost-button" onClick={() => setTab(readinessActionTab)}>{readinessActionLabel}</button>}
               <button className="primary-button composer-send-button" onClick={sendMessage} disabled={!canSubmit}>{generationActive ? `Generating ${generationElapsedSeconds}s…` : 'Send'}</button>
             </div>
           </div>
           <p id={composerReadinessId} className={`composer-assistant-readiness-note composer-assistant-readiness-note-floating is-${readinessState}`}>{readinessFinePrint}</p>
+          {!selectedModelRunnable && <p className="composer-assistant-readiness-detail composer-assistant-readiness-detail-floating">{selectedModelGateSummary}</p>}
         </div>
       )}
     </section>

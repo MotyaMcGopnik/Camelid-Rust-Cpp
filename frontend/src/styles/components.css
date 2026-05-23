@@ -5623,6 +5623,18 @@ textarea.composer-input-assistant {
   font-size: 0.76rem;
 }
 
+.composer-assistant-readiness-detail {
+  margin: 6px 2px 0;
+  color: color-mix(in srgb, var(--color-text-muted) 86%, var(--color-text) 14%);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.composer-assistant-readiness-detail-floating {
+  max-width: 62ch;
+}
+
 .chat-layout-empty .composer-assistant-disclaimer-product {
   display: none;
   justify-content: center;
