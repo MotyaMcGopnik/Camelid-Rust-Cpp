@@ -2,12 +2,15 @@
 set -euo pipefail
 
 # Public-repo privacy guard: keep private operator paths, key paths, host commands,
-# and validation-host details out of tracked files.
+# raw SSH failures, and validation-host details out of tracked files.
 patterns=(
-  '/Users''/[^/]+/'
+  '/Users''/[^/]+' 
   '/home/ubuntu'
   'Documents''/cert'
   'ssh ''-i'
+  'ssh: connect to host'
+  'Operation timed out'
+  'rc=255'
   '[A-Za-z0-9._-]+@''[0-9]{1,3}([.][0-9]{1,3}){3}'
   '(^|[^0-9])10[.]([0-9]{1,3}[.]){2}[0-9]{1,3}([^0-9]|$)'
   '(^|[^0-9])192[.]168[.][0-9]{1,3}[.][0-9]{1,3}([^0-9]|$)'
@@ -15,6 +18,7 @@ patterns=(
   '54[.]218[.]217[.]232'
   '54[.]186[.]43[.]33'
   '35[.]91[.]125[.]30'
+  '16[.]146[.]143[.]184'
   '[.]pem([^A-Za-z0-9_]|$)'
   '[$]HOME/Desktop/Code/backend|/Desktop/Code/backend'
   'StrictHostKeyChecking=accept-new'
@@ -30,11 +34,6 @@ for pattern in "${patterns[@]}"; do
     ':!frontend/node_modules' \
     ':!scripts/check-public-scrub.sh' \
     ':!scripts/test-audit-evidence-bundle-privacy.mjs' || true)
-  # Canonical host-reporting rule: project docs intentionally carry the exact
-  # probe command in two places so status notes can cite the one allowed check.
-  # Keep this exception narrow; raw evidence/status artifacts remain scrubbed.
-  matches=$(printf '%s\n' "$matches" | grep -v -E \
-    '^(CONTEXT[.]md:[0-9]+:A validation status statement about the canonical Ubuntu host is current only when this exact command was attempted|docs/performance/ubuntu-x86-q8[.]md:[0-9]+:ssh -o IdentitiesOnly=yes -i /Users/timtoole/Documents/cert/ubuntu[.]pem ubuntu@16[.]146[.]143[.]184$)' || true)
   if [[ -n "$matches" ]]; then
     printf 'public scrub guard failed for pattern: %s\n%s\n' "$pattern" "$matches" >&2
     status=1
