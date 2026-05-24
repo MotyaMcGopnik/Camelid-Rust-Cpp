@@ -397,7 +397,7 @@ const isInterruptedPlaceholderMessage = (message) => {
   return content === '(generation interrupted)' || content === '(generation stopped)'
 }
 
-const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsedSeconds, priorUserPrompt }) {
+const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsedSeconds, priorUserPrompt, onReusePrompt }) {
   const [copied, setCopied] = useState(false)
   const copiedResetRef = useRef(null)
   const messageContent = cleanLegacyDemoCapCopy(message.content)
@@ -409,6 +409,9 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
   const showStreamingStatus = assistantStreaming && !messageContent
   const showLiveGenerationBadge = assistantStreaming && Boolean(messageContent)
   const showLengthWarning = message.role === 'assistant' && !assistantStreaming && message.finish_reason === 'length'
+  const showErrorWarning = message.role === 'assistant' && !assistantStreaming && message.finish_reason === 'error'
+  const showInterruptedWarning = message.role === 'assistant' && !assistantStreaming && message.finish_reason === 'interrupted'
+  const showReusePromptAction = Boolean(priorUserPrompt) && (showErrorWarning || showInterruptedWarning)
   const showMessageActions = message.role === 'assistant' && Boolean(String(messageContent || '').trim())
 
   useEffect(() => () => {
@@ -447,6 +450,23 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
         {showLengthWarning && (
           <div className="message-finish-warning" role="status">
             Stopped before completing. Ask “continue” for a complete file.
+          </div>
+        )}
+        {showErrorWarning && (
+          <div className="message-finish-warning message-finish-warning-error" role="status">
+            Generation stopped before Camelid returned a complete reply.
+          </div>
+        )}
+        {showInterruptedWarning && (
+          <div className="message-finish-warning message-finish-warning-interrupted" role="status">
+            Generation was interrupted before the reply finished.
+          </div>
+        )}
+        {showReusePromptAction && (
+          <div className="message-recovery-actions" aria-label="Recovery actions">
+            <button type="button" className="message-action-button" onClick={() => onReusePrompt?.(priorUserPrompt)}>
+              Use prompt again
+            </button>
           </div>
         )}
         {hasTokenMetrics && (
@@ -731,6 +751,27 @@ export default function ChatWorkspace({
   const secondaryActionLabel = selectedModelRunnable ? 'Save to memory' : readinessActionLabel
   const secondaryAction = selectedModelRunnable ? saveToMemory : () => setTab(readinessActionTab)
   const secondaryActionDisabled = selectedModelRunnable ? generationActive : false
+  const selectionSummaryTone = selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : selectedModelIssue ? 'blocked' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
+  const selectionSummaryLabel = selectedModelRunnable
+    ? 'Ready now'
+    : apiUnavailable
+      ? 'API unavailable'
+    : selectedModelIssue
+      ? 'Needs attention'
+    : supportBlocked
+      ? 'Support gated'
+    : selectedModel
+      ? 'Waiting on readiness'
+      : 'Choose a model'
+  const selectionSummaryCopy = selectedModelRunnable
+    ? `${selectedModelName} is loaded now with generation_ready=true and the current exact-row contract unlocked.`
+    : apiUnavailable
+      ? 'The frontend is available, but the Camelid API must respond before model readiness can be checked.'
+    : selectedModelIssue
+      ? selectedModelIssue
+    : selectedModel
+      ? selectedModelGateSummary
+      : 'Pick a local model first, then Camelid will keep the runtime and support boundary visible here.'
 
   const composerStatusItems = [
     { label: 'Model', value: selectedModelName },
@@ -758,6 +799,14 @@ export default function ChatWorkspace({
         <span>Capabilities</span>
         <strong>{capabilityLaneStatus.label}</strong>
       </div>
+    </div>
+  )
+
+  const renderComposerModelSummary = (extraClass = '') => (
+    <div className={`composer-model-summary is-${selectionSummaryTone} ${extraClass}`.trim()} aria-live="polite">
+      <span>{selectionSummaryLabel}</span>
+      <strong>{selectedModelName}</strong>
+      <p>{selectionSummaryCopy}</p>
     </div>
   )
 
@@ -908,6 +957,7 @@ export default function ChatWorkspace({
                     <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
                   </div>
                 </div>
+                {renderComposerModelSummary('composer-model-summary-stage')}
                 <p id={composerReadinessId} className={`composer-assistant-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
                 {!selectedModelRunnable && <p className="composer-assistant-readiness-detail">{selectedModelGateSummary}</p>}
               </div>
@@ -967,7 +1017,15 @@ export default function ChatWorkspace({
                 const priorUserPrompt = message.role === 'assistant'
                   ? [...visibleMessages.slice(0, index)].reverse().find((item) => item.role === 'user')?.content
                   : null
-                return <ChatMessageRow key={message.id} message={message} generationElapsedSeconds={generationElapsedSeconds} priorUserPrompt={priorUserPrompt} />
+                return (
+                  <ChatMessageRow
+                    key={message.id}
+                    message={message}
+                    generationElapsedSeconds={generationElapsedSeconds}
+                    priorUserPrompt={priorUserPrompt}
+                    onReusePrompt={setComposer}
+                  />
+                )
               })}
               {awaitingAssistant && (
                 <>
@@ -1012,6 +1070,7 @@ export default function ChatWorkspace({
               <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
             </div>
           </div>
+          {renderComposerModelSummary('composer-model-summary-floating')}
           <p id={composerReadinessId} className={`composer-assistant-readiness-note composer-assistant-readiness-note-floating is-${readinessState}`}>{readinessFinePrint}</p>
           {!selectedModelRunnable && <p className="composer-assistant-readiness-detail composer-assistant-readiness-detail-floating">{selectedModelGateSummary}</p>}
         </div>

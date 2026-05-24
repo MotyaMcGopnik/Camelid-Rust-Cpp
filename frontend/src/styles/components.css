@@ -5634,6 +5634,64 @@ textarea.composer-input-assistant {
 .composer-assistant-readiness-detail-floating {
   max-width: 62ch;
 }
+
+.composer-model-summary {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 58%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--color-chip) 74%, transparent);
+}
+
+.composer-model-summary span {
+  color: color-mix(in srgb, var(--color-text-muted) 92%, transparent);
+  font-size: 0.68rem;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.composer-model-summary strong {
+  color: var(--color-text);
+  font-size: 0.88rem;
+  font-weight: 720;
+}
+
+.composer-model-summary p {
+  margin: 0;
+  color: color-mix(in srgb, var(--color-text-muted) 86%, var(--color-text) 14%);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.composer-model-summary.is-ready {
+  border-color: color-mix(in srgb, var(--color-ready) 30%, var(--color-border-soft) 70%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-ready) 8%, transparent), color-mix(in srgb, var(--color-chip) 72%, transparent));
+}
+
+.composer-model-summary.is-blocked,
+.composer-model-summary.is-offline {
+  border-color: color-mix(in srgb, var(--color-error) 28%, var(--color-border-soft) 72%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-error) 8%, transparent), color-mix(in srgb, var(--color-chip) 72%, transparent));
+}
+
+.composer-model-summary.is-waiting {
+  border-color: color-mix(in srgb, var(--color-warning) 28%, var(--color-border-soft) 72%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-warning) 8%, transparent), color-mix(in srgb, var(--color-chip) 72%, transparent));
+}
+
+.composer-model-summary-stage {
+  margin-top: 10px;
+}
+
+.composer-model-summary-floating {
+  margin-top: 12px;
+}
+
 .chat-layout-empty .composer-assistant-disclaimer-product {
   display: none;
   justify-content: center;
@@ -5991,6 +6049,25 @@ textarea.composer-input-assistant {
   color: color-mix(in srgb, #f5b642 72%, var(--color-text) 28%);
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.message-finish-warning-error {
+  border-color: color-mix(in srgb, var(--color-error) 44%, transparent);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  color: color-mix(in srgb, var(--color-error) 72%, var(--color-text) 28%);
+}
+
+.message-finish-warning-interrupted {
+  border-color: color-mix(in srgb, var(--color-info) 42%, transparent);
+  background: color-mix(in srgb, var(--color-info) 10%, transparent);
+  color: color-mix(in srgb, var(--color-info) 72%, var(--color-text) 28%);
+}
+
+.message-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .streaming-loader {
