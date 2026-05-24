@@ -291,6 +291,7 @@ assert.match(chatSource, /LiveGenerationBadge/, 'live 3B chat must keep an activ
 assert.match(chatSource, /StreamingLoader/, 'live 3B chat must keep an accessible pre-token loader')
 assert.equal((chatSource.match(/aria-label="Message Camelid"/g) || []).length, 2, 'live 3B chat must render exactly one composer textarea in the empty state and one in the active-thread state')
 assert.match(modelsSource, /matchesLlama32ThreeBTarget\(model, capabilities\)/, 'ModelsView 3B acceptance target must hide only on exact target match')
+assert.doesNotMatch(modelsSource, /model\?\.source,[\s\S]*\]\.map\(pathBasename\)/, 'ModelsView 3B acceptance target must not treat source metadata as local GGUF artifact identity')
 assert.match(modelsSource, /Fill import form with exact path/, 'ModelsView must provide the exact 3B import path affordance when the row is absent locally')
 assert.match(modelsSource, /Chat unlockable/, 'ModelsView must expose the retained exact-row chat-unlock state')
 assert.match(modelsSource, /matchedChatGate\s*=\s*matchedModel \? getChatGateState\(capabilities, matchedModel, runtime\) : null/, 'ModelsView retained 3B row cards must use the shared chat gate for loaded_now and generation_ready checks')
