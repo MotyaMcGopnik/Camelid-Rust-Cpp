@@ -79,6 +79,14 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
     : apiUnavailable
       ? 'API connection needed'
       : 'Waiting on exact-row readiness'
+  const modelOptionLabel = (model) => {
+    const gate = getChatGateState(capabilities, model, runtime)
+    if (gate.chatUnlocked) return `${model.name} · Ready`
+    if (apiUnavailable) return `${model.name} · API offline`
+    if (gate.runtimeReady) return `${model.name} · Support gated`
+    if (gate.runtimeLoaded) return `${model.name} · Loading`
+    return `${model.name} · Not loaded`
+  }
 
   if (tab === 'chat') {
     return (
@@ -113,7 +121,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
                   >
                     {models.length ? models.map((model) => (
                       <option key={model.id} value={model.id}>
-                        {model.name}
+                        {modelOptionLabel(model)}
                       </option>
                     )) : (
                       <option value="">No models</option>
@@ -130,12 +138,12 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
             <div className={`topbar-chat-support-card ${selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : runtime?.loaded_now ? 'warm' : ''}`}>
               <span>Runtime</span>
               <strong>{chatReadinessLabel}</strong>
-              <small>{runtimeGateDetail}</small>
+              <small>{activeModel ? activeModelLabel : 'No model loaded'}</small>
             </div>
             <button type="button" className="topbar-chat-support-card topbar-chat-support-card-button" onClick={() => setTab('api')} title={`${supportGateLabel}. ${supportGateDetail}`}>
               <span>Support contract</span>
               <strong>{supportGateLabel}</strong>
-              <small>{supportGateDetail}</small>
+              <small>{selectedModelRunnable ? 'Exact row unlocked for chat.' : supportGateDetail}</small>
             </button>
           </div>
         )}
@@ -167,7 +175,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
                   const runnable = getChatGateState(capabilities, model, runtime).chatUnlocked
                   return (
                     <option key={model.id} value={model.id} disabled={!runnable}>
-                      {model.name}
+                      {modelOptionLabel(model)}
                     </option>
                   )
                 })}

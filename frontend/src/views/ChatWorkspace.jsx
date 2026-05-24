@@ -610,15 +610,15 @@ export default function ChatWorkspace({
   const selectedCompatibilityCopy = selectedModel
     ? compatibilityHintCopy(selectedCompatibilityHint)
     : 'Choose a model before inferring any support boundary. Camelid will not promote filenames or saved paths into compatibility claims.'
-  const selectedModelMeta = supportBlocked
-    ? 'Load a supported model to chat'
+  const selectedModelMeta = selectedModelRunnable
+    ? 'Ready to send'
     : apiUnavailable
-      ? 'API unavailable'
-    : !selectedModelRunnable
-      ? describeModelState(selectedModel)
-      : selectedChatGate.runtimeLoaded
-      ? 'Ready'
-      : 'Ready to chat'
+      ? 'Reconnect API to send'
+      : supportBlocked
+        ? 'Switch to a supported row'
+        : selectedModel
+          ? 'Draft now, send when ready'
+          : 'Choose a model'
   const canSubmit = Boolean(composer.trim()) && selectedModelRunnable && !generationActive
   const capabilityLaneStatus = getChatCapabilityLaneCopy(selectedChatGate, capabilities)
   const selectedModelName = selectedModel?.name || selectedModelId || 'No model selected'
@@ -658,25 +658,27 @@ export default function ChatWorkspace({
       ? selectedCompatibilityCopy
       : 'Camelid does not infer broad support from filenames, families, or saved paths.'
   const readinessFinePrint = selectedModelRunnable
-    ? 'Ready for this loaded exact row. Broader scope details stay in /api/capabilities instead of the chat composer.'
+    ? 'Ready for this loaded exact row.'
     : apiUnavailable
-      ? 'Chat unlocks after the Camelid API responds and the selected model passes runtime and support-contract readiness.'
-    : 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
+      ? 'Drafts stay editable while the Camelid API reconnects.'
+    : selectedModel
+      ? 'Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match.'
+      : 'Choose a model, then Camelid will show what still needs to pass before send unlocks.'
   const selectedModelIssue = selectedModel?.load_error || selectedModel?.install_error || ''
   const readinessActionTab = apiUnavailable ? 'api' : 'library'
   const readinessActionLabel = apiUnavailable ? 'Open API' : 'Open Models'
   const selectedModelReadinessCopy = selectedModelRunnable
     ? 'Selected model is ready for Camelid chat.'
     : apiUnavailable
-      ? 'The Camelid API is unavailable, so runtime truth cannot be checked yet.'
+      ? 'The API is offline, so readiness cannot be checked yet.'
     : selectedModelIssue
       ? selectedModelIssue
     : supportBlocked
-      ? 'Camelid has the runtime ready, but this selected row stays chat-locked until the exact support contract matches.'
+      ? 'This row is loaded, but chat stays locked until the exact support contract matches.'
     : selectedRuntimeMatchesLoadedModel
-      ? 'Camelid is still preparing this loaded model. Wait for generation_ready=true before sending a prompt.'
+      ? 'This model is loaded and still warming up. Send unlocks once generation readiness turns on.'
       : selectedModel
-        ? 'Load this model into Camelid to begin a local chat.'
+        ? 'Keep drafting here while Camelid prepares this model.'
         : 'Choose a model before starting a Camelid chat.'
   const selectedModelGateSummary = selectedModel
     ? selectedModelRunnable
@@ -687,10 +689,14 @@ export default function ChatWorkspace({
     : 'Choose a model before starting a Camelid chat.'
   const emptyHeroEyebrow = 'Camelid'
   const promptHintCopy = selectedModelRunnable
-    ? 'Enter sends · Shift+Enter adds a new line'
+    ? 'Enter sends · Shift+Enter adds a line break'
     : apiUnavailable
-      ? 'Draft now · send unlocks after the Camelid API reconnects'
-      : 'Chat unlocks after runtime and exact-row readiness both pass'
+      ? 'Draft now · send unlocks after the API reconnects'
+      : supportBlocked
+        ? 'Send unlocks after exact-row readiness passes'
+      : selectedModel
+        ? 'Draft now · send unlocks after readiness passes'
+        : 'Choose a model to unlock sending'
   const readinessState = selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const readinessLabel = selectedModelRunnable
     ? 'Ready'
@@ -704,17 +710,21 @@ export default function ChatWorkspace({
   const productHeroTitle = selectedModelRunnable
     ? 'How can I help?'
     : apiUnavailable
-      ? 'Connect Camelid to begin.'
+      ? 'Reconnect Camelid to begin.'
     : supportBlocked
       ? 'Choose a supported model.'
-      : 'Load a model to begin.'
+      : selectedModel
+        ? 'Draft while Camelid gets ready.'
+        : 'Choose a model to begin.'
   const productHeroSummary = selectedModelRunnable
-    ? 'A calm local assistant surface with the current runtime and support boundary kept visible while you work.'
+    ? 'A clean local assistant surface with model readiness kept visible but out of the way.'
     : apiUnavailable
-      ? 'The frontend is ready, but the Camelid API is not responding. Start the local server and the chat surface will update automatically.'
+      ? 'The frontend is ready. Once the local API responds, this chat surface will unlock automatically.'
     : supportBlocked
-      ? 'The runtime is available, but chat stays locked until the selected model has an exact supported row.'
-      : 'Load a generation-ready GGUF model to unlock local chat. Camelid will keep showing what is missing until then.'
+      ? 'Camelid can see the runtime, but this selection still needs an exact supported row before sending is allowed.'
+      : selectedModel
+        ? 'Your draft can start now. Camelid will unlock send as soon as the selected model is ready.'
+        : 'Pick a local GGUF model, then Camelid will keep the path to readiness visible here.'
   const surfaceNoticeTitle = selectedModelRunnable
     ? ''
     : apiUnavailable
@@ -727,9 +737,9 @@ export default function ChatWorkspace({
   const surfaceNoticeCopy = selectedModelRunnable
     ? ''
     : apiUnavailable
-      ? 'The chat UI is ready, but the local API needs to respond before prompts can be sent.'
+      ? 'The chat UI is ready, but the local API must respond before prompts can be sent.'
       : supportBlocked
-        ? 'The runtime is ready, but Camelid will not unlock chat until the selected model and quant match a supported /api/capabilities row.'
+        ? 'This runtime is up, but Camelid still requires an exact supported row for the selected model and quant.'
         : selectedModel
           ? selectedModelGateSummary
           : 'Add or select a local GGUF model from Models, then load it into the Camelid runtime.'
@@ -763,7 +773,7 @@ export default function ChatWorkspace({
   const modelInventoryLabel = availableModelCount
     ? `${readyModelCount}/${availableModelCount} ready`
     : 'No models added'
-  const composerDraftUnlocked = Boolean(selectedModelRunnable || apiUnavailable)
+  const composerDraftUnlocked = Boolean(selectedModelRunnable || apiUnavailable || (selectedRuntimeMatchesLoadedModel && !supportBlocked))
   const composerPlaceholder = selectedModelRunnable
     ? 'Message Camelid…'
     : apiUnavailable
@@ -797,14 +807,23 @@ export default function ChatWorkspace({
       ? 'The frontend is available, but the Camelid API must respond before model readiness can be checked.'
     : selectedModelIssue
       ? selectedModelIssue
+    : supportBlocked
+      ? 'This selected row is loaded, but send stays locked until the exact supported row matches.'
     : selectedModel
-      ? selectedModelGateSummary
+      ? 'Draft now. Camelid will unlock send as soon as this selected row is loaded, generation-ready, and supported.'
       : 'Pick a local model first, then Camelid will keep the runtime and support boundary visible here.'
+  const sendDisabledReason = selectedModelRunnable
+    ? ''
+    : apiUnavailable
+      ? 'Send unlocks after the Camelid API reconnects.'
+    : selectedModel
+      ? 'Send unlocks when Camelid marks this model ready and supported.'
+      : 'Choose a model before sending.'
 
   const composerStatusItems = [
     { label: 'Model', value: selectedModelName },
     { label: 'Chat', value: selectedModelRunnable ? 'Ready' : readinessLabel },
-    { label: 'Input', value: promptHintCopy },
+    { label: 'Send', value: promptHintCopy },
   ]
 
   const conversationSnapshotItems = [
@@ -932,8 +951,8 @@ export default function ChatWorkspace({
                           <strong>{selectedModelRunnable ? 'Ready to chat' : readinessLabel}</strong>
                         </div>
                         <div className="chat-hero-fact">
-                          <span>Library</span>
-                          <strong>{modelInventoryLabel}</strong>
+                          <span>Draft</span>
+                          <strong>{selectedModelRunnable ? 'Send now' : supportBlocked ? 'Locked by support row' : selectedModel ? 'Ready when the model is' : 'Choose model first'}</strong>
                         </div>
                       </div>
 
@@ -996,7 +1015,7 @@ export default function ChatWorkspace({
                               {composerStopLabel}
                             </button>
                           )}
-                          <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
+                          <button className="primary-button composer-send-button" aria-label="Send message to Camelid" title={!canSubmit ? sendDisabledReason : 'Send message to Camelid'} onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
                         </div>
                       </div>
                       {renderComposerModelSummary('composer-model-summary-stage')}
@@ -1016,7 +1035,7 @@ export default function ChatWorkspace({
                     <div className="chat-thread-header-copy">
                       <span className="chat-thread-header-eyebrow">Camelid chat</span>
                       <strong>{currentConversationSummary}</strong>
-                      <p>{selectedModelRunnable ? 'Local assistant responses stay grounded in the current runtime and support contract.' : selectedModelGateSummary}</p>
+                      <p>{selectedModelRunnable ? 'Local assistant responses stay grounded in the current runtime and exact supported row.' : selectedModelGateSummary}</p>
                     </div>
                     <div className="chat-thread-header-badges" aria-label="Conversation snapshot">
                       {conversationSnapshotItems.map((item) => (
@@ -1121,7 +1140,7 @@ export default function ChatWorkspace({
                   {composerStopLabel}
                 </button>
               )}
-              <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
+              <button className="primary-button composer-send-button" aria-label="Send message to Camelid" title={!canSubmit ? sendDisabledReason : 'Send message to Camelid'} onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
             </div>
           </div>
           {renderComposerModelSummary('composer-model-summary-floating')}
