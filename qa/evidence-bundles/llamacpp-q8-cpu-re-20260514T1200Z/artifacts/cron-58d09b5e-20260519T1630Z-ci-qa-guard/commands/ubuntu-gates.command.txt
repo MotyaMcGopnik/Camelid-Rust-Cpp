@@ -1,4 +1,4 @@
-ssh -o IdentitiesOnly=yes -i <ubuntu-identity> ubuntu@<canonical-ubuntu-host>
+# Canonical Ubuntu validation connection command intentionally omitted from public evidence.
 # Remote gate payload used after fresh canonical SSH succeeded:
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
