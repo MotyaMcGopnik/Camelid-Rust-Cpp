@@ -24,6 +24,8 @@ const navItems = [
   { id: 'system', label: 'System' },
 ]
 
+const compactNavItems = navItems.slice(0, 3)
+
 function exactTargetFromHint(hint) {
   return hint?.exact === true && hint.target?.id ? hint.target : null
 }
@@ -82,15 +84,16 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
     return (
       <header className={`topbar topbar-chat ${demoMode ? 'topbar-demo' : ''}`}>
         <div className="topbar-chat-row">
-          <div className="topbar-chat-brand topbar-chat-brand-stack">
+          <div className="topbar-chat-brand topbar-chat-brand-stack topbar-chat-brand-elevated">
+            <span className="topbar-chat-brand-kicker">Camelid chat</span>
             <strong>Camelid</strong>
             <span>{chatSupportLabel}</span>
           </div>
-          <div className="topbar-chat-center topbar-chat-center-stack" title={hasCustomConversationTitle ? rawConversationTitle : untitledConversationLabel}>
+          <div className="topbar-chat-center topbar-chat-center-stack topbar-chat-center-elevated" title={hasCustomConversationTitle ? rawConversationTitle : untitledConversationLabel}>
             <strong>{chatCenterLabel}</strong>
             <span>{selectedModelLabel}</span>
           </div>
-          <div className="topbar-chat-actions">
+          <div className="topbar-chat-actions topbar-chat-actions-elevated">
             {!demoMode && (
               <>
                 {showNewChatLanding && (
@@ -123,8 +126,22 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
           </div>
         </div>
         {!demoMode && (
+          <div className="topbar-chat-support-strip" aria-label="Chat support summary">
+            <div className={`topbar-chat-support-card ${selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : runtime?.loaded_now ? 'warm' : ''}`}>
+              <span>Runtime</span>
+              <strong>{chatReadinessLabel}</strong>
+              <small>{runtimeGateDetail}</small>
+            </div>
+            <button type="button" className="topbar-chat-support-card topbar-chat-support-card-button" onClick={() => setTab('api')} title={`${supportGateLabel}. ${supportGateDetail}`}>
+              <span>Support contract</span>
+              <strong>{supportGateLabel}</strong>
+              <small>{supportGateDetail}</small>
+            </button>
+          </div>
+        )}
+        {!demoMode && (
           <div className="mobile-nav" aria-label="Primary navigation">
-            {navItems.map((item) => (
+            {compactNavItems.map((item) => (
               <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
                 {item.label}
               </button>
@@ -177,7 +194,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
       )}
       {!demoMode && (
         <div className="mobile-nav" aria-label="Primary navigation">
-          {navItems.map((item) => (
+          {compactNavItems.map((item) => (
             <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
               {item.label}
             </button>

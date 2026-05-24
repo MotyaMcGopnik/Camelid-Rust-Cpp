@@ -897,7 +897,7 @@ export default function ChatWorkspace({
 
 
   return (
-    <section className={`chat-layout chat-layout-assistant view-stack ${isFreshThread ? 'chat-layout-empty' : ''}`}>
+    <section className={`chat-layout chat-layout-assistant chat-layout-modern view-stack ${isFreshThread ? 'chat-layout-empty' : ''}`}>
       {!demoMode && selectedConversation && (
         <div className="mobile-conversation-bar" aria-label="Conversation navigation">
           <button className="ghost-button mobile-conversation-trigger" onClick={() => setTab('history')}>
@@ -910,99 +910,105 @@ export default function ChatWorkspace({
         </div>
       )}
 
-      <div className={`chat-canvas ${isFreshThread ? 'chat-canvas-empty' : ''}`}>
+      <div className={`chat-canvas chat-canvas-modern ${isFreshThread ? 'chat-canvas-empty' : ''}`}>
         {isFreshThread ? (
-          <div className="chat-empty-shell chat-empty-shell-assistant">
+          <div className="chat-empty-shell chat-empty-shell-assistant chat-empty-shell-modern">
               <div className={`chat-empty-stage chat-empty-stage-clean chat-empty-stage-product is-${readinessState}`}>
-                <div className="chat-empty-hero chat-empty-hero-assistant chat-empty-hero-clean">
-                  <p className="chat-empty-greeting">{emptyHeroEyebrow}</p>
-                  <h2>{productHeroTitle}</h2>
-                  {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
-                </div>
-                <div className="chat-hero-grid">
-                  <div className="chat-hero-facts" aria-label="Camelid chat highlights">
-                    <div className="chat-hero-fact">
-                      <span>Selected model</span>
-                      <strong>{selectedModelName}</strong>
+                <div className="chat-stage-grid">
+                  <div className="chat-stage-main">
+                    <div className="chat-empty-hero chat-empty-hero-assistant chat-empty-hero-clean">
+                      <p className="chat-empty-greeting">{emptyHeroEyebrow}</p>
+                      <h2>{productHeroTitle}</h2>
+                      {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
                     </div>
-                    <div className="chat-hero-fact">
-                      <span>Current gate</span>
-                      <strong>{selectedModelRunnable ? 'Ready to chat' : readinessLabel}</strong>
-                    </div>
-                    <div className="chat-hero-fact">
-                      <span>Library</span>
-                      <strong>{modelInventoryLabel}</strong>
-                    </div>
-                  </div>
+                    <div className="chat-hero-grid">
+                      <div className="chat-hero-facts" aria-label="Camelid chat highlights">
+                        <div className="chat-hero-fact">
+                          <span>Selected model</span>
+                          <strong>{selectedModelName}</strong>
+                        </div>
+                        <div className="chat-hero-fact">
+                          <span>Current gate</span>
+                          <strong>{selectedModelRunnable ? 'Ready to chat' : readinessLabel}</strong>
+                        </div>
+                        <div className="chat-hero-fact">
+                          <span>Library</span>
+                          <strong>{modelInventoryLabel}</strong>
+                        </div>
+                      </div>
 
-                  <aside className={`chat-hero-aside is-${readinessState}`} aria-label="Current chat readiness">
-                    <div className="chat-hero-aside-header">
-                      <span>Chat readiness</span>
-                      <strong>{selectedModelRunnable ? 'Ready for local chat' : readinessLabel}</strong>
+                      <aside className={`chat-hero-aside is-${readinessState}`} aria-label="Current chat readiness">
+                        <div className="chat-hero-aside-header">
+                          <span>Chat readiness</span>
+                          <strong>{selectedModelRunnable ? 'Ready for local chat' : readinessLabel}</strong>
+                        </div>
+                        {!demoMode && renderReadinessPills()}
+                        {!selectedModelRunnable && (
+                          <ChatSurfaceNotice
+                            state={readinessState}
+                            title={surfaceNoticeTitle}
+                            copy={surfaceNoticeCopy}
+                            actionLabel={readinessActionLabel}
+                            onAction={() => setTab(readinessActionTab)}
+                          />
+                        )}
+                      </aside>
                     </div>
-                    {!demoMode && renderReadinessPills()}
-                    {!selectedModelRunnable && (
-                      <ChatSurfaceNotice
-                        state={readinessState}
-                        title={surfaceNoticeTitle}
-                        copy={surfaceNoticeCopy}
-                        actionLabel={readinessActionLabel}
-                        onAction={() => setTab(readinessActionTab)}
-                      />
+
+                    {selectedModelRunnable && (
+                      <div className="demo-prompt-panel" aria-label="Prompt starters">
+                        <span>Prompt starters</span>
+                        <div className="demo-prompt-strip">
+                          {DEMO_PROMPTS.map((prompt) => (
+                            <button key={prompt} type="button" className="demo-prompt-chip" onClick={() => handleDemoPrompt(prompt)} disabled={generationActive}>
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  </aside>
-                </div>
-
-              {selectedModelRunnable && (
-                <div className="demo-prompt-panel" aria-label="Prompt starters">
-                  <span>Prompt starters</span>
-                  <div className="demo-prompt-strip">
-                    {DEMO_PROMPTS.map((prompt) => (
-                      <button key={prompt} type="button" className="demo-prompt-chip" onClick={() => handleDemoPrompt(prompt)} disabled={generationActive}>
-                        {prompt}
-                      </button>
-                    ))}
                   </div>
-                </div>
-              )}
 
-              <div className="composer composer-assistant composer-assistant-stage composer-assistant-stage-clean composer-assistant-product">
-                <div className="composer-status-bar" aria-label="Composer status">
-                  {composerStatusItems.map((item) => (
-                    <div key={item.label} className="composer-status-chip">
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
+                  <div className="chat-stage-side">
+                    <div className={`composer composer-assistant composer-assistant-stage composer-assistant-stage-clean composer-assistant-product composer-assistant-stage-modern is-${readinessState}`}>
+                      <div className="composer-status-bar" aria-label="Composer status">
+                        {composerStatusItems.map((item) => (
+                          <div key={item.label} className="composer-status-chip">
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+                      <textarea ref={composerRef} className="composer-input composer-input-assistant composer-input-assistant-stage" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={composerPlaceholder} disabled={composerDisabled} />
+                      <div className="composer-assistant-footer composer-assistant-footer-stage composer-assistant-footer-stage-clean">
+                        <div className="composer-assistant-tools composer-assistant-tools-stage composer-assistant-tools-stage-clean">
+                          {renderModelPicker()}
+                          <button className="ghost-button ghost-button-quiet" onClick={secondaryAction} disabled={secondaryActionDisabled}>{secondaryActionLabel}</button>
+                        </div>
+                        <div className="composer-assistant-actions composer-assistant-actions-stage">
+                          {generationActive && (
+                            <button
+                              className="ghost-button composer-stop-button"
+                              aria-label="Stop Camelid generation"
+                              onClick={stopGeneration}
+                              disabled={stoppingGeneration}
+                            >
+                              {composerStopLabel}
+                            </button>
+                          )}
+                          <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
+                        </div>
+                      </div>
+                      {renderComposerModelSummary('composer-model-summary-stage')}
+                      <p id={composerReadinessId} className={`composer-assistant-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
+                      {!selectedModelRunnable && <p className="composer-assistant-readiness-detail">{selectedModelGateSummary}</p>}
                     </div>
-                  ))}
-                </div>
-                <textarea ref={composerRef} className="composer-input composer-input-assistant composer-input-assistant-stage" aria-label="Message Camelid" aria-describedby={composerReadinessId} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={handleComposerKeyDown} rows={2} placeholder={composerPlaceholder} disabled={composerDisabled} />
-                <div className="composer-assistant-footer composer-assistant-footer-stage composer-assistant-footer-stage-clean">
-                  <div className="composer-assistant-tools composer-assistant-tools-stage composer-assistant-tools-stage-clean">
-                    {renderModelPicker()}
-                    <button className="ghost-button ghost-button-quiet" onClick={secondaryAction} disabled={secondaryActionDisabled}>{secondaryActionLabel}</button>
-                  </div>
-                  <div className="composer-assistant-actions composer-assistant-actions-stage">
-                    {generationActive && (
-                      <button
-                        className="ghost-button composer-stop-button"
-                        aria-label="Stop Camelid generation"
-                        onClick={stopGeneration}
-                        disabled={stoppingGeneration}
-                      >
-                        {composerStopLabel}
-                      </button>
-                    )}
-                    <button className="primary-button composer-send-button" aria-label="Send message to Camelid" onClick={sendMessage} disabled={!canSubmit}>{composerSendLabel}</button>
                   </div>
                 </div>
-                {renderComposerModelSummary('composer-model-summary-stage')}
-                <p id={composerReadinessId} className={`composer-assistant-readiness-note is-${readinessState}`}>{readinessFinePrint}</p>
-                {!selectedModelRunnable && <p className="composer-assistant-readiness-detail">{selectedModelGateSummary}</p>}
-              </div>
             </div>
           </div>
         ) : (
-          <>
+          <div className="chat-thread-shell">
             {!demoMode && (
               <>
                 <div className={`chat-thread-header is-${readinessState}`} aria-label="Current Camelid chat status">
@@ -1083,12 +1089,12 @@ export default function ChatWorkspace({
               )}
               <div className="chat-thread-stream-anchor" ref={chatBottomRef} aria-hidden="true" />
             </div>
-          </>
+          </div>
         )}
       </div>
 
       {!isFreshThread && (
-        <div className="composer composer-assistant composer-assistant-floating">
+        <div className={`composer composer-assistant composer-assistant-floating composer-assistant-floating-modern is-${readinessState}`}>
           <div className="composer-status-bar composer-status-bar-floating" aria-label="Composer status">
             {composerStatusItems.map((item) => (
               <div key={item.label} className="composer-status-chip">

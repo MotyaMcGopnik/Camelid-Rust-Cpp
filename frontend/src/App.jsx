@@ -240,7 +240,7 @@ function App() {
         />
       )}
 
-      <main className={`main-pane ${tab === 'chat' ? 'main-pane-chat' : ''}`}>
+      <main className={`main-pane ${tab === 'chat' ? 'main-pane-chat main-pane-chat-first' : ''}`} data-view={tab}>
         <TopBar
           tab={tab}
           setTab={setTab}

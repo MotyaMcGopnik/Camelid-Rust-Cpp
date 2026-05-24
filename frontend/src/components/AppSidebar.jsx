@@ -11,6 +11,8 @@ const tabs = [
   { id: 'system', label: 'System' },
 ]
 
+const primaryTabs = tabs.slice(0, 3)
+
 const recencyBuckets = ['Today', 'Yesterday', 'Previous 7 days', 'Earlier']
 
 const isMeaningfulConversationMessage = (message) =>
@@ -260,12 +262,21 @@ function AppSidebar({
               <div className="sidebar-flat-section sidebar-flat-section-assistant">
                 <div className="sidebar-flat-label">Workspace</div>
                 <nav className="nav-stack nav-stack-flat" aria-label="Primary navigation">
-                  {tabs.map((item) => (
+                  {primaryTabs.map((item) => (
                     <button key={item.id} className={`nav-item nav-item-flat ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
                       <strong>{item.label}</strong>
                     </button>
                   ))}
                 </nav>
+              </div>
+
+              <div className="sidebar-flat-section sidebar-flat-section-assistant">
+                <div className="sidebar-flat-label">Library tools</div>
+                <div className="sidebar-quick-link-row" aria-label="Secondary workspace tools">
+                  <button type="button" className={`sidebar-mini-link ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}>History</button>
+                  <button type="button" className={`sidebar-mini-link ${tab === 'memory' ? 'active' : ''}`} onClick={() => setTab('memory')}>Memory</button>
+                  <button type="button" className={`sidebar-mini-link ${tab === 'system' ? 'active' : ''}`} onClick={() => setTab('system')}>System</button>
+                </div>
               </div>
             </div>
 
