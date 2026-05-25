@@ -87,6 +87,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
     if (gate.runtimeLoaded) return `${model.name} · Loading`
     return `${model.name} · Not loaded`
   }
+  const hasSelectedModel = Boolean(selectedModel?.id)
 
   if (tab === 'chat') {
     return (
@@ -119,6 +120,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
                     onChange={(e) => setSelectedModelId(e.target.value)}
                     disabled={!models.length}
                   >
+                    {!hasSelectedModel && <option value="">Choose model</option>}
                     {models.length ? models.map((model) => (
                       <option key={model.id} value={model.id}>
                         {modelOptionLabel(model)}
@@ -171,6 +173,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
           ) : (
             <label className="topbar-chat-picker" title={selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what new chats should use next.'}>
               <select className="topbar-select topbar-select-chat" aria-label="Use for next chat" value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
+                {!hasSelectedModel && <option value="">Choose model</option>}
                 {models.map((model) => {
                   const runnable = getChatGateState(capabilities, model, runtime).chatUnlocked
                   return (

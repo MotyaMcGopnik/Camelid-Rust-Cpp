@@ -6199,6 +6199,13 @@ textarea.composer-input-assistant {
   gap: 10px;
 }
 
+.chat-follow-up-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
 .demo-prompt-chip {
   flex: 1 1 210px;
   min-height: 46px;

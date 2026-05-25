@@ -172,7 +172,13 @@ function App() {
     setDeleteBusy(false)
   }
 
-  const handleSidebarToggle = () => setSidebarCollapsed((current) => !current)
+  const handleSidebarToggle = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current
+      if (!next) setTab('chat')
+      return next
+    })
+  }
 
   const handleSidebarResizeStart = (event) => {
     dragStateRef.current = { startX: event.clientX, startWidth: sidebarWidth }
@@ -259,11 +265,11 @@ function App() {
         <GlobalNotice notice={notice} noticeTone={noticeTone} />
 
         {tab === 'chat' && (
-          <ChatWorkspace
-            selectedConversation={selectedConversation}
-            selectedModel={selectedModel}
-            selectedModelId={selectedModelId}
-            setSelectedModelId={setSelectedModelId}
+        <ChatWorkspace
+          selectedConversation={selectedConversation}
+          selectedModel={selectedModel}
+          selectedModelId={selectedModelId}
+          setSelectedModelId={setSelectedModelId}
             models={models}
             runtime={runtime}
             capabilities={dashboard?.capabilities}
@@ -276,10 +282,11 @@ function App() {
             stopGeneration={stopGeneration}
             sending={sending}
             stoppingGeneration={stoppingGeneration}
-            selectedModelRunnable={selectedModelRunnable}
-            setTab={setTab}
-            demoMode={DEMO_UI}
-          />
+          selectedModelRunnable={selectedModelRunnable}
+          setTab={setTab}
+          showNewChatLanding={showNewChatLanding}
+          demoMode={DEMO_UI}
+        />
         )}
 
         {tab === 'analytics' && <AnalyticsView conversations={conversations} models={models} runtime={runtime} capabilities={dashboard?.capabilities} />}

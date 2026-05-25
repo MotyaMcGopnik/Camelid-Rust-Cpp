@@ -308,6 +308,12 @@ const DEMO_PROMPTS = [
   'Review this response and tighten it into a shorter final answer',
 ]
 
+const FOLLOW_UP_PROMPTS = [
+  'Continue with the exact next steps.',
+  'Tighten that into a shorter final answer.',
+  'Turn this into a checklist I can execute.',
+]
+
 function formatCountLabel(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`
 }
@@ -501,6 +507,7 @@ export default function ChatWorkspace({
   stoppingGeneration = false,
   selectedModelRunnable,
   setTab,
+  showNewChatLanding = null,
   demoMode = false,
 }) {
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
@@ -783,7 +790,7 @@ export default function ChatWorkspace({
   const secondaryActionLabel = selectedModelRunnable ? 'Save to memory' : readinessActionLabel
   const secondaryAction = selectedModelRunnable ? saveToMemory : () => setTab(readinessActionTab)
   const secondaryActionDisabled = selectedModelRunnable ? generationActive : false
-  const composerDisabled = Boolean(generationActive || !composerDraftUnlocked)
+  const composerDisabled = !composerDraftUnlocked
   const selectionSummaryTone = selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : selectedModelIssue ? 'blocked' : supportBlocked ? 'blocked' : selectedModel ? 'waiting' : 'idle'
   const selectionSummaryLabel = selectedModelRunnable
     ? 'Ready now'
@@ -809,21 +816,32 @@ export default function ChatWorkspace({
       : 'Pick a local model first, then Camelid will keep the runtime and support boundary visible here.'
   const sendDisabledReason = selectedModelRunnable
     ? ''
+    : generationActive
+      ? 'Wait for the current reply to finish or stop it before sending again.'
     : apiUnavailable
       ? 'Send unlocks after the Camelid API reconnects.'
     : selectedModel
       ? 'Send unlocks when Camelid marks this model ready and supported.'
       : 'Choose a model before sending.'
+  const draftStatusLabel = generationActive
+    ? 'Drafting stays available while Camelid replies.'
+    : selectedModelRunnable
+      ? 'Draft and send are both available.'
+      : apiUnavailable
+        ? 'Drafts stay local until the API reconnects.'
+        : selectedModel
+          ? 'Draft now. Send unlocks after readiness passes.'
+          : 'Choose a model to unlock drafting and send.'
 
   const handleDemoPrompt = (prompt) => {
-    if (generationActive || !composerDraftUnlocked) return
+    if (!composerDraftUnlocked) return
     setComposer(prompt)
   }
 
   const composerStatusItems = [
     { label: 'Model', value: selectedModelName },
     { label: 'Chat', value: selectedModelRunnable ? 'Ready' : readinessLabel },
-    { label: 'Send', value: promptHintCopy },
+    { label: 'Draft', value: draftStatusLabel },
   ]
 
   const conversationSnapshotItems = [
@@ -964,10 +982,10 @@ export default function ChatWorkspace({
                           <span>Current gate</span>
                           <strong>{selectedModelRunnable ? 'Ready to chat' : readinessLabel}</strong>
                         </div>
-                        <div className="chat-hero-fact">
+                      <div className="chat-hero-fact">
                           <span>Draft</span>
-                          <strong>{selectedModelRunnable ? 'Send now' : supportBlocked ? 'Locked by support row' : selectedModel ? 'Ready when the model is' : 'Choose model first'}</strong>
-                        </div>
+                          <strong>{generationActive ? 'Keep writing while it replies' : selectedModelRunnable ? 'Send now' : supportBlocked ? 'Locked by support row' : selectedModel ? 'Ready when the model is' : 'Choose model first'}</strong>
+                      </div>
                       </div>
 
                       <aside className={`chat-hero-aside is-${readinessState}`} aria-label="Current chat readiness">
@@ -993,7 +1011,7 @@ export default function ChatWorkspace({
                         <span>Prompt starters</span>
                         <div className="demo-prompt-strip">
                           {DEMO_PROMPTS.map((prompt) => (
-                            <button key={prompt} type="button" className="demo-prompt-chip" onClick={() => handleDemoPrompt(prompt)} disabled={generationActive}>
+                            <button key={prompt} type="button" className="demo-prompt-chip" onClick={() => handleDemoPrompt(prompt)} disabled={!composerDraftUnlocked}>
                               {prompt}
                             </button>
                           ))}
@@ -1069,6 +1087,9 @@ export default function ChatWorkspace({
                       </div>
                     </div>
                     <div className="chat-thread-toolbar-actions">
+                      <button className="ghost-button ghost-button-quiet" onClick={() => showNewChatLanding?.()} disabled={!showNewChatLanding}>
+                        New chat
+                      </button>
                       <button className="ghost-button ghost-button-quiet" onClick={secondaryAction} disabled={secondaryActionDisabled}>{secondaryActionLabel}</button>
                     </div>
                   </div>
@@ -1090,6 +1111,15 @@ export default function ChatWorkspace({
 
             <div className="chat-thread chat-thread-assistant">
               {visibleMessages.length === 0 && !awaitingAssistant && <div className="empty-state empty-state-chat">Pick a ready model, then send the first message when you’re ready.</div>}
+              {visibleMessages.length > 0 && !generationActive && selectedModelRunnable && (
+                <div className="chat-follow-up-strip" aria-label="Follow-up prompts">
+                  {FOLLOW_UP_PROMPTS.map((prompt) => (
+                    <button key={prompt} type="button" className="demo-prompt-chip" onClick={() => handleDemoPrompt(prompt)}>
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
               {visibleMessages.map((message, index) => {
                 const priorUserPrompt = message.role === 'assistant'
                   ? [...visibleMessages.slice(0, index)].reverse().find((item) => item.role === 'user')?.content
