@@ -4977,7 +4977,8 @@ fn validate_output_projection_row_layout(
             } else if rows == hidden_width
                 && cols == vocab_size
                 && (output_weight.data.len() == hidden_width * vocab_size
-                    || output_weight.q8_0_file_backing.is_some())
+                    || output_weight.q8_0_file_backing.is_some()
+                    || output_weight.q8_0_runtime_storage.is_some())
             {
                 Ok(EffectiveOutputProjectionRowLayout::TokenMajorReinterpret)
             } else {
@@ -5013,6 +5014,49 @@ struct OutputProjectionTokenRow {
     q8_0_row_bytes: Option<Vec<u8>>,
 }
 
+fn output_projection_runtime_packed_row(
+    packed: &Q8_0PackedRows4,
+    hidden_width: usize,
+    token_index: usize,
+) -> Result<Vec<f32>> {
+    if token_index >= packed.rows {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection runtime-packed row {token_index} exceeds packed row count {}",
+            packed.rows
+        )));
+    }
+    if !hidden_width.is_multiple_of(Q8_0_BLOCK_VALUES) {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection runtime-packed hidden width {hidden_width} is not block aligned"
+        )));
+    }
+    let blocks_per_row = hidden_width / Q8_0_BLOCK_VALUES;
+    if packed.blocks_per_row != blocks_per_row {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "output projection runtime-packed rows expected {blocks_per_row} blocks per row, got {}",
+            packed.blocks_per_row
+        )));
+    }
+    let row_group = token_index / 4;
+    let lane = token_index % 4;
+    let block_len = packed.interleave.block_len();
+    let chunks_per_block = Q8_0_BLOCK_VALUES / block_len;
+    let mut values = Vec::with_capacity(hidden_width);
+    for block_idx in 0..blocks_per_row {
+        let packed_block = &packed.blocks[row_group * blocks_per_row + block_idx];
+        let scale = packed_block.scales[lane];
+        for chunk in 0..chunks_per_block {
+            let start = chunk * 4 * block_len + lane * block_len;
+            values.extend(
+                packed_block.quants[start..start + block_len]
+                    .iter()
+                    .map(|value| scale * f32::from(*value)),
+            );
+        }
+    }
+    Ok(values)
+}
+
 fn output_projection_token_row(
     output_weight: &CpuTensor,
     hidden_width: usize,
@@ -5041,6 +5085,30 @@ fn output_projection_token_row(
         };
         return Ok(OutputProjectionTokenRow {
             values,
+            q8_0_row_bytes: None,
+        });
+    }
+
+    if let Some(Q8_0RuntimeStorage::PackedRows4(packed)) =
+        output_weight.q8_0_runtime_storage.as_ref()
+    {
+        if output_weight.source_type != Some(GgufTensorType::Q8_0) {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "output projection diagnostics only support runtime-packed q8_0 rows, got {:?}",
+                output_weight.source_type
+            )));
+        }
+        if layout != EffectiveOutputProjectionRowLayout::TokenMajorReinterpret
+            && layout != EffectiveOutputProjectionRowLayout::DescriptorOutputInput
+        {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "output projection diagnostics cannot decode runtime-packed {} layout for tensor {}",
+                layout.label(),
+                output_weight.name
+            )));
+        }
+        return Ok(OutputProjectionTokenRow {
+            values: output_projection_runtime_packed_row(packed, hidden_width, token_index)?,
             q8_0_row_bytes: None,
         });
     }
