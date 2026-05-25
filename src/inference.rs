@@ -7559,6 +7559,7 @@ fn try_x86_q8_ffn_gate_up_decode_consumer_path(
         up,
         runtime_plan.q8.ffn_gate_up_decode_group_chunking,
     )?;
+    add_q8_schedule_counter(&Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TAKEN, 1);
     let total_elapsed = started.elapsed().as_micros();
     record_q8_schedule_output_projection_route_call(
         "ffn_gate_up",
@@ -7661,6 +7662,7 @@ fn try_x86_q8_ffn_decode_chain_path(
         &quantized_input.blocks,
         runtime_plan.q8.ffn_gate_up_decode_paired_dot,
     )?;
+    add_q8_schedule_counter(&Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TAKEN, 1);
     let gate_up_elapsed = gate_up_started.elapsed().as_micros();
     record_q8_schedule_output_projection_route_call(
         "ffn_gate_up",

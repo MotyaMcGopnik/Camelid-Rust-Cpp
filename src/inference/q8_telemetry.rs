@@ -23,6 +23,7 @@ pub struct LlamaQ8ScheduleTelemetry {
     pub output_projection_by_layer_route:
         HashMap<String, LlamaQ8OutputProjectionLayerRouteTelemetry>,
     pub projection_route_denials: HashMap<String, LlamaQ8ProjectionRouteDenialTelemetry>,
+    pub ffn_gate_up_decode_consumer_taken: u64,
     pub ffn_gate_up_decode_consumer_activation_us: u64,
     pub ffn_gate_up_decode_consumer_tensor_us: u64,
     pub ffn_decode_chain_taken: u64,
@@ -114,6 +115,7 @@ pub(super) static Q8_SCHED_RAYON_FANOUT_BOUNDARIES: AtomicU64 = AtomicU64::new(0
 pub(super) static Q8_SCHED_I8MM_SINGLE_PROJECTION_CALLS: AtomicU64 = AtomicU64::new(0);
 pub(super) static Q8_SCHED_I8MM_FUSED_GATE_UP_CALLS: AtomicU64 = AtomicU64::new(0);
 pub(super) static Q8_SCHED_OUTPUT_PROJECTION_CALLS: AtomicU64 = AtomicU64::new(0);
+pub(super) static Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TAKEN: AtomicU64 = AtomicU64::new(0);
 pub(super) static Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_ACTIVATION_US: AtomicU64 = AtomicU64::new(0);
 pub(super) static Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TENSOR_US: AtomicU64 = AtomicU64::new(0);
 pub(super) static Q8_SCHED_FFN_DECODE_CHAIN_TAKEN: AtomicU64 = AtomicU64::new(0);
@@ -183,6 +185,7 @@ pub fn reset_q8_schedule_telemetry() {
     Q8_SCHED_I8MM_SINGLE_PROJECTION_CALLS.store(0, Ordering::Relaxed);
     Q8_SCHED_I8MM_FUSED_GATE_UP_CALLS.store(0, Ordering::Relaxed);
     Q8_SCHED_OUTPUT_PROJECTION_CALLS.store(0, Ordering::Relaxed);
+    Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TAKEN.store(0, Ordering::Relaxed);
     Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_ACTIVATION_US.store(0, Ordering::Relaxed);
     Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TENSOR_US.store(0, Ordering::Relaxed);
     Q8_SCHED_FFN_DECODE_CHAIN_TAKEN.store(0, Ordering::Relaxed);
@@ -278,6 +281,8 @@ pub fn snapshot_q8_schedule_telemetry() -> LlamaQ8ScheduleTelemetry {
                     .clone()
             })
             .unwrap_or_default(),
+        ffn_gate_up_decode_consumer_taken: Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TAKEN
+            .load(Ordering::Relaxed),
         ffn_gate_up_decode_consumer_activation_us:
             Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_ACTIVATION_US.load(Ordering::Relaxed),
         ffn_gate_up_decode_consumer_tensor_us: Q8_SCHED_FFN_GATE_UP_DECODE_CONSUMER_TENSOR_US
