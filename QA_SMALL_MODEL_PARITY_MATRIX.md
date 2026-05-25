@@ -1,6 +1,6 @@
 # QA Small-Model Parity Matrix
 
-Last updated: 2026-05-12
+Last updated: 2026-05-24
 
 > [!NOTE]
 > This matrix is a QA evidence summary, not the public support ledger. For current support truth,
@@ -22,9 +22,9 @@ full-support language:
 | Target | Quant | Current QA position | Prompt-token parity | First-token parity | Short generation parity | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | TinyLlama 1.1B Chat | Q8_0 | Supported gate evidence is green | PASS | PASS | PASS | Matches known-good llama-server on the active TinyLlama gate. Keep this as the release anchor and refresh artifacts when packaging the four-row evidence set. |
-| Llama 3.2 1B Instruct | Q8_0 | Supported exact-row smoke | PASS for compact-header prompt, broader prompt pack, and checked bounded context packs | PASS | PASS for compact and broader short-generation packs plus checked 512/1024/2048/4096/8192 context packs | Exact 1B Instruct Q8_0 local chat is smoke-supported only for the documented envelopes; the checked 512/1024/2048/4096/8192 context packs are green, with 2048 exact-row only after the RoPE frequency-factor fix and 4096/8192 tied to their cited source/runtime-head bundles, while model-native/larger context beyond checked packs, stronger memory/perf, portability, and broader template coverage remain expansion gates. |
+| Llama 3.2 1B Instruct | Q8_0 | Verified bounded support | PASS for compact-header prompt, broader prompt pack, and checked bounded context packs | PASS | PASS for compact and broader short-generation packs plus checked 512/1024/2048/4096/8192 context packs | Exact 1B Instruct Q8_0 support is bounded to the documented envelopes; the checked 512/1024/2048/4096/8192 context packs are green, with 2048 exact-row only after the RoPE frequency-factor fix and 4096/8192 tied to their cited source/runtime-head bundles, while model-native/larger context beyond checked packs, stronger memory/perf, portability, and broader template coverage remain expansion gates. |
 | Llama 3.2 3B Instruct | Q8_0 | Supported exact-row smoke | PASS for compact-header prompt, post-Q8-dot broader prompt pack, and checked bounded context packs | PASS | PASS for compact 1/5/50-token, broader 3-prompt/50-token, and checked 512/1024/2048 context packs | The previous JSON-shaped broader prompt blocker is fixed for the current pack, and checked 512/1024/2048 context packs are green. The row remains limited to exact-row smoke until model-native/larger context beyond checked packs, memory/perf, portability, and broader template evidence land. |
-| Llama 3 8B Instruct | Q8_0 | Supported exact-row smoke through checked 512/1024/2048 bounded context packs where row-specific PASS artifacts are cited | PASS for compact `hello`, broader 50-token pack, bounded 512/1024/2048 context packs, and compact chat-template-shapes pack | PASS for compact `hello` and covered packs | PASS for compact `hello` 5-token, bounded 50-token, broader 50-token, bounded 512/1024/2048 context packs, and compact chat-template-shapes pack | Exact 8B Instruct Q8_0 smoke is supported only for the documented envelopes; the 1024/2048 bounded buckets are tied to the published source/runtime-head PASS bundle for source/runtime head `8e26be0a73c0`, while older 1024/2048 PASS artifacts remain historical source-head evidence. Model-native/larger context, arbitrary template execution, stronger memory/perf, portability, and broader template coverage remain expansion gates. |
+| Llama 3 8B Instruct | Q8_0 | Verified bounded support through checked 512/1024/2048 bounded context packs where row-specific PASS artifacts are cited | PASS for compact `hello`, broader 50-token pack, bounded 512/1024/2048 context packs, and compact chat-template-shapes pack | PASS for compact `hello` and covered packs | PASS for compact `hello` 5-token, bounded 50-token, broader 50-token, bounded 512/1024/2048 context packs, and compact chat-template-shapes pack | Exact 8B Instruct Q8_0 support is bounded to the documented envelopes; the 1024/2048 bounded buckets are tied to the published source/runtime-head PASS bundle for source/runtime head `8e26be0a73c0`, while older 1024/2048 PASS artifacts remain historical source-head evidence. Model-native/larger context, arbitrary template execution, stronger memory/perf, portability, and broader template coverage remain expansion gates. |
 
 ## Current evidence summary
 
@@ -49,7 +49,7 @@ Representative artifacts cited by the public docs:
 - The second bounded 1024-context pack passed with 881 reference prompt tokens, generated tokens `[34,2735,35,12,4278]`, and generated text `CMLD-102`.
 - The third bounded 2048-context pack passed after the RoPE frequency-factor fix with 1910 reference prompt tokens, generated tokens `[34,2735,35,12,7854]`, and generated text `CMLD-204`.
 - `/api/models/load`, `/v1/completions`, `/v1/chat/completions`, and frontend smoke evidence are documented for the exact row.
-- This is a supported exact-row smoke lane, not broad Llama-family support.
+- This is verified bounded support for the exact row, not broad Llama-family support.
 
 Representative artifacts cited by the public docs:
 
