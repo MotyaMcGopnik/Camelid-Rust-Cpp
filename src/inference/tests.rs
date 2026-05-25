@@ -4025,6 +4025,7 @@ fn x86_q8_ffn_decode_chain_is_default_off_and_matches_split_consumers() {
         false,
     )
     .unwrap();
+    reset_q8_schedule_telemetry();
 
     let actual = try_x86_q8_ffn_decode_chain_path(
         &input,
