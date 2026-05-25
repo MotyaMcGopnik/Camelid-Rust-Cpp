@@ -517,17 +517,28 @@ fn select_linux_x86_q8_plan(
         "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_PAIRED_DOT",
         optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_PAIRED_DOT"),
     );
+    let ffn_decode_chain_enabled = env_flag_enabled("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_DECODE_CHAIN",
-        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DECODE_CHAIN"),
+        if ffn_decode_chain_enabled {
+            Some("on")
+        } else {
+            Some("off")
+        },
     );
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL",
         optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL"),
     );
+    let ffn_down_decode_consumer_enabled =
+        ffn_decode_chain_enabled || env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER");
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
-        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER"),
+        if ffn_down_decode_consumer_enabled {
+            Some("on")
+        } else {
+            Some("off")
+        },
     );
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_DOWN_PACKED_ROWS4_MATMUL",
@@ -574,6 +585,13 @@ fn select_linux_x86_q8_plan(
         "CAMELID_X86_Q8_OUTPUT_DECODE_OWNER",
         optional_x86_q8_gate("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
     );
+
+    if ffn_decode_chain_enabled && !env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER") {
+        reasons.push(
+            "FFN decode-chain opt-in also enables the required FFN-down decode consumer gate"
+                .into(),
+        );
+    }
     reasons.push("validated Ubuntu/Linux x86_64 Rust Q8 runtime repack enabled".into());
     reasons.push("validated Rust AVX2 Q8 packed rows4 kernel selected".into());
     reasons.push(
@@ -1528,6 +1546,36 @@ mod tests {
                 .get("CAMELID_X86_Q8_ATTENTION_QKV_PACKED_ROWS4_MATMUL"),
             Some(&Some("off"))
         );
+        clear_profile_env();
+    }
+
+    #[test]
+    fn ubuntu_experimental_ffn_decode_chain_enables_required_down_leg() {
+        let _guard = env_lock();
+        clear_profile_env();
+        env::set_var("CAMELID_PROFILE", "experimental");
+        env::set_var("CAMELID_X86_Q8_REPACK", "on");
+        env::set_var("CAMELID_X86_Q8_KERNEL", "avx2");
+        env::set_var("CAMELID_X86_Q8_FFN_DECODE_CHAIN", "on");
+        let outcome = plan_for_model_with_platform(
+            &PathBuf::from("/tmp/Llama-3.2-3B-Instruct-Q8_0.gguf"),
+            &fixture("Llama 3.2 3B Instruct"),
+            Some(16),
+            platform("linux", "x86_64", &["avx2", "avx512f"]),
+        );
+        assert_eq!(
+            outcome.env_updates.get("CAMELID_X86_Q8_FFN_DECODE_CHAIN"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
+                .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER"),
+            Some(&Some("on"))
+        );
+        assert!(outcome.plan.reasons.iter().any(|reason| reason.contains(
+            "FFN decode-chain opt-in also enables the required FFN-down decode consumer gate"
+        )));
         clear_profile_env();
     }
 
