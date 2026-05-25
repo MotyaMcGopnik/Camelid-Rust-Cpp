@@ -79,22 +79,34 @@ fn x86_q8_avx2_kernel_matches_scalar_dot_for_negative_128() {
     std::env::remove_var("CAMELID_X86_Q8_KERNEL");
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[test]
 fn x86_q8_packed_rows4_matmul_chunk_groups_env_override() {
     let _env_guard = env_lock();
     std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK");
+    std::env::set_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL", "on");
+    let mut plan = ResolvedRuntimePlan::from_env().unwrap();
     assert_eq!(
-        x86_q8_packed_rows4_matmul_groups_per_chunk(),
-        X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK
+        plan.q8_packed_rows4_matmul_schedule.groups_per_chunk,
+        q8_runtime::X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK_DEFAULT
     );
     std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "32");
-    assert_eq!(x86_q8_packed_rows4_matmul_groups_per_chunk(), 32);
-    assert_eq!(q8_packed_rows4_matmul_parallel_chunk_floats(128), 128);
-    std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "0");
+    plan = ResolvedRuntimePlan::from_env().unwrap();
+    assert_eq!(plan.q8_packed_rows4_matmul_schedule.groups_per_chunk, 32);
     assert_eq!(
-        x86_q8_packed_rows4_matmul_groups_per_chunk(),
-        X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK
+        q8_packed_rows4_matmul_parallel_chunk_floats(128, plan.q8_packed_rows4_matmul_schedule),
+        128
+    );
+    std::env::set_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK", "0");
+    plan = ResolvedRuntimePlan::from_env().unwrap();
+    assert_eq!(
+        plan.q8_packed_rows4_matmul_schedule.groups_per_chunk,
+        q8_runtime::X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK_DEFAULT
+    );
+    std::env::remove_var("CAMELID_X86_Q8_OUTPUT_PACKED_ROWS4_MATMUL");
+    plan = ResolvedRuntimePlan::from_env().unwrap();
+    assert_eq!(
+        plan.q8_packed_rows4_matmul_schedule.groups_per_chunk,
+        q8_runtime::X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK_DEFAULT
     );
     std::env::remove_var("CAMELID_X86_Q8_PACKED_ROWS4_MATMUL_GROUPS_PER_CHUNK");
 }
@@ -630,6 +642,7 @@ fn tiny_prefill_schedule_weights(attention_q: CpuTensor) -> LlamaLoadedWeights {
         output_norm: CpuTensor::from_f32("output_norm.weight", vec![2], vec![1.0; 2]).unwrap(),
         output: None,
         rope_freqs: None,
+        layer_range: None,
         layers: vec![LlamaLayerWeights {
             attention_norm: CpuTensor::from_f32("blk.0.attn_norm.weight", vec![2], vec![1.0; 2])
                 .unwrap(),
@@ -943,6 +956,7 @@ fn prefill_layer_major_scoped_q8_cache_reuses_file_reads_across_chunks() {
         output_norm: dense_vector("output_norm.weight"),
         output: None,
         rope_freqs: None,
+        layer_range: None,
         layers: vec![LlamaLayerWeights {
             attention_norm: dense_vector("blk.0.attn_norm.weight"),
             attention_q,
@@ -1675,6 +1689,7 @@ fn q8_0_hot_path_uses_resolved_plan_not_current_env() {
             hybrid_gpu_rows: None,
             hybrid_gpu_percent: 10,
         },
+        q8_packed_rows4_matmul_schedule: Q8PackedRows4MatmulSchedule::default(),
     };
 
     let actual =
@@ -2582,6 +2597,7 @@ fn q8_attention_consumer_plan(
             hybrid_gpu_rows: None,
             hybrid_gpu_percent: 10,
         },
+        q8_packed_rows4_matmul_schedule: Q8PackedRows4MatmulSchedule::default(),
     }
 }
 
@@ -3105,6 +3121,101 @@ fn q8_attention_qkv_route_resolver_preserves_decode_and_prefill_guards() {
 }
 
 #[test]
+fn q8_attention_qkv_route_policy_records_denials() {
+    let _env_guard = env_lock();
+    clear_dense_diagnostic_env();
+    std::env::set_var(Q8_SCHEDULE_TELEMETRY_ENV, "on");
+    reset_q8_schedule_telemetry();
+
+    let (decode_input, q_weight, _) =
+        runtime_packed_attention_projection_case("attention_q", "blk.0.attn_q.weight");
+    let (_, k_weight, _) =
+        runtime_packed_attention_projection_case("attention_k", "blk.0.attn_k.weight");
+    let (_, v_weight, _) =
+        runtime_packed_attention_projection_case("attention_v", "blk.0.attn_v.weight");
+    let prefill_input = CpuTensor::from_f32(
+        "prefill_input",
+        vec![2, decode_input.dim(1).unwrap()],
+        vec![0.0; 2 * decode_input.dim(1).unwrap()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        X86Q8AttentionQkvRouteKind::Decode.telemetry_name(),
+        "decode_consumer"
+    );
+    assert_eq!(
+        X86Q8AttentionQkvRouteKind::PackedRows4Matmul.telemetry_name(),
+        "packed_rows4_matmul_prefill"
+    );
+
+    assert!(resolve_x86_q8_attention_qkv_route(
+        &prefill_input,
+        &q_weight,
+        &k_weight,
+        &v_weight,
+        &attention_qkv_consumer_plan(true),
+        X86Q8AttentionQkvRouteKind::Decode,
+    )
+    .unwrap()
+    .is_none());
+    assert!(resolve_x86_q8_attention_qkv_route(
+        &decode_input,
+        &q_weight,
+        &k_weight,
+        &v_weight,
+        &attention_qkv_packed_rows4_matmul_plan(true),
+        X86Q8AttentionQkvRouteKind::PackedRows4Matmul,
+    )
+    .unwrap()
+    .is_none());
+    assert!(resolve_x86_q8_attention_qkv_route(
+        &prefill_input,
+        &q_weight,
+        &k_weight,
+        &v_weight,
+        &attention_qkv_packed_rows4_matmul_plan(false),
+        X86Q8AttentionQkvRouteKind::PackedRows4Matmul,
+    )
+    .unwrap()
+    .is_none());
+
+    let dense_v = CpuTensor::from_f32(
+        "dense_v",
+        vec![12, Q8_0_BLOCK_VALUES * 2],
+        vec![0.0; 12 * Q8_0_BLOCK_VALUES * 2],
+    )
+    .unwrap();
+    assert!(resolve_x86_q8_attention_qkv_route(
+        &prefill_input,
+        &q_weight,
+        &k_weight,
+        &dense_v,
+        &attention_qkv_packed_rows4_matmul_plan(true),
+        X86Q8AttentionQkvRouteKind::PackedRows4Matmul,
+    )
+    .unwrap()
+    .is_none());
+
+    let telemetry = snapshot_q8_schedule_telemetry();
+    assert!(telemetry
+        .projection_route_denials
+        .contains_key("attention_qkv.decode_consumer.prefill_or_empty_input"));
+    assert!(telemetry
+        .projection_route_denials
+        .contains_key("attention_qkv.packed_rows4_matmul_prefill.decode_or_empty_input"));
+    assert!(telemetry
+        .projection_route_denials
+        .contains_key("attention_qkv.packed_rows4_matmul_prefill.plan_off"));
+    assert!(telemetry
+        .projection_route_denials
+        .contains_key("attention_qkv.packed_rows4_matmul_prefill.missing_v_runtime_packed_rows4"));
+
+    reset_q8_schedule_telemetry();
+    std::env::remove_var(Q8_SCHEDULE_TELEMETRY_ENV);
+}
+
+#[test]
 fn q8_attention_qkv_prefill_consumer_gate_is_default_off() {
     let _env_guard = env_lock();
     clear_dense_diagnostic_env();
@@ -3162,6 +3273,7 @@ fn q8_attention_qkv_packed_rows4_matmul_matches_runtime_packed_baseline_for_pref
         },
         output_width,
         "expected_q",
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
     let expected_k = q8_0_packed_rows4_matmul_projection(
@@ -3172,6 +3284,7 @@ fn q8_attention_qkv_packed_rows4_matmul_matches_runtime_packed_baseline_for_pref
         },
         output_width,
         "expected_k",
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
     let expected_v = q8_0_packed_rows4_matmul_projection(
@@ -3182,6 +3295,7 @@ fn q8_attention_qkv_packed_rows4_matmul_matches_runtime_packed_baseline_for_pref
         },
         output_width,
         "expected_v",
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
     assert_slice_close_with_tolerance(&q.data, &expected_q.data, 5e-4);
@@ -3497,6 +3611,7 @@ fn ffn_down_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
             hybrid_gpu_rows: None,
             hybrid_gpu_percent: 10,
         },
+        q8_packed_rows4_matmul_schedule: Q8PackedRows4MatmulSchedule::default(),
     }
 }
 
@@ -3546,6 +3661,7 @@ fn ffn_down_packed_rows4_matmul_plan(enabled: bool) -> ResolvedRuntimePlan {
             hybrid_gpu_rows: None,
             hybrid_gpu_percent: 10,
         },
+        q8_packed_rows4_matmul_schedule: Q8PackedRows4MatmulSchedule::default(),
     }
 }
 
@@ -3599,6 +3715,7 @@ fn ffn_gate_up_consumer_plan(enabled: bool) -> ResolvedRuntimePlan {
             hybrid_gpu_rows: None,
             hybrid_gpu_percent: 10,
         },
+        q8_packed_rows4_matmul_schedule: Q8PackedRows4MatmulSchedule::default(),
     }
 }
 
@@ -4895,6 +5012,7 @@ fn q8_ffn_down_gemm4_row_group_threshold_benchmark() {
                     label,
                     row_group_schedule,
                     false,
+                    Q8PackedRows4MatmulSchedule::default(),
                 )
                 .unwrap(),
             );
@@ -7839,6 +7957,7 @@ fn q8_packed_rows4_matmul_projection_chunked_prefill_matches_manual_output() {
         output_rows,
         "actual_chunked_prefill",
         &quantized_inputs,
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
 
@@ -7916,6 +8035,7 @@ fn q8_packed_rows4_gate_up_fused_prefill_matches_separate_pair_activation() {
         "gate",
         "up",
         &quantized_inputs,
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
     for (gate_value, up_value) in gate.data.iter_mut().zip(up.data) {
@@ -7930,6 +8050,7 @@ fn q8_packed_rows4_gate_up_fused_prefill_matches_separate_pair_activation() {
         "fused",
         FfnGateUpOrder::GateUp,
         &quantized_inputs,
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
 
@@ -8049,6 +8170,7 @@ fn x86_q8_output_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefill
         &packed,
         vocab_rows,
         "expected_output_prefill_logits",
+        Q8PackedRows4MatmulSchedule::default(),
     )
     .unwrap();
 
@@ -8842,6 +8964,7 @@ fn single_token_forward_diagnostics_follow_llama_stage_order() {
             .unwrap(),
             moe_router: None,
         }],
+        layer_range: None,
     });
     let mut session = LlamaInferenceSession::new(config, weights).unwrap();
 
@@ -9072,6 +9195,7 @@ fn chunked_prefill_matches_sequential_prefill_outputs_and_cache() {
             .unwrap(),
             moe_router: None,
         }],
+        layer_range: None,
     });
 
     let prompt = [0, 1, 2, 3, 0, 1, 2];
@@ -9495,6 +9619,7 @@ fn zero_prefill_chunk_env_falls_back_without_panicking() {
             .unwrap(),
             moe_router: None,
         }],
+        layer_range: None,
     });
 
     std::env::set_var("CAMELID_PREFILL_CHUNK_TOKENS", "0");

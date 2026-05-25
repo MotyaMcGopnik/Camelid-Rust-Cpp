@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
     let config = LlamaModelConfig::from_gguf(&gguf)?;
     let binding = LlamaTensorBinding::bind(&gguf, &config)?;
     let store = TensorStore::open(&model, &gguf);
-    let weights = Arc::new(LlamaLoadedWeights::load(&store, &binding)?);
+    let weights = Arc::new(LlamaLoadedWeights::load(&store, &binding, None)?);
     weights.validate_dense_shapes(&config)?;
     let mut session = LlamaInferenceSession::new(config, weights)?;
     let mut layer = None;
