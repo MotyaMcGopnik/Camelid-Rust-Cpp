@@ -24,6 +24,8 @@ const navItems = [
   { id: 'system', label: 'System' },
 ]
 
+const compactNavItems = navItems.slice(0, 3)
+
 function exactTargetFromHint(hint) {
   return hint?.exact === true && hint.target?.id ? hint.target : null
 }
@@ -71,16 +73,36 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
     : runtime?.loaded_now
       ? 'Checking'
       : 'Not ready'
+  const chatCenterLabel = hasCustomConversationTitle ? clampText(rawConversationTitle, 64) : untitledConversationLabel
+  const chatSupportLabel = selectedModelRunnable
+    ? 'Local assistant UI'
+    : apiUnavailable
+      ? 'API connection needed'
+      : 'Waiting on exact-row readiness'
+  const modelOptionLabel = (model) => {
+    const gate = getChatGateState(capabilities, model, runtime)
+    if (gate.chatUnlocked) return `${model.name} · Ready`
+    if (apiUnavailable) return `${model.name} · API offline`
+    if (gate.runtimeReady) return `${model.name} · Support gated`
+    if (gate.runtimeLoaded) return `${model.name} · Loading`
+    return `${model.name} · Not loaded`
+  }
+  const hasSelectedModel = Boolean(selectedModel?.id)
 
   if (tab === 'chat') {
     return (
       <header className={`topbar topbar-chat ${demoMode ? 'topbar-demo' : ''}`}>
         <div className="topbar-chat-row">
-          <div className="topbar-chat-brand">Camelid</div>
-          <div className="topbar-chat-center" title={hasCustomConversationTitle ? rawConversationTitle : untitledConversationLabel}>
-            {hasCustomConversationTitle ? clampText(rawConversationTitle, 64) : untitledConversationLabel}
+          <div className="topbar-chat-brand topbar-chat-brand-stack topbar-chat-brand-elevated">
+            <span className="topbar-chat-brand-kicker">Camelid chat</span>
+            <strong>Camelid</strong>
+            <span>{chatSupportLabel}</span>
           </div>
-          <div className="topbar-chat-actions">
+          <div className="topbar-chat-center topbar-chat-center-stack topbar-chat-center-elevated" title={hasCustomConversationTitle ? rawConversationTitle : untitledConversationLabel}>
+            <strong>{chatCenterLabel}</strong>
+            <span>{selectedModelLabel}</span>
+          </div>
+          <div className="topbar-chat-actions topbar-chat-actions-elevated">
             {!demoMode && (
               <>
                 {showNewChatLanding && (
@@ -90,6 +112,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
                 )}
                 <div className={`topbar-chat-readiness ${chatReadinessTone}`} title={`${selectedModelSummary} ${runtimeGateDetail}`}>
                   <span className="topbar-chat-readiness-dot" aria-hidden="true" />
+                  <span className="topbar-chat-readiness-caption">Model</span>
                   <select
                     className="topbar-select topbar-select-chat"
                     aria-label="Model for chat"
@@ -97,9 +120,10 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
                     onChange={(e) => setSelectedModelId(e.target.value)}
                     disabled={!models.length}
                   >
+                    {!hasSelectedModel && <option value="">Choose model</option>}
                     {models.length ? models.map((model) => (
                       <option key={model.id} value={model.id}>
-                        {model.name}
+                        {modelOptionLabel(model)}
                       </option>
                     )) : (
                       <option value="">No models</option>
@@ -112,8 +136,22 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
           </div>
         </div>
         {!demoMode && (
+          <div className="topbar-chat-support-strip" aria-label="Chat support summary">
+            <div className={`topbar-chat-support-card ${selectedModelRunnable ? 'ready' : apiUnavailable ? 'offline' : runtime?.loaded_now ? 'warm' : ''}`}>
+              <span>Runtime</span>
+              <strong>{chatReadinessLabel}</strong>
+              <small>{activeModel ? activeModelLabel : 'No model loaded'}</small>
+            </div>
+            <button type="button" className="topbar-chat-support-card topbar-chat-support-card-button" onClick={() => setTab('api')} title={`${supportGateLabel}. ${supportGateDetail}`}>
+              <span>Support contract</span>
+              <strong>{supportGateLabel}</strong>
+              <small>{selectedModelRunnable ? 'Exact row unlocked for chat.' : supportGateDetail}</small>
+            </button>
+          </div>
+        )}
+        {!demoMode && (
           <div className="mobile-nav" aria-label="Primary navigation">
-            {navItems.map((item) => (
+            {compactNavItems.map((item) => (
               <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
                 {item.label}
               </button>
@@ -135,11 +173,12 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
           ) : (
             <label className="topbar-chat-picker" title={selectedModel ? getModelStatusLabel(selectedModel) : 'Choose what new chats should use next.'}>
               <select className="topbar-select topbar-select-chat" aria-label="Use for next chat" value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
+                {!hasSelectedModel && <option value="">Choose model</option>}
                 {models.map((model) => {
                   const runnable = getChatGateState(capabilities, model, runtime).chatUnlocked
                   return (
                     <option key={model.id} value={model.id} disabled={!runnable}>
-                      {model.name}
+                      {modelOptionLabel(model)}
                     </option>
                   )
                 })}
@@ -166,7 +205,7 @@ function TopBar({ tab, setTab, selectedConversationTitle, selectedConversationUp
       )}
       {!demoMode && (
         <div className="mobile-nav" aria-label="Primary navigation">
-          {navItems.map((item) => (
+          {compactNavItems.map((item) => (
             <button key={item.id} className={`mobile-nav-item ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
               {item.label}
             </button>

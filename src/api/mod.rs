@@ -2325,7 +2325,7 @@ async fn prepare_generation(
             )
         })?;
         let store = TensorStore::open(&model.path, &model.gguf);
-        let weights = Arc::new(LlamaLoadedWeights::load(&store, binding).map_err(|err| {
+        let weights = Arc::new(LlamaLoadedWeights::load(&store, binding, None).map_err(|err| {
             api_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "loaded_cpu_weights_unavailable",
@@ -6599,6 +6599,7 @@ mod tests {
                 ffn_down: select_rows("blk.0.ffn_down.weight", hidden, ffn, &[0, 1, 2, 3]),
                 moe_router: None,
             }],
+            layer_range: None,
         }
     }
 

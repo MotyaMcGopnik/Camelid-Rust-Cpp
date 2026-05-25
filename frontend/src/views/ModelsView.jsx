@@ -65,11 +65,12 @@ const LLAMA32_3B_ACCEPTANCE_FILENAME = pathBasename(LLAMA32_3B_ACCEPTANCE_TARGET
 function hasExactLlama32ThreeBArtifact(model) {
   const exactTargetPath = model?.model_path === LLAMA32_3B_ACCEPTANCE_TARGET.model_path
     || model?.path === LLAMA32_3B_ACCEPTANCE_TARGET.model_path
+  // Source is catalog provenance; only the saved/loaded artifact fields can satisfy
+  // the exact-row presence check.
   const filenames = [
     model?.model_path,
     model?.path,
     model?.hf_filename,
-    model?.source,
   ].map(pathBasename).filter(Boolean)
   return exactTargetPath || filenames.some((filename) => filename.toLowerCase() === LLAMA32_3B_ACCEPTANCE_FILENAME.toLowerCase())
 }

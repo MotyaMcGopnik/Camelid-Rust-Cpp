@@ -11,6 +11,8 @@ const tabs = [
   { id: 'system', label: 'System' },
 ]
 
+const primaryTabs = tabs.slice(0, 3)
+
 const recencyBuckets = ['Today', 'Yesterday', 'Previous 7 days', 'Earlier']
 
 const isMeaningfulConversationMessage = (message) =>
@@ -81,6 +83,7 @@ function AppSidebar({
   const [openMenuId, setOpenMenuId] = useState(null)
   const [editingConversationId, setEditingConversationId] = useState(null)
   const [editingTitle, setEditingTitle] = useState('')
+  const utilityTabs = useMemo(() => tabs.filter((item) => !primaryTabs.some((primary) => primary.id === item.id)), [])
 
   const titleCounts = useMemo(() => {
     const counts = new Map()
@@ -260,13 +263,32 @@ function AppSidebar({
               <div className="sidebar-flat-section sidebar-flat-section-assistant">
                 <div className="sidebar-flat-label">Workspace</div>
                 <nav className="nav-stack nav-stack-flat" aria-label="Primary navigation">
-                  {tabs.map((item) => (
+                  {primaryTabs.map((item) => (
                     <button key={item.id} className={`nav-item nav-item-flat ${tab === item.id ? 'active' : ''}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}>
                       <strong>{item.label}</strong>
                     </button>
                   ))}
                 </nav>
               </div>
+
+              <details className="sidebar-tools-disclosure" open={tab !== 'chat' && tab !== 'library' && tab !== 'api'}>
+                <summary className="sidebar-tools-summary">
+                  <span className="sidebar-flat-label sidebar-flat-label-inline">More tools</span>
+                  <small>{utilityTabs.map((item) => item.label).join(' · ')}</small>
+                </summary>
+                <div className="sidebar-quick-link-row sidebar-quick-link-row-tools" aria-label="Secondary workspace tools">
+                  {utilityTabs.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`sidebar-mini-link ${tab === item.id ? 'active' : ''}`}
+                      onClick={() => setTab(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </details>
             </div>
 
             <div className="sidebar-bottom sidebar-bottom-flat sidebar-bottom-assistant">

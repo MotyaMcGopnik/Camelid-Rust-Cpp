@@ -9,7 +9,7 @@ Camelid is intentionally evidence-gated. Optimize for correctness, explicit supp
 - Keep the support contract honest.
 - Do not broaden support claims without fresh evidence.
 - TinyLlama 1.1B Chat Q8_0 remains the supported current gate.
-- Llama 3.2 1B Instruct Q8_0, Llama 3.2 3B Instruct Q8_0, and Llama 3 8B Instruct Q8_0 are supported exact-row smoke lanes only.
+- Llama 3.2 1B Instruct Q8_0 and Llama 3 8B Instruct Q8_0 have verified bounded support; Llama 3.2 3B Instruct Q8_0 remains supported as exact-row smoke.
 - No neighboring Llama sizes, base variants, quantizations, longer contexts, or broad chat-template behavior inherit support.
 - Full-support claims still require stronger longer-context, performance/portability, and broader behavior evidence on each exact row.
 - Do not let UI copy, README language, API capability surfaces, or status docs drift out of sync.

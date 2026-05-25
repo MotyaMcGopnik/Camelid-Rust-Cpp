@@ -232,6 +232,10 @@
   gap: 12px;
 }
 
+.main-pane-chat-first {
+  position: relative;
+}
+
 .app-shell.sidebar-collapsed .main-pane-chat {
   padding-left: calc(clamp(24px, 4vw, 40px) + var(--sidebar-overlay-width, 48px));
 }
