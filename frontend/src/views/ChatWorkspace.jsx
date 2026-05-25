@@ -585,6 +585,16 @@ export default function ChatWorkspace({
     input.style.height = `${Math.min(input.scrollHeight, 220)}px`
   }, [composer, isFreshThread, selectedConversation?.id])
 
+  useEffect(() => {
+    if (generationActive || !composerDraftUnlocked) return
+    const input = composerRef.current
+    if (!input) return
+    const activeElement = document.activeElement
+    if (activeElement && activeElement !== document.body && activeElement !== input) return
+    const frame = window.requestAnimationFrame(() => input.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [composerDraftUnlocked, generationActive, isFreshThread, selectedConversation?.id])
+
   const handleComposerKeyDown = async (event) => {
     if (event.key === 'Escape' && generationActive) {
       event.preventDefault()
@@ -721,17 +731,17 @@ export default function ChatWorkspace({
       : supportBlocked
         ? 'This model is loaded, but still gated.'
         : selectedModel
-          ? 'Start drafting while Camelid prepares.'
-          : 'Choose a model, then start drafting.'
+          ? 'Start drafting while Camelid gets ready.'
+          : 'Choose a model and start chatting.'
   const productHeroSummary = selectedModelRunnable
-    ? 'A focused local assistant surface with readiness visible but quiet.'
+    ? 'A clean local assistant surface with the current runtime state kept visible.'
     : apiUnavailable
-      ? 'Keep writing here. Send unlocks again as soon as the local API responds.'
+      ? 'Keep writing here. Send unlocks again once the local API responds.'
       : supportBlocked
-        ? 'The runtime is up, but Camelid still requires an exact supported row before the chat can send.'
+        ? 'The runtime is up, but chat still needs an exact supported row before send unlocks.'
         : selectedModel
-          ? 'Your draft stays editable now. Send unlocks as soon as this model is ready.'
-          : 'Pick a local GGUF model first, then Camelid will keep the readiness path visible here.'
+          ? 'Your draft is ready now. Send unlocks as soon as this model is ready.'
+          : 'Pick a local GGUF model first. Camelid will show the readiness path here.'
   const surfaceNoticeTitle = selectedModelRunnable
     ? ''
     : apiUnavailable
@@ -937,6 +947,41 @@ export default function ChatWorkspace({
     )
   }
 
+  const primaryEmptyActionLabel = apiUnavailable
+    ? 'Open API'
+    : selectedModel
+      ? 'Open Models'
+      : 'Choose model'
+  const primaryEmptyAction = () => setTab(apiUnavailable ? 'api' : 'library')
+  const showPromptStarters = selectedModelRunnable || composerDraftUnlocked
+  const heroFactItems = [
+    {
+      label: 'Selected model',
+      value: selectedModelName,
+      copy: selectionSummaryCopy,
+      tone: selectionSummaryTone,
+      wide: true,
+    },
+    {
+      label: 'Current gate',
+      value: selectedModelRunnable ? 'Ready to chat' : readinessLabel,
+      copy: runtimeStatusCopy,
+      tone: runtimeTone,
+    },
+    {
+      label: 'Support boundary',
+      value: selectedModelCapabilitySupported ? 'Exact row unlocked' : 'Exact row required',
+      copy: supportStatusCopy,
+      tone: supportTone,
+    },
+    {
+      label: 'Draft',
+      value: generationActive ? 'Keep writing while it replies' : selectedModelRunnable ? 'Send now' : supportBlocked ? 'Locked by support row' : selectedModel ? 'Ready when the model is' : 'Choose model first',
+      copy: draftStatusLabel,
+      tone: 'idle',
+    },
+  ]
+
 
   return (
     <section className={`chat-layout chat-layout-assistant chat-layout-modern view-stack ${isFreshThread ? 'chat-layout-empty' : ''}`}>
@@ -972,28 +1017,25 @@ export default function ChatWorkspace({
                       <h2>{productHeroTitle}</h2>
                       {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
                     </div>
+                    <div className="chat-empty-actions-row" aria-label="Chat actions">
+                      <button type="button" className="primary-button" onClick={primaryEmptyAction}>
+                        {primaryEmptyActionLabel}
+                      </button>
+                      {!selectedModelRunnable && (
+                        <button type="button" className="ghost-button ghost-button-quiet" onClick={() => setTab('api')}>
+                          View support contract
+                        </button>
+                      )}
+                    </div>
                     <div className="chat-hero-grid">
                       <div className="chat-hero-facts" aria-label="Camelid chat highlights">
-                        <div className={`chat-hero-fact chat-hero-fact-wide is-${selectionSummaryTone}`}>
-                          <span>Selected model</span>
-                          <strong>{selectedModelName}</strong>
-                          <small>{selectionSummaryCopy}</small>
-                        </div>
-                        <div className={`chat-hero-fact is-${runtimeTone}`}>
-                          <span>Current gate</span>
-                          <strong>{selectedModelRunnable ? 'Ready to chat' : readinessLabel}</strong>
-                          <small>{runtimeStatusCopy}</small>
-                        </div>
-                        <div className={`chat-hero-fact is-${supportTone}`}>
-                          <span>Support boundary</span>
-                          <strong>{selectedModelCapabilitySupported ? 'Exact row unlocked' : 'Exact row required'}</strong>
-                          <small>{supportStatusCopy}</small>
-                        </div>
-                        <div className="chat-hero-fact">
-                          <span>Draft</span>
-                          <strong>{generationActive ? 'Keep writing while it replies' : selectedModelRunnable ? 'Send now' : supportBlocked ? 'Locked by support row' : selectedModel ? 'Ready when the model is' : 'Choose model first'}</strong>
-                          <small>{draftStatusLabel}</small>
-                        </div>
+                        {heroFactItems.map((item) => (
+                          <div key={item.label} className={`chat-hero-fact ${item.wide ? 'chat-hero-fact-wide' : ''} ${item.tone ? `is-${item.tone}` : ''}`.trim()}>
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                            <small>{item.copy}</small>
+                          </div>
+                        ))}
                       </div>
 
                       <aside className={`chat-hero-aside is-${readinessState}`} aria-label="Current chat readiness">
@@ -1014,7 +1056,7 @@ export default function ChatWorkspace({
                       </aside>
                     </div>
 
-                    {selectedModelRunnable && (
+                    {showPromptStarters && (
                       <div className="demo-prompt-panel demo-prompt-panel-stage" aria-label="Prompt starters">
                         <span>Prompt starters</span>
                         <div className="demo-prompt-strip">

@@ -7946,6 +7946,21 @@ textarea.composer-input-assistant {
   line-height: 1.72;
 }
 
+.chat-empty-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 18px;
+}
+
+.chat-empty-actions-row .primary-button,
+.chat-empty-actions-row .ghost-button {
+  min-height: 44px;
+  border-radius: 999px;
+  padding-inline: 18px;
+}
+
 .chat-empty-shell-modern .chat-hero-grid {
   margin-top: 28px;
 }
@@ -8043,6 +8058,16 @@ textarea.composer-input-assistant {
 
   .chat-empty-shell-modern .chat-empty-hero h2 {
     font-size: clamp(1.9rem, 10vw, 3rem);
+  }
+
+  .chat-empty-actions-row {
+    width: 100%;
+  }
+
+  .chat-empty-actions-row .primary-button,
+  .chat-empty-actions-row .ghost-button {
+    flex: 1 1 220px;
+    justify-content: center;
   }
 
   .sidebar-quick-link-row {
