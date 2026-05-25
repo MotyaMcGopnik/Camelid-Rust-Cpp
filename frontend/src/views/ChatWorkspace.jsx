@@ -974,18 +974,26 @@ export default function ChatWorkspace({
                     </div>
                     <div className="chat-hero-grid">
                       <div className="chat-hero-facts" aria-label="Camelid chat highlights">
-                        <div className="chat-hero-fact">
+                        <div className={`chat-hero-fact chat-hero-fact-wide is-${selectionSummaryTone}`}>
                           <span>Selected model</span>
                           <strong>{selectedModelName}</strong>
+                          <small>{selectionSummaryCopy}</small>
                         </div>
-                        <div className="chat-hero-fact">
+                        <div className={`chat-hero-fact is-${runtimeTone}`}>
                           <span>Current gate</span>
                           <strong>{selectedModelRunnable ? 'Ready to chat' : readinessLabel}</strong>
+                          <small>{runtimeStatusCopy}</small>
                         </div>
-                      <div className="chat-hero-fact">
+                        <div className={`chat-hero-fact is-${supportTone}`}>
+                          <span>Support boundary</span>
+                          <strong>{selectedModelCapabilitySupported ? 'Exact row unlocked' : 'Exact row required'}</strong>
+                          <small>{supportStatusCopy}</small>
+                        </div>
+                        <div className="chat-hero-fact">
                           <span>Draft</span>
                           <strong>{generationActive ? 'Keep writing while it replies' : selectedModelRunnable ? 'Send now' : supportBlocked ? 'Locked by support row' : selectedModel ? 'Ready when the model is' : 'Choose model first'}</strong>
-                      </div>
+                          <small>{draftStatusLabel}</small>
+                        </div>
                       </div>
 
                       <aside className={`chat-hero-aside is-${readinessState}`} aria-label="Current chat readiness">
@@ -1007,7 +1015,7 @@ export default function ChatWorkspace({
                     </div>
 
                     {selectedModelRunnable && (
-                      <div className="demo-prompt-panel" aria-label="Prompt starters">
+                      <div className="demo-prompt-panel demo-prompt-panel-stage" aria-label="Prompt starters">
                         <span>Prompt starters</span>
                         <div className="demo-prompt-strip">
                           {DEMO_PROMPTS.map((prompt) => (
@@ -1069,7 +1077,12 @@ export default function ChatWorkspace({
                       <strong>{currentConversationSummary}</strong>
                       <p>{selectedModelRunnable ? 'Local assistant responses stay grounded in the current runtime and exact supported row.' : selectedModelGateSummary}</p>
                     </div>
-                    <div className="chat-thread-header-badges" aria-label="Conversation snapshot">
+                    <div className="chat-thread-header-badges chat-thread-header-badges-compact" aria-label="Conversation snapshot">
+                      <div className={`chat-thread-header-badge chat-thread-header-badge-wide is-${selectionSummaryTone}`}>
+                        <span>Selected model</span>
+                        <strong>{selectedModelName}</strong>
+                        <small>{selectedModelMeta}</small>
+                      </div>
                       {conversationSnapshotItems.map((item) => (
                         <div key={item.label} className="chat-thread-header-badge">
                           <span>{item.label}</span>
