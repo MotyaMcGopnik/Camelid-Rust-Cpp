@@ -501,9 +501,16 @@ fn select_linux_x86_q8_plan(
         "CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE",
         optional_x86_q8_gate("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE"),
     );
+    let ffn_decode_chain_enabled = env_flag_enabled("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
+    let ffn_gate_up_decode_consumer_enabled =
+        ffn_decode_chain_enabled || env_flag_enabled("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER");
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
-        optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+        if ffn_gate_up_decode_consumer_enabled {
+            Some("on")
+        } else {
+            Some("off")
+        },
     );
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_GROUP_CHUNKING",
@@ -517,7 +524,6 @@ fn select_linux_x86_q8_plan(
         "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_PAIRED_DOT",
         optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_PAIRED_DOT"),
     );
-    let ffn_decode_chain_enabled = env_flag_enabled("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_DECODE_CHAIN",
         if ffn_decode_chain_enabled {
@@ -586,6 +592,12 @@ fn select_linux_x86_q8_plan(
         optional_x86_q8_gate("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
     );
 
+    if ffn_decode_chain_enabled && !env_flag_enabled("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER") {
+        reasons.push(
+            "FFN decode-chain opt-in also enables the required FFN gate/up decode consumer gate"
+                .into(),
+        );
+    }
     if ffn_decode_chain_enabled && !env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER") {
         reasons.push(
             "FFN decode-chain opt-in also enables the required FFN-down decode consumer gate"
@@ -1550,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn ubuntu_experimental_ffn_decode_chain_enables_required_down_leg() {
+    fn ubuntu_experimental_ffn_decode_chain_enables_required_gate_up_and_down_legs() {
         let _guard = env_lock();
         clear_profile_env();
         env::set_var("CAMELID_PROFILE", "experimental");
@@ -1570,9 +1582,18 @@ mod tests {
         assert_eq!(
             outcome
                 .env_updates
+                .get("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER"),
+            Some(&Some("on"))
+        );
+        assert_eq!(
+            outcome
+                .env_updates
                 .get("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER"),
             Some(&Some("on"))
         );
+        assert!(outcome.plan.reasons.iter().any(|reason| reason.contains(
+            "FFN decode-chain opt-in also enables the required FFN gate/up decode consumer gate"
+        )));
         assert!(outcome.plan.reasons.iter().any(|reason| reason.contains(
             "FFN decode-chain opt-in also enables the required FFN-down decode consumer gate"
         )));
