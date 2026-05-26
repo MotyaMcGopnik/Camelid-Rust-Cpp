@@ -42,11 +42,15 @@ pub fn send_activation_packet<W: Write>(
     header[12..16].copy_from_slice(&float_count.to_le_bytes());
     writer.write_all(&header)?;
 
-    let mut payload = Vec::with_capacity(std::mem::size_of_val(activations));
-    for value in activations {
-        payload.extend_from_slice(&value.to_le_bytes());
-    }
-    writer.write_all(&payload)?;
+    // On little-endian architectures (Apple Silicon / Intel Macs), floats are already in native little-endian.
+    // Interpret the float slice as a byte slice directly to write it in bulk with zero allocations and zero looping.
+    let payload = unsafe {
+        std::slice::from_raw_parts(
+            activations.as_ptr() as *const u8,
+            activations.len() * std::mem::size_of::<f32>(),
+        )
+    };
+    writer.write_all(payload)?;
     writer.flush()
 }
 
@@ -84,17 +88,18 @@ pub fn recv_activation_packet_limited<R: Read>(
         ));
     }
 
-    let byte_count = float_count_usize
-        .checked_mul(std::mem::size_of::<f32>())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "activation size overflow"))?;
-    let mut payload = vec![0_u8; byte_count];
-    reader.read_exact(&mut payload)?;
+    // Resize the existing buffer. This eliminates all temporary byte buffer allocations.
+    out_activations.resize(float_count_usize, 0.0);
 
-    out_activations.clear();
-    out_activations.reserve(float_count_usize);
-    for chunk in payload.chunks_exact(4) {
-        out_activations.push(f32::from_le_bytes(chunk.try_into().unwrap()));
-    }
+    // Interpret the float vector buffer as a mutable byte buffer and read directly into it in one system call.
+    let byte_count = float_count_usize * std::mem::size_of::<f32>();
+    let payload_slice = unsafe {
+        std::slice::from_raw_parts_mut(
+            out_activations.as_mut_ptr() as *mut u8,
+            byte_count,
+        )
+    };
+    reader.read_exact(payload_slice)?;
 
     Ok(ActivationHeader {
         pos,
