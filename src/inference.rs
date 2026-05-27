@@ -275,7 +275,11 @@ impl LlamaLoadedWeights {
             CpuTensor::from_f32(&binding.token_embedding.name, vec![0], vec![])?
         };
 
-        let output_norm = store.load_cpu_f32(&binding.output_norm.name)?;
+        let output_norm = if is_first_node {
+            store.load_cpu_f32(&binding.output_norm.name)?
+        } else {
+            CpuTensor::from_f32(&binding.output_norm.name, vec![0], vec![])?
+        };
 
         let output = if is_first_node {
             if binding.output_is_tied_embedding {
@@ -396,9 +400,7 @@ impl LlamaLoadedWeights {
                 &[dims.vocab_size, dims.embedding_length],
                 "token embedding",
             )?;
-        }
-        require_tensor_shape(&self.output_norm, &[dims.embedding_length], "output norm")?;
-        if is_first_node {
+            require_tensor_shape(&self.output_norm, &[dims.embedding_length], "output norm")?;
             require_matrix_shape(
                 self.output_projection(),
                 dims.embedding_length,
@@ -1282,8 +1284,7 @@ impl LlamaInferenceSession {
             self.kv_cache.position = position + 1;
         }
 
-        let norm = hidden.rms_norm(&self.weights.output_norm, rms_norm_epsilon, "output_norm")?;
-        Ok(norm)
+        Ok(hidden)
     }
 
     pub fn forward_single_token(&mut self, token_id: u32) -> Result<LlamaForwardOutput> {
