@@ -2009,6 +2009,56 @@ fn require_rank(tensor: &CpuTensor, rank: usize, op: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) fn dot_product(lhs: &[f32], rhs: &[f32]) -> f32 {
+    debug_assert_eq!(lhs.len(), rhs.len());
+    use std::arch::aarch64::{
+        vld1q_f32, vmulq_f32, vaddq_f32, vdupq_n_f32, vget_low_f32, vget_high_f32, vpadd_f32, vget_lane_f32
+    };
+    let len = lhs.len();
+    let mut idx = 0;
+    unsafe {
+        let mut sum_vec = vdupq_n_f32(0.0);
+        // Unroll 4x (16 floats per iteration) for maximum instruction pipelining and data throughput
+        while idx + 16 <= len {
+            let l0 = vld1q_f32(lhs.as_ptr().add(idx));
+            let r0 = vld1q_f32(rhs.as_ptr().add(idx));
+            let l1 = vld1q_f32(lhs.as_ptr().add(idx + 4));
+            let r1 = vld1q_f32(rhs.as_ptr().add(idx + 4));
+            let l2 = vld1q_f32(lhs.as_ptr().add(idx + 8));
+            let r2 = vld1q_f32(rhs.as_ptr().add(idx + 8));
+            let l3 = vld1q_f32(lhs.as_ptr().add(idx + 12));
+            let r3 = vld1q_f32(rhs.as_ptr().add(idx + 12));
+
+            let m0 = vmulq_f32(l0, r0);
+            let m1 = vmulq_f32(l1, r1);
+            let m2 = vmulq_f32(l2, r2);
+            let m3 = vmulq_f32(l3, r3);
+
+            let s01 = vaddq_f32(m0, m1);
+            let s23 = vaddq_f32(m2, m3);
+            sum_vec = vaddq_f32(sum_vec, vaddq_f32(s01, s23));
+            idx += 16;
+        }
+        while idx + 4 <= len {
+            let l = vld1q_f32(lhs.as_ptr().add(idx));
+            let r = vld1q_f32(rhs.as_ptr().add(idx));
+            sum_vec = vaddq_f32(sum_vec, vmulq_f32(l, r));
+            idx += 4;
+        }
+        let low = vget_low_f32(sum_vec);
+        let high = vget_high_f32(sum_vec);
+        let sum_2 = vpadd_f32(low, high);
+        let mut sum = vget_lane_f32::<0>(sum_2) + vget_lane_f32::<1>(sum_2);
+        while idx < len {
+            sum += lhs[idx] * rhs[idx];
+            idx += 1;
+        }
+        sum
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 pub(crate) fn dot_product(lhs: &[f32], rhs: &[f32]) -> f32 {
     debug_assert_eq!(lhs.len(), rhs.len());
     let mut sum = 0.0;
@@ -4534,7 +4584,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual.shape.dims, vec![1, output_width]);
-        assert_eq!(actual.data, expected);
+        for (idx, &actual_val) in actual.data.iter().enumerate() {
+            let expected_val = expected[idx];
+            assert!(
+                (actual_val - expected_val).abs() < 1e-4,
+                "mismatch at index {idx}: actual {actual_val}, expected {expected_val}"
+            );
+        }
     }
 
     #[test]
@@ -4566,7 +4622,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual.shape.dims, vec![1, output_width]);
-        assert_eq!(actual.data, expected);
+        for (idx, &actual_val) in actual.data.iter().enumerate() {
+            let expected_val = expected[idx];
+            assert!(
+                (actual_val - expected_val).abs() < 1e-4,
+                "mismatch at index {idx}: actual {actual_val}, expected {expected_val}"
+            );
+        }
     }
 
     #[test]
