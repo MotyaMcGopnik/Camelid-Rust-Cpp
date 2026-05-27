@@ -11782,7 +11782,17 @@ unsafe fn q8_0_dot_rows_neon_dotprod(weight: &[Q8_0Block], input: &[Q8_0Block]) 
 
     let mut total_sum = 0.0_f32;
 
-    for (w_block, i_block) in weight.iter().zip(input) {
+    for (idx, (w_block, i_block)) in weight.iter().zip(input).enumerate() {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            if let Some(next_block) = weight.get(idx + 2) {
+                asm!(
+                    "prfm pldl1keep, [{ptr}]",
+                    ptr = in(reg) next_block.quants.as_ptr(),
+                    options(nostack, preserves_flags, readonly)
+                );
+            }
+        }
         let weight_lo = vld1q_s8(w_block.quants.as_ptr());
         let input_lo = vld1q_s8(i_block.quants.as_ptr());
         let weight_hi = vld1q_s8(w_block.quants.as_ptr().add(16));
@@ -11821,9 +11831,26 @@ unsafe fn q8_0_two_dot_rows_neon_dotprod(
     let mut first_sum = 0.0_f32;
     let mut second_sum = 0.0_f32;
 
-    for ((first_block, second_block), input_block) in
-        first_weight.iter().zip(second_weight).zip(input)
+    for (idx, ((first_block, second_block), input_block)) in
+        first_weight.iter().zip(second_weight).zip(input).enumerate()
     {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            if let Some(next_block) = first_weight.get(idx + 2) {
+                asm!(
+                    "prfm pldl1keep, [{ptr}]",
+                    ptr = in(reg) next_block.quants.as_ptr(),
+                    options(nostack, preserves_flags, readonly)
+                );
+            }
+            if let Some(next_block) = second_weight.get(idx + 2) {
+                asm!(
+                    "prfm pldl1keep, [{ptr}]",
+                    ptr = in(reg) next_block.quants.as_ptr(),
+                    options(nostack, preserves_flags, readonly)
+                );
+            }
+        }
         let input_lo = vld1q_s8(input_block.quants.as_ptr());
         let input_hi = vld1q_s8(input_block.quants.as_ptr().add(16));
 
@@ -14612,7 +14639,19 @@ fn q8_0_packed_rows4_dot(
 ) -> [f32; 4] {
     debug_assert_eq!(packed_blocks.len(), input.len());
     let mut sums = [0.0_f32; 4];
-    for (packed_block, input_block) in packed_blocks.iter().zip(input) {
+    for (idx, (packed_block, input_block)) in packed_blocks.iter().zip(input).enumerate() {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            if let Some(next_block) = packed_blocks.get(idx + 2) {
+                unsafe {
+                    std::arch::asm!(
+                        "prfm pldl1keep, [{ptr}]",
+                        ptr = in(reg) next_block.quants.as_ptr(),
+                        options(nostack, preserves_flags, readonly)
+                    );
+                }
+            }
+        }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         let int_sums = if aarch64_dotprod_enabled() {
             // SAFETY: runtime feature detection confirms dot-product support; packed quants
