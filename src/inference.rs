@@ -11363,6 +11363,109 @@ fn quantize_q8_0_blocks_into(input: &[f32], blocks: &mut Vec<Q8_0Block>) {
     );
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn quantize_q8_0_block(block: &[f32]) -> Q8_0Block {
+    use std::arch::aarch64::{
+        vld1q_f32, vabsq_f32, vmaxq_f32, vmax_f32, vget_low_f32, vget_high_f32, vdupq_n_f32, vmulq_f32,
+        vcvtaq_s32_f32, vmovn_s32, vcombine_s16, vqmovn_s16, vcombine_s8, vst1q_s8, vget_lane_f32,
+    };
+
+    debug_assert_eq!(block.len(), Q8_0_BLOCK_VALUES);
+
+    // SAFETY: block slice has exactly 32 values, so loading 8 consecutive 4-float vectors is safe.
+    unsafe {
+        let v0 = vld1q_f32(block.as_ptr());
+        let v1 = vld1q_f32(block.as_ptr().add(4));
+        let v2 = vld1q_f32(block.as_ptr().add(8));
+        let v3 = vld1q_f32(block.as_ptr().add(12));
+        let v4 = vld1q_f32(block.as_ptr().add(16));
+        let v5 = vld1q_f32(block.as_ptr().add(20));
+        let v6 = vld1q_f32(block.as_ptr().add(24));
+        let v7 = vld1q_f32(block.as_ptr().add(28));
+
+        let abs0 = vabsq_f32(v0);
+        let abs1 = vabsq_f32(v1);
+        let abs2 = vabsq_f32(v2);
+        let abs3 = vabsq_f32(v3);
+        let abs4 = vabsq_f32(v4);
+        let abs5 = vabsq_f32(v5);
+        let abs6 = vabsq_f32(v6);
+        let abs7 = vabsq_f32(v7);
+
+        let max01 = vmaxq_f32(abs0, abs1);
+        let max23 = vmaxq_f32(abs2, abs3);
+        let max45 = vmaxq_f32(abs4, abs5);
+        let max67 = vmaxq_f32(abs6, abs7);
+
+        let max03 = vmaxq_f32(max01, max23);
+        let max47 = vmaxq_f32(max45, max67);
+
+        let max_vec = vmaxq_f32(max03, max47);
+        let max_half = vmax_f32(vget_low_f32(max_vec), vget_high_f32(max_vec));
+        let max_abs = vget_lane_f32::<0>(max_half).max(vget_lane_f32::<1>(max_half));
+
+        let unrounded_scale = max_abs / 127.0;
+        let scale_bits = f32_to_f16_bits(unrounded_scale);
+        let scale = f16_bits_to_f32(scale_bits);
+
+        let inv_scale = if unrounded_scale == 0.0 {
+            0.0
+        } else {
+            1.0 / unrounded_scale
+        };
+
+        let v_inv_scale = vdupq_n_f32(inv_scale);
+        let scaled0 = vmulq_f32(v0, v_inv_scale);
+        let scaled1 = vmulq_f32(v1, v_inv_scale);
+        let scaled2 = vmulq_f32(v2, v_inv_scale);
+        let scaled3 = vmulq_f32(v3, v_inv_scale);
+        let scaled4 = vmulq_f32(v4, v_inv_scale);
+        let scaled5 = vmulq_f32(v5, v_inv_scale);
+        let scaled6 = vmulq_f32(v6, v_inv_scale);
+        let scaled7 = vmulq_f32(v7, v_inv_scale);
+
+        let int0 = vcvtaq_s32_f32(scaled0);
+        let int1 = vcvtaq_s32_f32(scaled1);
+        let int2 = vcvtaq_s32_f32(scaled2);
+        let int3 = vcvtaq_s32_f32(scaled3);
+        let int4 = vcvtaq_s32_f32(scaled4);
+        let int5 = vcvtaq_s32_f32(scaled5);
+        let int6 = vcvtaq_s32_f32(scaled6);
+        let int7 = vcvtaq_s32_f32(scaled7);
+
+        let i16_0 = vmovn_s32(int0);
+        let i16_1 = vmovn_s32(int1);
+        let i16_01 = vcombine_s16(i16_0, i16_1);
+
+        let i16_2 = vmovn_s32(int2);
+        let i16_3 = vmovn_s32(int3);
+        let i16_23 = vcombine_s16(i16_2, i16_3);
+
+        let i16_4 = vmovn_s32(int4);
+        let i16_5 = vmovn_s32(int5);
+        let i16_45 = vcombine_s16(i16_4, i16_5);
+
+        let i16_6 = vmovn_s32(int6);
+        let i16_7 = vmovn_s32(int7);
+        let i16_67 = vcombine_s16(i16_6, i16_7);
+
+        let i8_01 = vqmovn_s16(i16_01);
+        let i8_23 = vqmovn_s16(i16_23);
+        let i8_45 = vqmovn_s16(i16_45);
+        let i8_67 = vqmovn_s16(i16_67);
+
+        let i8_03 = vcombine_s8(i8_01, i8_23);
+        let i8_47 = vcombine_s8(i8_45, i8_67);
+
+        let mut quants = [0_i8; Q8_0_BLOCK_VALUES];
+        vst1q_s8(quants.as_mut_ptr(), i8_03);
+        vst1q_s8(quants.as_mut_ptr().add(16), i8_47);
+
+        Q8_0Block { scale, quants }
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn quantize_q8_0_block(block: &[f32]) -> Q8_0Block {
     debug_assert_eq!(block.len(), Q8_0_BLOCK_VALUES);
     let max_abs = block
