@@ -3,7 +3,7 @@ import { LLAMA32_3B_ACCEPTANCE_AVAILABILITY, LLAMA32_3B_ACCEPTANCE_GATING_NOTE, 
 import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, compatibilityHintMatchesExactTarget, exactRowSupportLanes, findCompatibilityHint, formatCapabilityStatus, frontendSupportContractCopy, getCurrentCompatibilityTarget, getTrackedCompatibilityTargets, isExactCompatibilityHint, isSupportedCapabilityStatus, rowSupportBoundaryCopy, rowSupportNextStepCopy } from '../lib/capabilities'
 import { getChatGateState } from '../lib/chatGate'
 import { formatBytes, formatCompactNumber } from '../lib/formatters'
-import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, isRunnableModel, modelRuntimeIdMatches } from '../lib/modelState'
+import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, modelRuntimeIdMatches } from '../lib/modelState'
 
 const FILTERS = [
   { key: 'all', label: 'Everything' },
@@ -65,11 +65,12 @@ const LLAMA32_3B_ACCEPTANCE_FILENAME = pathBasename(LLAMA32_3B_ACCEPTANCE_TARGET
 function hasExactLlama32ThreeBArtifact(model) {
   const exactTargetPath = model?.model_path === LLAMA32_3B_ACCEPTANCE_TARGET.model_path
     || model?.path === LLAMA32_3B_ACCEPTANCE_TARGET.model_path
+  // Source is catalog provenance; only the saved/loaded artifact fields can satisfy
+  // the exact-row presence check.
   const filenames = [
     model?.model_path,
     model?.path,
     model?.hf_filename,
-    model?.source,
   ].map(pathBasename).filter(Boolean)
   return exactTargetPath || filenames.some((filename) => filename.toLowerCase() === LLAMA32_3B_ACCEPTANCE_FILENAME.toLowerCase())
 }
@@ -865,8 +866,8 @@ export default function ModelsView({
         ) : (
           <div className="models-card-grid">
             {readyModels.map((model) => {
-              const runtimeReady = isRunnableModel(model)
               const chatGate = getChatGateState(capabilities, model, runtime)
+              const runtimeReady = chatGate.runtimeReady
               const chatUnlocked = chatGate.chatUnlocked
               const contractBlocked = runtimeReady && !chatGate.contractSupported
               const canLoad = canLoadIntoRuntime(model)
@@ -982,6 +983,15 @@ export default function ModelsView({
                     </dl>
 
                     <CapabilityEvidenceBlock capabilities={capabilities} model={localMatch} catalogItem={item} />
+
+                    {localMatch && (localMatch.status === 'downloading' || localMatch.status === 'canceling' || localMatch.progress) && (
+                      <div className="progress-wrap" style={{ marginBlock: '12px' }}>
+                        <div className="progress-bar"><div style={{ width: `${localMatch.progress || 0}%` }} /></div>
+                        <small style={{ display: 'block', marginTop: '6px', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                          {formatDownloadCopy(localMatch)}
+                        </small>
+                      </div>
+                    )}
 
                     {localMatch && <ReadinessGrid model={localMatch} runtime={runtime} />}
 
@@ -1118,8 +1128,8 @@ export default function ModelsView({
 
           <div className="models-card-grid">
             {setupModels.map((model) => {
-              const runtimeReady = isRunnableModel(model)
               const chatGate = getChatGateState(capabilities, model, runtime)
+              const runtimeReady = chatGate.runtimeReady
               const chatUnlocked = chatGate.chatUnlocked
               const contractBlocked = runtimeReady && !chatGate.contractSupported
               const canLoad = canLoadIntoRuntime(model)

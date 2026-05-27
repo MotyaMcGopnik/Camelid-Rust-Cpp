@@ -15,7 +15,7 @@ Camelid is working toward 1:1 behavioral parity with llama.cpp while keeping the
 | Verification first | Llama 3.2 1B, Llama 3.2 3B, and Llama 3 8B Q8_0 checked envelopes | Default supported path | Reference token IDs and text | Matching generated token IDs and text inside supported envelopes | Support moves only where exact-row parity, API, WebUI, and evidence agree. |
 | Apple Silicon retained candidate | Llama 3.2 3B Q8_0 short request | Default-off Q8 lane | about 530 ms total | about 478 ms total | Narrow same-host result; total wall time improved, but first-token latency still trails llama.cpp. |
 | Headline guarded stream run | Llama 3.2 3B Q8_0 | Confirmed experimental highlight | 5.60 s total | 3.01 s total | 46.4% faster with marker guards passing for both runtimes. |
-| Current Ubuntu target | Llama 3.2 3B Q8_0 current-main same-host run | Default-off Rust Q8 optimization lane | about 502 ms total | about 8.67 s total | Current retained same-host evidence is negative: marker guards passed, but Camelid trails substantially, so this remains active bottleneck work rather than a speed claim. |
+| Current Ubuntu target | Llama 3.2 3B Q8_0 same-host AVX2 baseline recheck | Default-off Rust Q8 optimization lane | about 498 ms total | about 8.84 s total | Latest retained same-host evidence is still negative: exact-row one-token parity held, but the cleaned marker run was slightly slower than the prior Camelid baseline and still far behind llama.cpp, so this remains bottleneck work rather than a speed claim. |
 
 > **Benchmark boundary:** these are retained highlights, not a broad production-throughput claim. Optimized paths are evidence-gated and default-off. Camelid promotes code to the default path only after exact-row parity, repeatability, portability, and support-contract checks all agree.
 
@@ -46,7 +46,7 @@ Camelid's support boundary is exact-row only. Read each row literally; support d
 | Llama 3.2 1B Instruct Q8_0 | **Verified bounded support** | Load, completions, chat completions, WebUI validation, compact/broader parity, exact-row metadata-Jinja row-template checks, template-shape checks, unique-chat perf/RSS sampling, and checked 512/1024/2048/4096/8192 context packs. |
 | Llama 3.2 3B Instruct Q8_0 | **Supported exact-row smoke** | Canonical API/WebUI support-gate refresh at source head `e9f926ed1a65`, compact/broader 50-token parity, five-prompt API smoke, row-scoped template evidence, bounded unique-chat perf/RSS, and checked 512/1024/2048 context packs. |
 | Llama 3 8B Instruct Q8_0 | **Verified bounded support** | Load, completions, chat completions, WebUI validation, compact and broader parity, checked 512/1024/2048 context packs, compact chat-template-shape evidence, bounded memory evidence, structured RSS/Q8 read counters, and lazy-Q8 hot-path measurements. |
-| Mistral-7B-Instruct-v0.3.Q8_0.gguf | **Active validation; not supported yet** | Tokenizer/template, 1-token generation, broader five-prompt/50-token parity, bounded 512/1024/2048, checked 4096/8192 context evidence, and fail-closed API/WebUI/RSS evidence exist. Explicit contract promotion is still required. |
+| Mistral-7B-Instruct-v0.3.Q8_0.gguf | **Supported exact-row smoke** | Exact-row load, tokenizer/template, 1-token generation, broader 50-token parity, bounded 512/1024/2048, checked 4096/8192 context packs, and synchronized API/WebUI/RSS evidence are fully verified. |
 | Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf | **Partial backend runtime only** | One-token backend MoE runtime evidence exists. Later-generation divergence and a continuation HTTP hang block API/WebUI/frontend readiness and support promotion. |
 | Qwen2.5-7B-Instruct-Q8_0.gguf | **Planned exact-row candidate** | Candidate row selected; no Camelid support claim yet. |
 | gemma-2-9b-it-Q8_0.gguf | **Planned exact-row candidate** | Candidate row selected; no Camelid support claim yet. |
@@ -67,7 +67,7 @@ Authoritative detail lives in [`COMPATIBILITY.md`](COMPATIBILITY.md). The curren
 The current workstream is focused on widening support without weakening the contract:
 
 - **Protect supported rows:** keep TinyLlama, Llama 3.2 1B/3B, and Llama 3 8B evidence aligned across runtime, API, frontend, and docs.
-- **Close Mistral deliberately:** Mistral 7B v0.3 Q8_0 has much of the validation work done, but still needs explicit synchronized promotion before the product can call it supported.
+- **Widen Mistral support matrices carefully:** Mistral 7B v0.3 Q8_0 is now a fully supported exact-row smoke lane. Next, we will preserve this exact-row boundary while validating neighboring quants and models.
 - **Fix Mixtral blockers:** Mixtral remains blocked until later-generation parity and the continuation HTTP hang are fixed and rerun through API/WebUI/frontend evidence.
 - **Advance Q8 performance carefully:** Apple Silicon and Ubuntu x86 Q8 acceleration remain default-off and evidence-gated. The default/reference path stays available while optimized paths prove parity and whole-model impact.
 
@@ -76,7 +76,7 @@ The current workstream is focused on widening support without weakening the cont
 Camelid's speed story is still in progress. The best current performance evidence is narrow and default-off:
 
 - Apple Silicon Q8 work has a retained Llama 3.2 3B short-request candidate that improved total wall time in a bounded run, but first-token latency and decode-heavy runs still need work before production-throughput language is justified.
-- Ubuntu x86 Q8 work has packed storage, AVX2/VNNI-oriented kernels, route telemetry, and FFN decode-chain experiments behind gates. The latest retained current-main same-host run is a negative timing artifact, so there is no broad default-on speed claim.
+- Ubuntu x86 Q8 work has packed storage, AVX2/VNNI-oriented kernels, route telemetry, and FFN decode-chain experiments behind gates. The latest retained same-host AVX2 baseline recheck is still a negative timing artifact, so there is no broad default-on speed claim.
 
 For details, see [`docs/performance/ubuntu-x86-q8.md`](docs/performance/ubuntu-x86-q8.md) and [`STATUS.md`](STATUS.md#ubuntu-x86-q8-acceleration-update).
 

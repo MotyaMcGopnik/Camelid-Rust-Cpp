@@ -450,6 +450,7 @@ fn tiny_weights() -> LlamaLoadedWeights {
             ffn_down: select_rows("blk.0.ffn_down.weight", hidden, ffn, &[0, 1, 2, 3]),
             moe_router: None,
         }],
+        layer_range: None,
     }
 }
 

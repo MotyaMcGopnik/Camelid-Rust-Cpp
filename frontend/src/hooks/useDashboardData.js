@@ -5,7 +5,7 @@ import { resolveLoadedModelDisplayName } from '../lib/loadedModelDisplay'
 import { readStreamingChatCompletion } from '../lib/chatCompletionStream'
 import { NEW_CHAT_SENTINEL, resolveSelectedConversation, shouldCreateConversationForSend } from '../lib/chatState'
 import { normalizeStoredConversations } from '../lib/conversationStorage.js'
-import { getRuntimeRequestModelId, isExternalModel, isRunnableModel, modelRuntimeIdMatches } from '../lib/modelState'
+import { getRuntimeRequestModelId, isExternalModel, modelRuntimeIdMatches } from '../lib/modelState'
 
 const TAB_STORAGE_KEY = 'camelid.activeTab'
 const SELECTED_CONVERSATION_STORAGE_KEY = 'camelid.selectedConversationId'
@@ -388,6 +388,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [composer, setComposer] = useState('')
   const [newChatTitle, setNewChatTitle] = useState('')
   const [sending, setSending] = useState(false)
+  const [stoppingGeneration, setStoppingGeneration] = useState(false)
   const [loadingModelId, setLoadingModelId] = useState('')
   const [pendingChat, setPendingChat] = useState(null)
   const [registerForm, setRegisterForm] = useState({ id: '', name: '', model_path: '', runtime_model_name: '' })
@@ -400,6 +401,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const localConversationsRef = useRef(localConversations)
   const localMemoriesRef = useRef(localMemories)
   const selectedConversationIdRef = useRef(selectedConversationId)
+  const activeChatRequestRef = useRef(null)
 
   useEffect(() => {
     localModelsRef.current = localModels
@@ -469,11 +471,59 @@ export function useDashboardData({ showNotice, clearNotice }) {
       const currentLocalModels = localModelsOverride || localModelsRef.current
       const currentLocalConversations = localConversationsRef.current
       const currentLocalMemories = localMemoriesRef.current
-      const [health, modelList, capabilities] = await Promise.all([
+      const [health, modelList, capabilities, downloads] = await Promise.all([
         fetchJson(`${normalizedApiBase}/v1/health`),
         fetchJson(`${normalizedApiBase}/v1/models`),
         fetchJson(`${normalizedApiBase}/api/capabilities`).catch(() => null),
+        fetchJson(`${normalizedApiBase}/api/models/catalog/downloads`).catch(() => []),
       ])
+
+      let modelsUpdated = false
+      const updatedLocalModels = currentLocalModels.map((model) => {
+        if (model.status === 'downloading') {
+          const dl = downloads.find((d) => d.id === model.id)
+          if (dl) {
+            const progress = dl.total_bytes > 0 ? Math.round((dl.bytes_downloaded / dl.total_bytes) * 100) : 0
+            if (model.bytes_downloaded !== dl.bytes_downloaded || model.status !== dl.status) {
+              modelsUpdated = true
+              let newStatus = 'downloading'
+              let installError = null
+              if (dl.status === 'completed') {
+                newStatus = 'registered'
+              } else if (dl.status === 'failed') {
+                newStatus = 'failed'
+                installError = 'Download failed'
+              }
+              return {
+                ...model,
+                status: newStatus,
+                bytes_downloaded: dl.bytes_downloaded,
+                total_bytes: dl.total_bytes,
+                progress,
+                install_error: installError,
+                updated_at: nowIso(),
+              }
+            }
+          } else {
+            // If the download has vanished from the active list without explicitly transitioning to failed,
+            // assume it completed successfully.
+            modelsUpdated = true
+            return {
+              ...model,
+              status: 'registered',
+              progress: 100,
+              updated_at: nowIso(),
+            }
+          }
+        }
+        return model
+      })
+
+      let activeLocalModels = currentLocalModels
+      if (modelsUpdated) {
+        activeLocalModels = persistLocalModels(updatedLocalModels)
+      }
+
       const currentModel = health?.active_model_id
         ? await fetchJson(`${normalizedApiBase}/api/models/current`).catch(() => null)
         : null
@@ -482,7 +532,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
         modelItems,
         health,
         currentModel,
-        localModels: currentLocalModels,
+        localModels: activeLocalModels,
         apiBase: normalizedApiBase,
       })
       const nextDashboard = makeDashboard({
@@ -506,18 +556,18 @@ export function useDashboardData({ showNotice, clearNotice }) {
         if (!nextModels.length) return ''
         const currentModel = current ? nextModels.find((model) => model.id === current) : null
         const activeModel = health?.active_model_id ? nextModels.find((model) => modelRuntimeIdMatches(model, { active_model_id: health.active_model_id })) : null
-        const activeModelRunnable = activeModel && isRunnableModel(activeModel)
-        const currentModelRunnable = currentModel && isRunnableModel(currentModel)
-        const runnableModel = nextModels.find((model) => isRunnableModel(model)) || null
+        const activeModelChatGate = activeModel ? getChatGateState(capabilities, activeModel, nextDashboard.runtime) : null
+        const currentModelChatGate = currentModel ? getChatGateState(capabilities, currentModel, nextDashboard.runtime) : null
+        const chatUnlockedModel = nextModels.find((model) => getChatGateState(capabilities, model, nextDashboard.runtime).chatUnlocked) || null
 
         // The chat API can only use the backend's active model. If a previous browser
         // selection points at an inactive saved model, snap back to the runtime model
         // instead of leaving the composer looking ready for the wrong row.
-        if (activeModelRunnable && current !== activeModel.id) return activeModel.id
-        if (currentModelRunnable) return current
+        if (activeModelChatGate?.chatUnlocked && current !== activeModel.id) return activeModel.id
+        if (currentModelChatGate?.chatUnlocked) return current
         if (activeModel) return activeModel.id
         if (currentModel) return current
-        return runnableModel?.id || nextModels[0]?.id || ''
+        return chatUnlockedModel?.id || nextModels[0]?.id || ''
       })
     } catch (error) {
       const fallbackDashboard = makeDashboard({
@@ -639,6 +689,13 @@ export function useDashboardData({ showNotice, clearNotice }) {
       : selectedConversation
   )
 
+  const stopGeneration = () => {
+    if (!activeChatRequestRef.current || stoppingGeneration) return false
+    setStoppingGeneration(true)
+    activeChatRequestRef.current.abort()
+    return true
+  }
+
   const sendMessage = async () => {
     if (!composer.trim()) return
     if (!selectedModelRunnable) {
@@ -709,9 +766,12 @@ export function useDashboardData({ showNotice, clearNotice }) {
       setPendingChat(null)
 
       const requestModelId = getRuntimeRequestModelId(selectedModel, runtime, selectedModelId)
+      const requestController = new AbortController()
+      activeChatRequestRef.current = requestController
       const response = await fetch(`${normalizedApiBase}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: requestController.signal,
         body: JSON.stringify({ model: requestModelId, messages: requestMessages, temperature: 0, max_tokens: localChatMaxTokens(history), stream: true }),
       })
       const applyAssistantStreamPatch = (patch) => {
@@ -787,6 +847,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
           completion_tokens: streamed.completionTokens || estimateTokenCount(streamed.content),
           total_tokens: promptTokenEstimate + (streamed.completionTokens || estimateTokenCount(streamed.content)),
         },
+        camelid: streamed.camelid || null,
         streaming: false,
         streaming_phase: null,
         first_byte_ms: streamed.firstByteMs ?? null,
@@ -806,13 +867,13 @@ export function useDashboardData({ showNotice, clearNotice }) {
       )))
       setSelectedConversationId(conversation.id)
     } catch (error) {
+      const requestWasAborted = error?.name === 'AbortError'
       const pendingPatchAtFailure = pendingAssistantPatch
       if (pendingAssistantFrame !== null && typeof window !== 'undefined') {
         window.cancelAnimationFrame(pendingAssistantFrame)
         pendingAssistantFrame = null
       }
       pendingAssistantPatch = null
-      const errorMessage = getGuardrailErrorMessage(error, 'Local inference failed.')
       if (activeConversationId && assistantId) {
         persistConversations((current) => current.map((item) => (
           item.id === activeConversationId
@@ -825,7 +886,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
                         return {
                           ...patchedMessage,
                           content: patchedMessage.content && patchedMessage.content !== '…' ? patchedMessage.content : '(generation stopped)',
-                          finish_reason: 'error',
+                          finish_reason: requestWasAborted ? 'interrupted' : 'error',
                           streaming: false,
                           streaming_phase: null,
                         }
@@ -838,8 +899,15 @@ export function useDashboardData({ showNotice, clearNotice }) {
         )))
       }
       setPendingChat(null)
-      showNotice(errorMessage, 'error')
+      if (requestWasAborted) {
+        showNotice('Generation stopped.', 'info')
+      } else {
+        const errorMessage = getGuardrailErrorMessage(error, 'Local inference failed.')
+        showNotice(errorMessage, 'error')
+      }
     } finally {
+      activeChatRequestRef.current = null
+      setStoppingGeneration(false)
       setSending(false)
       await loadDashboard({ silent: true })
     }
@@ -899,18 +967,117 @@ export function useDashboardData({ showNotice, clearNotice }) {
     await createMemory({ title: `Saved from ${selectedConversation?.title?.trim() || 'Current chat'}`, body: latestAssistant.content, scope: 'Conversation' })
   }
 
-  const installModel = async () => {
-    showNotice('Model catalog downloads are not wired in Camelid yet. Camelid currently loads local GGUF paths.', 'error')
+  const installModel = async (id) => {
+    const catalog = [
+      {
+        catalog_id: "llama32_1b_instruct_q8_0",
+        name: "Llama 3.2 1B Instruct Q8_0",
+        repo_id: "unsloth/Llama-3.2-1B-Instruct-GGUF",
+        filename: "Llama-3.2-1B-Instruct-Q8_0.gguf",
+        size_bytes: 1346203104,
+        quant: "Q8_0",
+      },
+      {
+        catalog_id: "llama32_3b_instruct_q8_0",
+        name: "Llama 3.2 3B Instruct Q8_0",
+        repo_id: "unsloth/Llama-3.2-3B-Instruct-GGUF",
+        filename: "Llama-3.2-3B-Instruct-Q8_0.gguf",
+        size_bytes: 3422709216,
+        quant: "Q8_0",
+      },
+      {
+        catalog_id: "tinyllama_1_1b_chat_q8_0",
+        name: "TinyLlama 1.1B Chat Q8_0",
+        repo_id: "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
+        filename: "tinyllama-1.1b-chat-v1.0.Q8_0.gguf",
+        size_bytes: 1169007424,
+        quant: "Q8_0",
+      },
+      {
+        catalog_id: "llama3_8b_instruct_q8_0",
+        name: "Llama 3 8B Instruct Q8_0",
+        repo_id: "MaziyarPanahi/Meta-Llama-3-8B-Instruct-GGUF",
+        filename: "Meta-Llama-3-8B-Instruct.Q8_0.gguf",
+        size_bytes: 8540846592,
+        quant: "Q8_0",
+      }
+    ]
+
+    const item = catalog.find((x) => x.catalog_id === id)
+    if (item) {
+      return installCatalogModel(item)
+    } else {
+      showNotice('Unknown model catalog item.', 'error')
+      return false
+    }
   }
 
-  const installCatalogModel = async () => {
-    showNotice('Hugging Face catalog install is not wired to Camelid yet.', 'error')
-    return false
+  const installCatalogModel = async (item) => {
+    try {
+      showNotice(`Starting download for ${item.name}…`, 'info')
+      await fetchJson(`${normalizedApiBase}/api/models/catalog/install`, {
+        method: 'POST',
+        body: JSON.stringify({
+          catalog_id: item.catalog_id,
+          repo_id: item.repo_id,
+          filename: item.filename,
+          size_bytes: item.size_bytes,
+        }),
+      })
+
+      persistLocalModels((current) => {
+        const record = {
+          id: item.catalog_id,
+          name: item.name,
+          model_path: `models/${item.filename}`,
+          status: 'downloading',
+          bytes_downloaded: 0,
+          total_bytes: item.size_bytes,
+          progress: 0,
+          hf_repo: item.repo_id,
+          hf_filename: item.filename,
+          quant: item.quant,
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        }
+        return upsertLocalModelRecord(current, record)
+      })
+
+      showNotice(`Download started for ${item.name}!`, 'success')
+      return true
+    } catch (error) {
+      showNotice(getErrorMessage(error, 'Could not start catalog download.'), 'error')
+      return false
+    }
   }
 
-  const cancelModelDownload = async () => {
-    showNotice('No Camelid download is running from this UI.', 'info')
-    return false
+  const cancelModelDownload = async (id) => {
+    try {
+      showNotice('Canceling download…', 'info')
+      await fetchJson(`${normalizedApiBase}/api/models/catalog/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ id }),
+      })
+
+      persistLocalModels((current) => {
+        return current.map((model) => {
+          if (model.id === id) {
+            return {
+              ...model,
+              status: 'failed',
+              install_error: 'Download canceled by user.',
+            }
+          }
+          return model
+        })
+      })
+
+      showNotice('Download canceled.', 'success')
+      return true
+    } catch (error) {
+      showNotice(getErrorMessage(error, 'Could not cancel download.'), 'error')
+      return false
+    }
   }
 
   const activateModel = async (id) => {
@@ -1117,6 +1284,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
     createConversation,
     showNewChatLanding,
     sendMessage,
+    stopGeneration,
     saveToMemory,
     createMemory,
     updateMemory,
@@ -1131,6 +1299,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
     registerModel,
     connectExternalModel,
     loadDashboard,
+    stoppingGeneration,
     apiBase,
     setApiBase: (value) => {
       const next = normalizeApiBase(value)

@@ -1,10 +1,13 @@
-use std::{net::SocketAddr, path::PathBuf, time::Instant};
+use std::{net::{SocketAddr, TcpListener, TcpStream}, path::PathBuf, time::Instant, io::Write, sync::Arc};
 
 use camelid::{
     api,
     gguf::{read_metadata, GgufTensorType},
     metal::detect_metal_device,
     tensor::{CpuTensor, Q8_0TensorBlocks, TensorStore},
+    inference::{LlamaLoadedWeights, LlamaInferenceSession, LlamaSampler},
+    tokenizer::Tokenizer,
+    cluster::{send_activation_packet, recv_activation_packet, send_token_feedback, recv_token_feedback},
 };
 use clap::{Parser, Subcommand};
 use rayon::ThreadPoolBuilder;
@@ -154,6 +157,49 @@ enum Command {
         /// Also benchmark the rank-2 single-input-row Q8_0 lazy-linear adapter shape.
         #[arg(long)]
         single_input_row_dot: bool,
+    },
+    /// Start a distributed pipeline worker node.
+    DistributeWorker {
+        /// GGUF model path.
+        path: PathBuf,
+        /// Listen address for incoming master/worker connection.
+        #[arg(long, default_value = "0.0.0.0:5005")]
+        addr: SocketAddr,
+        /// Target forward address (next node in the pipeline).
+        #[arg(long)]
+        forward_addr: Option<SocketAddr>,
+        /// Range of layers to own and execute, e.g., "16..32" or "24..56".
+        #[arg(long)]
+        layers: String,
+        /// Master address to send token feedback to when we are the final node.
+        #[arg(long)]
+        master_addr: Option<SocketAddr>,
+        /// Override Rayon worker threads.
+        #[arg(long)]
+        threads: Option<usize>,
+    },
+    /// Start a distributed pipeline master node.
+    DistributeMaster {
+        /// GGUF model path.
+        path: PathBuf,
+        /// Worker address to send activation streams to.
+        #[arg(long)]
+        worker_addr: SocketAddr,
+        /// Range of layers to own and execute, e.g., "0..16" or "0..24".
+        #[arg(long)]
+        layers: String,
+        /// Listen address for token feedback or final results from the last node in the pipeline.
+        #[arg(long, default_value = "0.0.0.0:5006")]
+        addr: SocketAddr,
+        /// Prompt to execute.
+        #[arg(long, default_value = "Write a quick Rust hello-world function:")]
+        prompt: String,
+        /// Maximum tokens to generate.
+        #[arg(long, default_value_t = 32)]
+        max_tokens: usize,
+        /// Override Rayon worker threads.
+        #[arg(long)]
+        threads: Option<usize>,
     },
 }
 
@@ -329,7 +375,236 @@ async fn main() -> anyhow::Result<()> {
             })?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Command::DistributeWorker {
+            path,
+            addr,
+            forward_addr,
+            layers,
+            master_addr,
+            threads,
+        } => {
+            run_distribute_worker(path, addr, forward_addr, layers, master_addr, threads).await?;
+        }
+        Command::DistributeMaster {
+            path,
+            worker_addr,
+            layers,
+            addr,
+            prompt,
+            max_tokens,
+            threads,
+        } => {
+            run_distribute_master(path, worker_addr, layers, addr, prompt, max_tokens, threads).await?;
+        }
     }
+    Ok(())
+}
+
+fn connect_with_retry(addr: SocketAddr) -> TcpStream {
+    println!("Connecting to downstream {}...", addr);
+    let start = Instant::now();
+    loop {
+        match TcpStream::connect(addr) {
+            Ok(stream) => {
+                stream.set_nodelay(true).unwrap();
+                println!("Connected successfully to {}!", addr);
+                return stream;
+            }
+            Err(e) => {
+                if start.elapsed().as_secs() > 30 {
+                    panic!("Failed to connect to {} after 30 seconds: {}", addr, e);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+}
+
+fn accept_connection(listener: &TcpListener) -> TcpStream {
+    let (stream, client_addr) = listener.accept().unwrap();
+    stream.set_nodelay(true).unwrap();
+    println!("Accepted connection from upstream/client: {}", client_addr);
+    stream
+}
+
+fn parse_layers_range(layers_str: &str) -> anyhow::Result<std::ops::Range<usize>> {
+    let parts: Vec<&str> = layers_str.split("..").collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid layers range format: {}", layers_str));
+    }
+    let start = parts[0].parse::<usize>()?;
+    let end = parts[1].parse::<usize>()?;
+    Ok(start..end)
+}
+
+async fn run_distribute_worker(
+    path: PathBuf,
+    addr: SocketAddr,
+    forward_addr: Option<SocketAddr>,
+    layers: String,
+    master_addr: Option<SocketAddr>,
+    threads: Option<usize>,
+) -> anyhow::Result<()> {
+    configure_rayon_threads(threads)?;
+
+    println!("Loading GGUF metadata from {:?}...", path);
+    let gguf = read_metadata(&path)?;
+    let config = camelid::model::LlamaModelConfig::from_gguf(&gguf)?;
+    let binding = camelid::model::LlamaTensorBinding::bind(&gguf, &config)?;
+    let store = TensorStore::open(&path, &gguf);
+    let tokenizer = Tokenizer::from_gguf(&gguf).ok();
+
+    let layer_range = parse_layers_range(&layers)?;
+    println!("Initializing worker session for layers {:?}", layer_range);
+
+    let weights = Arc::new(LlamaLoadedWeights::load(
+        &store,
+        &binding,
+        Some(layer_range.clone()),
+    )?);
+    let mut session = LlamaInferenceSession::new(config.clone(), weights)?;
+
+    let listener = TcpListener::bind(addr)?;
+    println!("Worker listening on {}...", addr);
+
+    let mut downstream_stream = if let Some(faddr) = forward_addr {
+        Some(connect_with_retry(faddr))
+    } else if let Some(maddr) = master_addr {
+        Some(connect_with_retry(maddr))
+    } else {
+        None
+    };
+
+    let mut client_stream = accept_connection(&listener);
+
+    println!("Cluster worker execution loop active!");
+    let mut activations = Vec::new();
+
+    loop {
+        let header = match recv_activation_packet(&mut client_stream, &mut activations) {
+            Ok(h) => h,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    println!("Upstream connection closed. Exiting worker loop.");
+                    break;
+                }
+                return Err(e.into());
+            }
+        };
+
+        let hidden_dim = config.embedding_length as usize;
+        if activations.is_empty() || activations.len() % hidden_dim != 0 {
+            return Err(anyhow::anyhow!(
+                "Invalid activation packet size: {}",
+                activations.len()
+            ));
+        }
+        let rows = activations.len() / hidden_dim;
+        let hidden = CpuTensor::from_f32("activations", vec![rows, hidden_dim], activations.clone())?;
+
+        let out_hidden = session.forward_layer_range_from_hidden(
+            &hidden,
+            header.pos as usize,
+            header.seq_len as usize,
+        )?;
+
+        if let Some(ref mut ds) = downstream_stream {
+            if forward_addr.is_some() {
+                send_activation_packet(ds, header.pos, header.seq_len, &out_hidden.data)?;
+            } else {
+                let logits = session.forward_final_norm_and_logits(&out_hidden)?;
+                let vocab_size = logits.dim(1)?;
+                let last_row_start = (header.seq_len as usize - 1) * vocab_size;
+                let last_row_data = logits.data[last_row_start..last_row_start + vocab_size].to_vec();
+                let last_row_logits = CpuTensor::from_f32("last_row_logits", vec![1, vocab_size], last_row_data)?;
+                let token_id = LlamaSampler::Greedy.sample(&last_row_logits)?;
+
+                let is_finished = tokenizer.as_ref().map_or(false, |tok| {
+                    tok.special.eos == Some(token_id) || tok.special.eot == Some(token_id)
+                });
+
+                send_token_feedback(ds, token_id, is_finished)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_distribute_master(
+    path: PathBuf,
+    worker_addr: SocketAddr,
+    layers: String,
+    addr: SocketAddr,
+    prompt: String,
+    max_tokens: usize,
+    threads: Option<usize>,
+) -> anyhow::Result<()> {
+    configure_rayon_threads(threads)?;
+
+    println!("Loading GGUF metadata from {:?}...", path);
+    let gguf = read_metadata(&path)?;
+    let config = camelid::model::LlamaModelConfig::from_gguf(&gguf)?;
+    let binding = camelid::model::LlamaTensorBinding::bind(&gguf, &config)?;
+    let store = TensorStore::open(&path, &gguf);
+    let tokenizer = Tokenizer::from_gguf(&gguf)?;
+
+    let layer_range = parse_layers_range(&layers)?;
+    println!("Initializing master session for layers {:?}", layer_range);
+
+    let weights = Arc::new(LlamaLoadedWeights::load(
+        &store,
+        &binding,
+        Some(layer_range.clone()),
+    )?);
+    let mut session = LlamaInferenceSession::new(config.clone(), weights)?;
+
+    let listener = TcpListener::bind(addr)?;
+    println!("Master listening for feedback on {}...", addr);
+
+    let mut downstream_stream = connect_with_retry(worker_addr);
+    let mut feedback_stream = accept_connection(&listener);
+
+    println!("Tokenizing prompt: {:?}", prompt);
+    let token_ids = tokenizer.encode(&prompt, true, false)?;
+    println!("Encoded prompt: {:?}", token_ids);
+
+    let mut pos = 0usize;
+    let mut seq_len = token_ids.len();
+
+    let hidden = session.weights.token_embedding.embedding_lookup(&token_ids, "token_embedding_prefill")?;
+    let out_hidden = session.forward_layer_range_from_hidden(&hidden, pos, seq_len)?;
+
+    send_activation_packet(&mut downstream_stream, pos as u32, seq_len as u32, &out_hidden.data)?;
+
+    let feedback = recv_token_feedback(&mut feedback_stream)?;
+    let mut current_token = feedback.token_id;
+    let mut is_finished = feedback.is_finished;
+
+    print!("{}", tokenizer.decode(&[current_token], true)?);
+    std::io::stdout().flush()?;
+
+    pos += seq_len;
+    seq_len = 1;
+
+    let mut generated = 1;
+    while !is_finished && generated < max_tokens {
+        let hidden = session.weights.token_embedding.embedding_lookup(&[current_token], "token_embedding")?;
+        let out_hidden = session.forward_layer_range_from_hidden(&hidden, pos, seq_len)?;
+        send_activation_packet(&mut downstream_stream, pos as u32, seq_len as u32, &out_hidden.data)?;
+
+        let feedback = recv_token_feedback(&mut feedback_stream)?;
+        current_token = feedback.token_id;
+        is_finished = feedback.is_finished;
+
+        print!("{}", tokenizer.decode(&[current_token], true)?);
+        std::io::stdout().flush()?;
+
+        pos += 1;
+        generated += 1;
+    }
+    println!();
+
     Ok(())
 }
 
