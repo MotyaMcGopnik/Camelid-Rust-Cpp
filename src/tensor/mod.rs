@@ -1396,24 +1396,180 @@ impl CpuTensor {
     }
 
     pub fn add(&self, rhs: &Self, name: impl Into<String>) -> Result<Self> {
-        self.zip_same_shape(rhs, name, |a, b| a + b)
+        if self.shape != rhs.shape {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "shape mismatch: lhs {:?}, rhs {:?}",
+                self.shape.dims, rhs.shape.dims
+            )));
+        }
+        let mut out = vec![0.0; self.data.len()];
+        let len = self.data.len();
+        if should_parallelize_linear_output(len) {
+            out.par_iter_mut()
+                .zip(self.data.par_iter())
+                .zip(rhs.data.par_iter())
+                .for_each(|((o, &a), &b)| {
+                    *o = a + b;
+                });
+        } else {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                use std::arch::aarch64::{vld1q_f32, vaddq_f32, vst1q_f32};
+                let mut i = 0;
+                unsafe {
+                    while i + 4 <= len {
+                        let va = vld1q_f32(self.data.as_ptr().add(i));
+                        let vb = vld1q_f32(rhs.data.as_ptr().add(i));
+                        let vout = vaddq_f32(va, vb);
+                        vst1q_f32(out.as_mut_ptr().add(i), vout);
+                        i += 4;
+                    }
+                    while i < len {
+                        out[i] = self.data[i] + rhs.data[i];
+                        i += 1;
+                    }
+                }
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                for i in 0..len {
+                    out[i] = self.data[i] + rhs.data[i];
+                }
+            }
+        }
+        Self::from_f32(name, self.shape.dims.clone(), out)
     }
 
     pub fn mul(&self, rhs: &Self, name: impl Into<String>) -> Result<Self> {
-        self.zip_same_shape(rhs, name, |a, b| a * b)
+        if self.shape != rhs.shape {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "shape mismatch: lhs {:?}, rhs {:?}",
+                self.shape.dims, rhs.shape.dims
+            )));
+        }
+        let mut out = vec![0.0; self.data.len()];
+        let len = self.data.len();
+        if should_parallelize_linear_output(len) {
+            out.par_iter_mut()
+                .zip(self.data.par_iter())
+                .zip(rhs.data.par_iter())
+                .for_each(|((o, &a), &b)| {
+                    *o = a * b;
+                });
+        } else {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                use std::arch::aarch64::{vld1q_f32, vmulq_f32, vst1q_f32};
+                let mut i = 0;
+                unsafe {
+                    while i + 4 <= len {
+                        let va = vld1q_f32(self.data.as_ptr().add(i));
+                        let vb = vld1q_f32(rhs.data.as_ptr().add(i));
+                        let vout = vmulq_f32(va, vb);
+                        vst1q_f32(out.as_mut_ptr().add(i), vout);
+                        i += 4;
+                    }
+                    while i < len {
+                        out[i] = self.data[i] * rhs.data[i];
+                        i += 1;
+                    }
+                }
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                for i in 0..len {
+                    out[i] = self.data[i] * rhs.data[i];
+                }
+            }
+        }
+        Self::from_f32(name, self.shape.dims.clone(), out)
     }
 
     pub fn silu_mul(&self, rhs: &Self, name: impl Into<String>) -> Result<Self> {
-        self.zip_same_shape(rhs, name, |a, b| (a / (1.0 + (-a).exp())) * b)
+        if self.shape != rhs.shape {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "shape mismatch: lhs {:?}, rhs {:?}",
+                self.shape.dims, rhs.shape.dims
+            )));
+        }
+        let len = self.data.len();
+        let mut out = vec![0.0; len];
+        if should_parallelize_linear_output(len) {
+            out.par_iter_mut()
+                .zip(self.data.par_iter())
+                .zip(rhs.data.par_iter())
+                .for_each(|((o, &a), &b)| {
+                    *o = (a / (1.0 + (-a).exp())) * b;
+                });
+        } else {
+            for i in 0..len {
+                let a = self.data[i];
+                let b = rhs.data[i];
+                out[i] = (a / (1.0 + (-a).exp())) * b;
+            }
+        }
+        Self::from_f32(name, self.shape.dims.clone(), out)
     }
 
     pub fn silu(&self, name: impl Into<String>) -> Result<Self> {
-        Self::from_f32(
-            name,
-            self.shape.dims.clone(),
-            self.data.iter().map(|x| x / (1.0 + (-x).exp())).collect(),
-        )
+        let len = self.data.len();
+        let mut out = vec![0.0; len];
+        if should_parallelize_linear_output(len) {
+            out.par_iter_mut()
+                .zip(self.data.par_iter())
+                .for_each(|(o, &x)| {
+                    *o = x / (1.0 + (-x).exp());
+                });
+        } else {
+            for i in 0..len {
+                let x = self.data[i];
+                out[i] = x / (1.0 + (-x).exp());
+            }
+        }
+        Self::from_f32(name, self.shape.dims.clone(), out)
     }
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(always)]
+unsafe fn rms_norm_neon(input: &[f32], weight: &[f32], out: &mut [f32], cols: usize, eps: f32) {
+    use std::arch::aarch64::{
+        vld1q_f32, vmulq_f32, vaddq_f32, vdupq_n_f32, vst1q_f32, vget_low_f32, vget_high_f32, vpadd_f32, vget_lane_f32
+    };
+
+    let mut sum_sq_vec = vdupq_n_f32(0.0);
+    let mut i = 0;
+    while i + 4 <= cols {
+        let v = vld1q_f32(input.as_ptr().add(i));
+        sum_sq_vec = vaddq_f32(sum_sq_vec, vmulq_f32(v, v));
+        i += 4;
+    }
+    let low = vget_low_f32(sum_sq_vec);
+    let high = vget_high_f32(sum_sq_vec);
+    let sum_2 = vpadd_f32(low, high);
+    let mut sum_sq = vget_lane_f32::<0>(sum_2) + vget_lane_f32::<1>(sum_2);
+    while i < cols {
+        let v = input[i];
+        sum_sq += v * v;
+        i += 1;
+    }
+
+    let mean_square = sum_sq / cols as f32;
+    let scale = 1.0 / (mean_square + eps).sqrt();
+    let scale_vec = vdupq_n_f32(scale);
+
+    i = 0;
+    while i + 4 <= cols {
+        let v_in = vld1q_f32(input.as_ptr().add(i));
+        let v_w = vld1q_f32(weight.as_ptr().add(i));
+        let v_out = vmulq_f32(vmulq_f32(v_in, scale_vec), v_w);
+        vst1q_f32(out.as_mut_ptr().add(i), v_out);
+        i += 4;
+    }
+    while i < cols {
+        out[i] = input[i] * scale * weight[i];
+        i += 1;
+    }
+}
 
     pub fn rms_norm(&self, weight: &Self, eps: f32, name: impl Into<String>) -> Result<Self> {
         require_rank(self, 2, "rms_norm input")?;
@@ -1427,16 +1583,55 @@ impl CpuTensor {
             )));
         }
         let mut out = vec![0.0; self.data.len()];
-        for row in 0..rows {
-            let start = row * cols;
-            let end = start + cols;
-            let mean_square =
-                self.data[start..end].iter().map(|v| v * v).sum::<f32>() / cols as f32;
-            let scale = 1.0 / (mean_square + eps).sqrt();
-            for col in 0..cols {
-                out[start + col] = self.data[start + col] * scale * weight.data[col];
+
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            if should_parallelize_linear_output(self.data.len()) {
+                out.par_chunks_mut(cols)
+                    .zip(self.data.par_chunks(cols))
+                    .for_each(|(out_row, in_row)| {
+                        unsafe {
+                            Self::rms_norm_neon(in_row, &weight.data, out_row, cols, eps);
+                        }
+                    });
+            } else {
+                for row in 0..rows {
+                    let start = row * cols;
+                    let in_row = &self.data[start..start + cols];
+                    let out_row = &mut out[start..start + cols];
+                    unsafe {
+                        Self::rms_norm_neon(in_row, &weight.data, out_row, cols, eps);
+                    }
+                }
             }
         }
+
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            if should_parallelize_linear_output(self.data.len()) {
+                out.par_chunks_mut(cols)
+                    .zip(self.data.par_chunks(cols))
+                    .for_each(|(out_row, in_row)| {
+                        let mean_square = in_row.iter().map(|v| v * v).sum::<f32>() / cols as f32;
+                        let scale = 1.0 / (mean_square + eps).sqrt();
+                        for col in 0..cols {
+                            out_row[col] = in_row[col] * scale * weight.data[col];
+                        }
+                    });
+            } else {
+                for row in 0..rows {
+                    let start = row * cols;
+                    let end = start + cols;
+                    let mean_square =
+                        self.data[start..end].iter().map(|v| v * v).sum::<f32>() / cols as f32;
+                    let scale = 1.0 / (mean_square + eps).sqrt();
+                    for col in 0..cols {
+                        out[start + col] = self.data[start + col] * scale * weight.data[col];
+                    }
+                }
+            }
+        }
+
         Self::from_f32(name, self.shape.dims.clone(), out)
     }
 
@@ -1455,24 +1650,49 @@ impl CpuTensor {
             )));
         }
         let mut out = self.data.clone();
-        for row in out.chunks_exact_mut(cols) {
-            let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let mut sum = 0.0;
-            for v in row.iter_mut() {
-                *v = (*v - max).exp();
-                sum += *v;
-            }
-            if sum == 0.0 || !sum.is_finite() {
-                return Err(BackendError::RuntimeShapeMismatch(
-                    "softmax produced invalid normalization sum".to_string(),
-                ));
-            }
-            for v in row.iter_mut() {
-                *v /= sum;
+        if should_parallelize_linear_output(out.len()) {
+            out.par_chunks_exact_mut(cols)
+                .map(|row| {
+                    let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                    let mut sum = 0.0;
+                    for v in row.iter_mut() {
+                        *v = (*v - max).exp();
+                        sum += *v;
+                    }
+                    (row, sum)
+                })
+                .try_for_each(|(row, sum)| {
+                    if sum == 0.0 || !sum.is_finite() {
+                        return Err(BackendError::RuntimeShapeMismatch(
+                            "softmax produced invalid normalization sum".to_string(),
+                        ));
+                    }
+                    for v in row.iter_mut() {
+                        *v /= sum;
+                    }
+                    Ok(())
+                })?;
+        } else {
+            for row in out.chunks_exact_mut(cols) {
+                let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let mut sum = 0.0;
+                for v in row.iter_mut() {
+                    *v = (*v - max).exp();
+                    sum += *v;
+                }
+                if sum == 0.0 || !sum.is_finite() {
+                    return Err(BackendError::RuntimeShapeMismatch(
+                        "softmax produced invalid normalization sum".to_string(),
+                    ));
+                }
+                for v in row.iter_mut() {
+                    *v /= sum;
+                }
             }
         }
         Self::from_f32(name, self.shape.dims.clone(), out)
     }
+
 
     pub fn embedding_lookup(&self, token_ids: &[u32], name: impl Into<String>) -> Result<Self> {
         require_rank(self, 2, "embedding weight")?;
@@ -1678,6 +1898,7 @@ impl CpuTensor {
         Self::from_f32(name, vec![cols, rows], out)
     }
 
+    #[allow(dead_code)]
     fn zip_same_shape(
         &self,
         rhs: &Self,
