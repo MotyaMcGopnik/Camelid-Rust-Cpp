@@ -5113,15 +5113,31 @@ fn matmul_rhs_transposed_borrowed_with_precision_with_plan(
         }
     }
     let mut output = vec![0.0; rows * output_width];
-    for row in 0..rows {
-        let input_start = row * input_width;
-        let output_start = row * output_width;
-        accumulate_transposed_linear_row_runtime_with_plan(
-            &input.data[input_start..input_start + input_width],
-            weight,
-            &mut output[output_start..output_start + output_width],
-            runtime_plan,
-        )?;
+    use rayon::prelude::*;
+    if should_parallelize_linear_output(rows * output_width) {
+        output
+            .par_chunks_mut(output_width)
+            .enumerate()
+            .try_for_each(|(row, output_row)| {
+                let input_start = row * input_width;
+                accumulate_transposed_linear_row_runtime_with_plan(
+                    &input.data[input_start..input_start + input_width],
+                    weight,
+                    output_row,
+                    runtime_plan,
+                )
+            })?;
+    } else {
+        for row in 0..rows {
+            let input_start = row * input_width;
+            let output_start = row * output_width;
+            accumulate_transposed_linear_row_runtime_with_plan(
+                &input.data[input_start..input_start + input_width],
+                weight,
+                &mut output[output_start..output_start + output_width],
+                runtime_plan,
+            )?;
+        }
     }
     CpuTensor::from_f32(name, vec![rows, output_width], output)
 }
@@ -11260,63 +11276,97 @@ fn matmul_rhs_transposed_q8_0_block_dot_with_plan(
     }
 
     let mut output = vec![0.0_f32; rows * output_width];
-    for row in 0..rows {
-        let input_start = row * input_width;
-        let quantized_input =
-            quantize_q8_0_row(&input.data[input_start..input_start + input_width]);
-        let out_start = row * output_width;
-        let output_row = &mut output[out_start..out_start + output_width];
-        if let Some((packed, interleave)) = q8_0_selected_packed_rows4(weight) {
-            if packed.rows == output_width && packed.blocks_per_row == blocks_per_row {
-                accumulate_q8_0_packed_rows4_dot_quantized_cpu(
-                    &quantized_input.blocks,
-                    packed,
-                    interleave,
-                    output_row,
-                );
-                continue;
-            }
-        }
-        let weight_blocks = weight
-            .q8_0_blocks
-            .as_ref()
-            .expect("q8_0 block-dot precondition checked");
-        if runtime_plan.q8.metal_retained {
-            let weight_bytes = q8_0_blocks_as_bytes(weight_blocks);
-            if with_q8_0_block_scales_and_quants(
-                &quantized_input.blocks,
-                |input_scales, input_quants| {
-                    metal::try_q8_0_block_linear_row(
-                        input_scales,
-                        input_quants,
-                        weight_bytes,
-                        output_width,
-                        blocks_per_row,
-                        output_row,
-                    )
-                },
-            ) {
-                continue;
-            }
-        }
-        if should_parallelize_q8_0_file_reader_output(output_width) {
-            output_row
-                .par_iter_mut()
-                .enumerate()
-                .for_each(|(output_idx, out_value)| {
+    use rayon::prelude::*;
+    if should_parallelize_linear_output(rows * output_width) {
+        output
+            .par_chunks_mut(output_width)
+            .enumerate()
+            .for_each(|(row, output_row)| {
+                let input_start = row * input_width;
+                let quantized_input =
+                    quantize_q8_0_row(&input.data[input_start..input_start + input_width]);
+                if let Some((packed, interleave)) = q8_0_selected_packed_rows4(weight) {
+                    if packed.rows == output_width && packed.blocks_per_row == blocks_per_row {
+                        accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                            &quantized_input.blocks,
+                            packed,
+                            interleave,
+                            output_row,
+                        );
+                        return;
+                    }
+                }
+                let weight_blocks = weight
+                    .q8_0_blocks
+                    .as_ref()
+                    .expect("q8_0 block-dot precondition checked");
+                for (output_idx, out_value) in output_row.iter_mut().enumerate() {
                     let weight_start = output_idx * blocks_per_row;
                     *out_value = q8_0_dot_rows(
                         &weight_blocks[weight_start..weight_start + blocks_per_row],
                         &quantized_input.blocks,
                     );
-                });
-        } else {
-            for (output_idx, out_value) in output_row.iter_mut().enumerate() {
-                let weight_start = output_idx * blocks_per_row;
-                *out_value = q8_0_dot_rows(
-                    &weight_blocks[weight_start..weight_start + blocks_per_row],
+                }
+            });
+    } else {
+        for row in 0..rows {
+            let input_start = row * input_width;
+            let quantized_input =
+                quantize_q8_0_row(&input.data[input_start..input_start + input_width]);
+            let out_start = row * output_width;
+            let output_row = &mut output[out_start..out_start + output_width];
+            if let Some((packed, interleave)) = q8_0_selected_packed_rows4(weight) {
+                if packed.rows == output_width && packed.blocks_per_row == blocks_per_row {
+                    accumulate_q8_0_packed_rows4_dot_quantized_cpu(
+                        &quantized_input.blocks,
+                        packed,
+                        interleave,
+                        output_row,
+                    );
+                    continue;
+                }
+            }
+            let weight_blocks = weight
+                .q8_0_blocks
+                .as_ref()
+                .expect("q8_0 block-dot precondition checked");
+            if runtime_plan.q8.metal_retained {
+                let weight_bytes = q8_0_blocks_as_bytes(weight_blocks);
+                if with_q8_0_block_scales_and_quants(
                     &quantized_input.blocks,
-                );
+                    |input_scales, input_quants| {
+                        metal::try_q8_0_block_linear_row(
+                            input_scales,
+                            input_quants,
+                            weight_bytes,
+                            output_width,
+                            blocks_per_row,
+                            output_row,
+                        )
+                    },
+                ) {
+                    continue;
+                }
+            }
+            if should_parallelize_q8_0_file_reader_output(output_width) {
+                output_row
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(output_idx, out_value)| {
+                        let weight_start = output_idx * blocks_per_row;
+                        *out_value = q8_0_dot_rows(
+                            &weight_blocks[weight_start..weight_start + blocks_per_row],
+                            &quantized_input.blocks,
+                        );
+                    });
+            } else {
+                for (output_idx, out_value) in output_row.iter_mut().enumerate() {
+                    let weight_start = output_idx * blocks_per_row;
+                    *out_value = q8_0_dot_rows(
+                        &weight_blocks[weight_start..weight_start + blocks_per_row],
+                        &quantized_input.blocks,
+                    );
+                }
             }
         }
     }
@@ -12415,15 +12465,31 @@ fn matmul_rhs_transposed_q8_0_packed_rows4_f32_input(
         )));
     }
     let mut output = vec![0.0_f32; rows * output_width];
-    for row in 0..rows {
-        let input_start = row * input_width;
-        let output_start = row * output_width;
-        accumulate_q8_0_packed_rows4_f32_input(
-            &input.data[input_start..input_start + input_width],
-            packed,
-            interleave,
-            &mut output[output_start..output_start + output_width],
-        );
+    use rayon::prelude::*;
+    if should_parallelize_linear_output(rows * output_width) {
+        output
+            .par_chunks_mut(output_width)
+            .enumerate()
+            .for_each(|(row, output_row)| {
+                let input_start = row * input_width;
+                accumulate_q8_0_packed_rows4_f32_input(
+                    &input.data[input_start..input_start + input_width],
+                    packed,
+                    interleave,
+                    output_row,
+                );
+            });
+    } else {
+        for row in 0..rows {
+            let input_start = row * input_width;
+            let output_start = row * output_width;
+            accumulate_q8_0_packed_rows4_f32_input(
+                &input.data[input_start..input_start + input_width],
+                packed,
+                interleave,
+                &mut output[output_start..output_start + output_width],
+            );
+        }
     }
     CpuTensor::from_f32(name, vec![rows, output_width], output)
 }
