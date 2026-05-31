@@ -5,9 +5,9 @@ import { clampText, formatDate, formatRate } from '../lib/formatters'
 import { getChatGateState } from '../lib/chatGate'
 import { describeModelState, getModelStatusLabel } from '../lib/modelState'
 
-export const GeminiSparkle = ({ className = '', size = 24 }) => (
+export const CamelidSparkle = ({ className = '', size = 24 }) => (
   <svg
-    className={`gemini-sparkle-icon ${className}`}
+    className={`camelid-sparkle-icon ${className}`}
     width={size}
     height={size}
     viewBox="0 0 24 24"
@@ -16,10 +16,10 @@ export const GeminiSparkle = ({ className = '', size = 24 }) => (
   >
     <path
       d="M12 3C12 3 12.3 8.3 15.5 11.5C18.7 14.7 24 15 24 15C24 15 18.7 15.3 15.5 18.5C12.3 21.7 12 27 12 27C12 27 11.7 21.7 8.5 18.5C5.3 15.3 0 15 0 15C0 15 5.3 14.7 8.5 11.5C11.7 8.3 12 3 12 3Z"
-      fill="url(#gemini-sparkle-grad)"
+      fill="url(#camelid-sparkle-grad)"
     />
     <defs>
-      <linearGradient id="gemini-sparkle-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <linearGradient id="camelid-sparkle-grad" x1="0%" y1="0%" x2="100%" y2="100%">
         <stop offset="0%" stopColor="#4285f4" />
         <stop offset="35%" stopColor="#9b51e0" />
         <stop offset="70%" stopColor="#e289f2" />
@@ -603,8 +603,8 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, generationElapsed
     >
       <div className="message-row-inner">
         {message.role === 'assistant' && (
-          <div className="gemini-assistant-avatar-wrapper" aria-hidden="true">
-            <GeminiSparkle size={22} className="gemini-assistant-avatar-sparkle" />
+          <div className="camelid-assistant-avatar-wrapper" aria-hidden="true">
+            <CamelidSparkle size={22} className="camelid-assistant-avatar-sparkle" />
           </div>
         )}
         <div className={`message-bubble message-bubble-assistant ${message.role}`}>
@@ -827,7 +827,7 @@ export default function ChatWorkspace({
       ? selectedCompatibilityCopy
       : 'Camelid does not infer broad support from filenames, families, or saved paths.'
   const readinessFinePrint = selectedModelRunnable
-    ? 'Ready for this loaded exact row.'
+    ? `${selectedCompatibilityLabel}. Ready for this loaded exact row.`
     : apiUnavailable
       ? 'Drafts stay editable while the Camelid API reconnects.'
     : selectedModel
@@ -843,7 +843,7 @@ export default function ChatWorkspace({
     : selectedModelIssue
       ? selectedModelIssue
     : supportBlocked
-      ? 'This row is loaded, but chat stays locked until the exact support contract matches.'
+      ? selectedCompatibilityCopy
     : selectedRuntimeMatchesLoadedModel
       ? 'This model is loaded and still warming up. Send unlocks once generation readiness turns on.'
       : selectedModel
@@ -872,13 +872,13 @@ export default function ChatWorkspace({
     : apiUnavailable
       ? 'API unavailable'
     : supportBlocked
-      ? 'Choose a supported model.'
+      ? 'Runtime ready, support gated'
       : selectedModel
         ? 'Waiting on readiness'
         : 'Choose a model to begin'
-  const productHeroTitle = "Hi Tim, let's get into it"
+  const productHeroTitle = selectedModelRunnable ? 'How can I help?' : "Hi Tim, let's get into it"
   const productHeroSummary = selectedModelRunnable
-    ? 'A clean local assistant surface with the current runtime state kept visible.'
+    ? 'Local chat ready. A clean local assistant surface with the current runtime state kept visible.'
     : apiUnavailable
       ? 'Keep writing here. Send unlocks again once the local API responds.'
       : supportBlocked
@@ -953,18 +953,18 @@ export default function ChatWorkspace({
     : selectedModelIssue
       ? 'Needs attention'
     : supportBlocked
-      ? 'Support gated'
+      ? selectedCompatibilityLabel
     : selectedModel
       ? 'Waiting on readiness'
       : 'Choose a model'
   const selectionSummaryCopy = selectedModelRunnable
-    ? `${selectedModelName} is loaded now with generation_ready=true and the current exact-row contract unlocked.`
+    ? `${selectedModelName} is loaded now and generation_ready=true. The current exact-row contract is unlocked.`
     : apiUnavailable
       ? 'The frontend is available, but the Camelid API must respond before model readiness can be checked.'
     : selectedModelIssue
       ? selectedModelIssue
     : supportBlocked
-      ? 'This selected row is loaded, but send stays locked until the exact supported row matches.'
+      ? selectedCompatibilityCopy
     : selectedModel
       ? 'Drafting stays unlocked. Camelid will unlock send as soon as this selected row is loaded, generation-ready, and supported.'
       : 'Pick a local model first, then Camelid will keep the runtime and support boundary visible here.'
@@ -974,6 +974,8 @@ export default function ChatWorkspace({
       ? 'Wait for the current reply to finish or stop it before sending again.'
     : apiUnavailable
       ? 'Send unlocks after the Camelid API reconnects.'
+    : supportBlocked
+      ? 'Choose a supported model.'
     : selectedModel
       ? 'Send unlocks when Camelid marks this model ready and supported.'
       : 'Choose a model before sending.'
@@ -1005,7 +1007,7 @@ export default function ChatWorkspace({
 
   const composerStatusItems = [
     { label: 'Model', value: selectedModelName },
-    { label: 'Chat', value: selectedModelRunnable ? 'Ready' : readinessLabel },
+    { label: 'Chat', value: selectedModelRunnable ? 'Ready' : runtimeStatusLabel },
     { label: 'Draft', value: draftStatusLabel },
   ]
 
@@ -1119,7 +1121,7 @@ export default function ChatWorkspace({
     },
     {
       label: 'Current gate',
-      value: selectedModelRunnable ? 'Ready to chat' : readinessLabel,
+      value: selectedModelRunnable ? 'Ready to chat' : runtimeStatusLabel,
       copy: runtimeStatusCopy,
       tone: runtimeTone,
     },
@@ -1159,10 +1161,10 @@ export default function ChatWorkspace({
             <div className={`chat-empty-stage chat-empty-stage-clean chat-empty-stage-product is-${readinessState}`}>
               <div className="chat-stage-grid">
                 <div className="chat-stage-main">
-                  {/* Premium Gemini-style Hero Banner */}
+                  {/* Premium Camelid-style Hero Banner */}
                   <div className="chat-empty-hero chat-empty-hero-assistant chat-empty-hero-clean">
-                    <div className="gemini-sparkle-greeting-wrapper">
-                      <GeminiSparkle size={56} className="gemini-sparkle-greeting-icon" />
+                    <div className="camelid-sparkle-greeting-wrapper">
+                      <CamelidSparkle size={56} className="camelid-sparkle-greeting-icon" />
                     </div>
                     <h2 className="aurora-text-gradient">{productHeroTitle}</h2>
                     {productHeroSummary && <p className="hero-summary">{productHeroSummary}</p>}
@@ -1170,20 +1172,20 @@ export default function ChatWorkspace({
 
                   {/* Suggestion Cards */}
                   {showPromptStarters && (
-                    <div className="gemini-suggestion-section" aria-label="Prompt starters">
-                      <div className="gemini-suggestion-grid">
+                    <div className="camelid-suggestion-section" aria-label="Prompt starters">
+                      <div className="camelid-suggestion-grid">
                         {DEMO_PROMPTS.map((prompt, idx) => {
                           const icons = [
-                            <svg key="0" className="gemini-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>,
-                            <svg key="1" className="gemini-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>,
-                            <svg key="2" className="gemini-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>,
-                            <svg key="3" className="gemini-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                            <svg key="0" className="camelid-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>,
+                            <svg key="1" className="camelid-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>,
+                            <svg key="2" className="camelid-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>,
+                            <svg key="3" className="camelid-card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                           ];
                           return (
                             <button
                               key={prompt}
                               type="button"
-                              className="gemini-suggestion-card"
+                              className="camelid-suggestion-card"
                               onClick={() => handleDemoPrompt(prompt)}
                               disabled={!composerDraftUnlocked}
                             >
@@ -1199,7 +1201,7 @@ export default function ChatWorkspace({
                   )}
 
                   {/* Compact Status Indicator Ribbon */}
-                  <div className="gemini-readiness-row">
+                  <div className="camelid-readiness-row">
                     <span className="readiness-label">Camelid state:</span>
                     <span className={`readiness-status-badge is-${readinessState}`}>
                       <span className="status-dot"></span>

@@ -6,7 +6,7 @@ Camelid is not presented as broad Llama, Mistral, Mixtral, distributed, producti
 
 ![Camelid WebUI chat surface](docs/assets/camelid-readme-chat-surface-dark.png)
 
-The current WebUI presents a dark, collapsed-rail chat surface with exact-row readiness gates instead of implying broad model support.
+The current WebUI is product-forward while still reflecting the local-first runtime contract: a dark, collapsed-rail chat surface with exact-row readiness gates instead of broad model support.
 
 ## Current Release Boundary
 

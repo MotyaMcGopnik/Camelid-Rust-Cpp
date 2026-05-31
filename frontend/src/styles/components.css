@@ -8135,7 +8135,7 @@ textarea.composer-input-assistant {
   box-shadow: var(--shadow-2), 0 0 0 1px var(--color-ready) inset !important;
 }
 
-/* Premium Gemini-style Hero Banner */
+/* Premium Camelid-style Hero Banner */
 .models-overview-hero {
   position: relative;
   overflow: hidden;
@@ -8206,7 +8206,7 @@ select:focus {
   box-shadow: var(--shadow-focus) !important;
 }
 
-/* Clean Gemini Pill-style Buttons */
+/* Clean Camelid Pill-style Buttons */
 .primary-button {
   background: var(--color-accent) !important;
   color: var(--color-accent-ink) !important;
@@ -8306,7 +8306,7 @@ select:focus {
 }
 
 /* ==========================================================================
-   Gemini-Inspired Clean Landing View Styling
+   Camelid-Inspired Clean Landing View Styling
    ========================================================================== */
 
 .chat-empty-clean-view {
@@ -8600,7 +8600,7 @@ select:focus {
 
 
 /* ==========================================================================
-   Gemini-Inspired Clean Landing View Styling (100% Safe CSS Overrides)
+   Camelid-Inspired Clean Landing View Styling (100% Safe CSS Overrides)
    ========================================================================== */
 
 /* 1. Hide TopBar and brand row when ChatWorkspace is empty */
@@ -8898,17 +8898,17 @@ select:focus {
 }
 
 /* ==========================================================================
-   Google Gemini Premium Redesign Styles
+   Camelid Premium Redesign Styles
    ========================================================================== */
 
 /* Animated Sparkle Icon */
-.gemini-sparkle-icon {
+.camelid-sparkle-icon {
   animation: pulseSparkle 3.5s ease-in-out infinite;
   display: inline-block;
   vertical-align: middle;
 }
 
-.gemini-sparkle-greeting-wrapper {
+.camelid-sparkle-greeting-wrapper {
   margin-bottom: 20px;
   display: flex;
   justify-content: center;
@@ -8917,7 +8917,7 @@ select:focus {
 
 /* Beautiful Animated Aurora Text Gradient */
 .aurora-text-gradient {
-  background: var(--gemini-aurora) !important;
+  background: var(--camelid-aurora) !important;
   background-size: 200% 200% !important;
   -webkit-background-clip: text !important;
   -webkit-text-fill-color: transparent !important;
@@ -8928,14 +8928,14 @@ select:focus {
 }
 
 /* Suggestion Grid & Cards */
-.gemini-suggestion-section {
+.camelid-suggestion-section {
   width: 100%;
   margin-bottom: 32px;
   animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
   animation-delay: 0.25s;
 }
 
-.gemini-suggestion-grid {
+.camelid-suggestion-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 16px;
@@ -8945,13 +8945,13 @@ select:focus {
 }
 
 @media (max-width: 600px) {
-  .gemini-suggestion-grid {
+  .camelid-suggestion-grid {
     grid-template-columns: 1fr;
     gap: 12px;
   }
 }
 
-.gemini-suggestion-card {
+.camelid-suggestion-card {
   background: var(--color-bg-elevated) !important;
   border: 1px solid var(--color-border-soft) !important;
   border-radius: 16px !important;
@@ -8971,14 +8971,14 @@ select:focus {
   width: 100% !important;
 }
 
-.gemini-suggestion-card:hover:not(:disabled) {
+.camelid-suggestion-card:hover:not(:disabled) {
   border-color: rgba(168, 199, 250, 0.3) !important;
   background: rgba(255, 255, 255, 0.02) !important;
   transform: translateY(-2px) !important;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2), 0 0 1px 1px rgba(168, 199, 250, 0.05) inset !important;
 }
 
-.gemini-suggestion-card .suggestion-text {
+.camelid-suggestion-card .suggestion-text {
   color: var(--color-text) !important;
   font-size: 0.94rem !important;
   font-weight: 450 !important;
@@ -8986,7 +8986,7 @@ select:focus {
   margin-bottom: 24px !important;
 }
 
-.gemini-suggestion-card .suggestion-icon-wrapper {
+.camelid-suggestion-card .suggestion-icon-wrapper {
   align-self: flex-end !important;
   background: var(--color-surface-strong) !important;
   border-radius: 50% !important;
@@ -9000,19 +9000,19 @@ select:focus {
   transition: all 0.2s ease !important;
 }
 
-.gemini-suggestion-card:hover .suggestion-icon-wrapper {
+.camelid-suggestion-card:hover .suggestion-icon-wrapper {
   background: var(--color-accent) !important;
   color: var(--color-accent-ink) !important;
   transform: scale(1.06) !important;
 }
 
-.gemini-card-icon {
+.camelid-card-icon {
   width: 16px;
   height: 16px;
 }
 
 /* Compact Status Ribbon Indicator */
-.gemini-readiness-row {
+.camelid-readiness-row {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -9029,54 +9029,54 @@ select:focus {
   animation-delay: 0.35s;
 }
 
-.gemini-readiness-row .readiness-label {
+.camelid-readiness-row .readiness-label {
   font-weight: 550;
 }
 
-.gemini-readiness-row .readiness-status-badge {
+.camelid-readiness-row .readiness-status-badge {
   display: flex;
   align-items: center;
   gap: 6px;
   font-weight: 600;
 }
 
-.gemini-readiness-row .readiness-status-badge .status-dot {
+.camelid-readiness-row .readiness-status-badge .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: #ea4335;
 }
 
-.gemini-readiness-row .readiness-status-badge.is-ready {
+.camelid-readiness-row .readiness-status-badge.is-ready {
   color: var(--color-ready) !important;
 }
-.gemini-readiness-row .readiness-status-badge.is-ready .status-dot {
+.camelid-readiness-row .readiness-status-badge.is-ready .status-dot {
   background: var(--color-ready) !important;
   box-shadow: 0 0 8px var(--color-ready) !important;
 }
 
-.gemini-readiness-row .readiness-status-badge.is-waiting {
+.camelid-readiness-row .readiness-status-badge.is-waiting {
   color: var(--color-warning) !important;
 }
-.gemini-readiness-row .readiness-status-badge.is-waiting .status-dot {
+.camelid-readiness-row .readiness-status-badge.is-waiting .status-dot {
   background: var(--color-warning) !important;
   box-shadow: 0 0 8px var(--color-warning) !important;
 }
 
-.gemini-readiness-row .readiness-status-badge.is-blocked {
+.camelid-readiness-row .readiness-status-badge.is-blocked {
   color: var(--color-error) !important;
 }
-.gemini-readiness-row .readiness-status-badge.is-blocked .status-dot {
+.camelid-readiness-row .readiness-status-badge.is-blocked .status-dot {
   background: var(--color-error) !important;
   box-shadow: 0 0 8px var(--color-error) !important;
 }
 
-.gemini-readiness-row .readiness-model-name {
+.camelid-readiness-row .readiness-model-name {
   font-family: monospace;
   opacity: 0.8;
 }
 
-.gemini-readiness-row .readiness-action-btn {
+.camelid-readiness-row .readiness-action-btn {
   background: transparent;
   border: none;
   color: var(--color-accent);
@@ -9086,7 +9086,7 @@ select:focus {
   padding: 0 4px;
 }
 
-.gemini-readiness-row .readiness-action-btn:hover {
+.camelid-readiness-row .readiness-action-btn:hover {
   color: white;
 }
 
@@ -9098,7 +9098,7 @@ select:focus {
   transform: translate(-50%, -50%) !important;
   width: 900px !important;
   height: 700px !important;
-  background: var(--gemini-aurora-glow) !important;
+  background: var(--camelid-aurora-glow) !important;
   z-index: 1 !important;
   pointer-events: none !important;
   animation: ambientBreathing 12s ease-in-out infinite !important;
@@ -9114,7 +9114,7 @@ select:focus {
   width: 100% !important;
 }
 
-.gemini-assistant-avatar-wrapper {
+.camelid-assistant-avatar-wrapper {
   flex-shrink: 0 !important;
   width: 32px !important;
   height: 32px !important;
@@ -9162,9 +9162,9 @@ select:focus {
 .progress-bar > div,
 .download-progress-fill,
 .streaming-loader {
-  background: var(--gemini-aurora) !important;
+  background: var(--camelid-aurora) !important;
   background-size: 200% 200% !important;
-  animation: geminiLoadingWave 2s linear infinite !important;
+  animation: camelidLoadingWave 2s linear infinite !important;
 }
 
 /* ==========================================================================
@@ -9412,6 +9412,5 @@ select:focus {
 .legend-dot.dot-other {
   background: #6b7280;
 }
-
 
 

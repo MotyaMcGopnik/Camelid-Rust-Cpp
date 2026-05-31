@@ -80,8 +80,8 @@
   --color-glass-strong: rgba(6, 6, 10, 0.95);
 
   /* Premium shifting Aurora Gradients */
-  --gemini-aurora: linear-gradient(74deg, #4f46e5 0%, #7c3aed 35%, #db2777 70%, #f43f5e 100%);
-  --gemini-aurora-glow: radial-gradient(circle, rgba(124, 58, 237, 0.12) 0%, rgba(79, 70, 229, 0.06) 50%, transparent 80%);
+  --camelid-aurora: linear-gradient(74deg, #4f46e5 0%, #7c3aed 35%, #db2777 70%, #f43f5e 100%);
+  --camelid-aurora-glow: radial-gradient(circle, rgba(124, 58, 237, 0.12) 0%, rgba(79, 70, 229, 0.06) 50%, transparent 80%);
 
   background: var(--color-bg);
   color: var(--color-text);
@@ -129,8 +129,8 @@
   --color-glass: rgba(255, 255, 255, 0.85);
   --color-glass-strong: rgba(248, 250, 252, 0.98);
 
-  --gemini-aurora: linear-gradient(74deg, #4f46e5 0%, #6366f1 35%, #a855f7 70%, #ec4899 100%);
-  --gemini-aurora-glow: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(168, 85, 247, 0.06) 50%, transparent 80%);
+  --camelid-aurora: linear-gradient(74deg, #4f46e5 0%, #6366f1 35%, #a855f7 70%, #ec4899 100%);
+  --camelid-aurora-glow: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(168, 85, 247, 0.06) 50%, transparent 80%);
 }
 
 /* Global Keyframe Animations */
@@ -153,7 +153,7 @@
   }
 }
 
-@keyframes geminiLoadingWave {
+@keyframes camelidLoadingWave {
   0% { background-position: 0% 50%; }
   100% { background-position: 200% 50%; }
 }
