@@ -11822,19 +11822,17 @@ unsafe fn q8_0_two_dot_rows_avx2(
 ) -> (f32, f32) {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::{
-        _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cmpeq_epi8, _mm256_cvtepi8_epi16,
-        _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
-        _mm256_movemask_epi8, _mm256_mullo_epi16, _mm256_set1_epi16, _mm256_set1_epi8,
-        _mm256_setzero_si256, _mm256_sign_epi8, _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128,
-        _mm_shuffle_epi32,
+        _mm256_add_epi32, _mm256_cmpeq_epi8, _mm256_cvtepi8_epi16, _mm256_loadu_si256,
+        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_movemask_epi8, _mm256_mullo_epi16,
+        _mm256_set1_epi16, _mm256_set1_epi8, _mm256_setzero_si256, _mm256_sign_epi8,
+        _mm256_storeu_si256, _mm_loadu_si128,
     };
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::{
-        _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cmpeq_epi8, _mm256_cvtepi8_epi16,
-        _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
-        _mm256_movemask_epi8, _mm256_mullo_epi16, _mm256_set1_epi16, _mm256_set1_epi8,
-        _mm256_setzero_si256, _mm256_sign_epi8, _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128,
-        _mm_shuffle_epi32,
+        _mm256_add_epi32, _mm256_cmpeq_epi8, _mm256_cvtepi8_epi16, _mm256_loadu_si256,
+        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_movemask_epi8, _mm256_mullo_epi16,
+        _mm256_set1_epi16, _mm256_set1_epi8, _mm256_setzero_si256, _mm256_sign_epi8,
+        _mm256_storeu_si256, _mm_loadu_si128,
     };
 
     let ones = _mm256_set1_epi16(1);
@@ -14779,6 +14777,7 @@ fn q8_0_packed_rows4_dot(
     debug_assert_eq!(packed_blocks.len(), input.len());
     let mut sums = [0.0_f32; 4];
     for (idx, (packed_block, input_block)) in packed_blocks.iter().zip(input).enumerate() {
+        let _ = idx;
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             if let Some(next_block) = packed_blocks.get(idx + 2) {

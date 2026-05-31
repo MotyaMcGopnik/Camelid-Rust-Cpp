@@ -5362,7 +5362,14 @@ fn q8_ffn_down_amx_prefill_benchmark() {
     };
 
     let (rows4_us, rows4) = bench(Box::new(|| {
-        q8_0_packed_rows4_matmul_projection(&input, packed, output_width, "rows4").unwrap()
+        q8_0_packed_rows4_matmul_projection(
+            &input,
+            packed,
+            output_width,
+            "rows4",
+            Q8PackedRows4MatmulSchedule::default(),
+        )
+        .unwrap()
     }));
     let (gemm4_us, gemm4) = bench(Box::new(|| {
         q8_0_packed_rows4_gemm4_projection_with_row_group_schedule(
@@ -5372,6 +5379,7 @@ fn q8_ffn_down_amx_prefill_benchmark() {
             "gemm4",
             false,
             true,
+            Q8PackedRows4MatmulSchedule::default(),
         )
         .unwrap()
     }));
@@ -5739,11 +5747,22 @@ fn q8_ffn_gate_up_packed_rows4_matmul_matches_runtime_packed_baseline_for_prefil
         Some(Q8_0RuntimeStorage::PackedRows4(packed)) => packed,
         other => panic!("expected runtime-packed up weight, got {other:?}"),
     };
-    let mut gate =
-        q8_0_packed_rows4_matmul_projection(&input, gate_packed, output_width, "expected_gate")
-            .unwrap();
-    let up = q8_0_packed_rows4_matmul_projection(&input, up_packed, output_width, "expected_up")
-        .unwrap();
+    let mut gate = q8_0_packed_rows4_matmul_projection(
+        &input,
+        gate_packed,
+        output_width,
+        "expected_gate",
+        Q8PackedRows4MatmulSchedule::default(),
+    )
+    .unwrap();
+    let up = q8_0_packed_rows4_matmul_projection(
+        &input,
+        up_packed,
+        output_width,
+        "expected_up",
+        Q8PackedRows4MatmulSchedule::default(),
+    )
+    .unwrap();
     for (gate_value, up_value) in gate.data.iter_mut().zip(up.data) {
         *gate_value = (*gate_value / (1.0 + (-*gate_value).exp())) * up_value;
     }
