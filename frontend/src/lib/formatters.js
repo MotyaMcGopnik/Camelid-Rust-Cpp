@@ -3,6 +3,14 @@ export function formatRate(value) {
   return `${Number(value).toFixed(1)} tok/s`
 }
 
+export function formatDurationMs(value) {
+  const duration = Number(value)
+  if (!Number.isFinite(duration) || duration <= 0) return '0 ms'
+  if (duration < 1) return `${Math.round(duration * 1000)} μs`
+  if (duration < 1000) return `${duration.toFixed(duration < 10 ? 1 : 0)} ms`
+  return `${(duration / 1000).toFixed(1)} s`
+}
+
 export function formatDate(value) {
   if (!value) return ''
   return new Date(value).toLocaleString()

@@ -46,6 +46,7 @@ import {
 } from '../src/lib/modelState.js'
 
 import { getChatGateState } from '../src/lib/chatGate.js'
+import { formatDurationMs } from '../src/lib/formatters.js'
 
 const localLoadedReady = {
   id: 'tiny-generation',
@@ -73,6 +74,10 @@ assert.equal(isRunnableInCurrentRuntime(localReadyWithRuntimeName, { active_mode
 assert.equal(getChatGateState({ model_compatibility: [] }, localReadyWithRuntimeName, { active_model_id: 'backend-runtime-id', loaded_now: true, generation_ready: true }).runtimeReady, true, 'chat gate runtime readiness should use the same runtime id matcher as the API view')
 assert.equal(getModelStatusLabel(localLoadedReady), 'Loaded + generation-ready')
 assert.match(describeModelState(localLoadedReady), /generation_ready=true/)
+assert.equal(formatDurationMs(0.42), '420 μs')
+assert.equal(formatDurationMs(18.7), '19 ms')
+assert.equal(formatDurationMs(328.92), '329 ms')
+assert.equal(formatDurationMs(19762.21), '19.8 s')
 
 const nestedLoadedReady = {
   ...localLoadedReady,

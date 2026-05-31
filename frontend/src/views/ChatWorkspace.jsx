@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { compatibilityHintCopy, compatibilityHintLabel, exactRowSupportLanes, findCompatibilityHint } from '../lib/capabilities'
-import { clampText, formatDate, formatRate } from '../lib/formatters'
+import { clampText, formatDate, formatDurationMs, formatRate } from '../lib/formatters'
 import { getChatGateState } from '../lib/chatGate'
 import { describeModelState, getModelStatusLabel } from '../lib/modelState'
 
@@ -431,13 +431,6 @@ function DeveloperDiagnosticsBlock({ message }) {
   const layers = metrics.layers || []
   const maxLayerTime = layers.reduce((max, layer) => Math.max(max, layer.total || 0), 0.0001)
 
-  const formatMs = (val) => {
-    const num = Number(val)
-    if (!Number.isFinite(num) || num <= 0) return '0 ms'
-    if (num < 1000) return `${num.toFixed(0)} μs`
-    return `${(num / 1000).toFixed(1)} ms`
-  }
-
   const ttfb = message.first_byte_ms !== null && message.first_byte_ms !== undefined
     ? `${(Number(message.first_byte_ms) / 1000).toFixed(2)}s`
     : null
@@ -446,9 +439,9 @@ function DeveloperDiagnosticsBlock({ message }) {
     : null
   const decodeRate = formatRate(message.tokens_out_per_sec)
 
-  const tokenizeTime = metrics.tokenize ? formatMs(metrics.tokenize) : null
-  const weightLoadTime = metrics.weight_load ? formatMs(metrics.weight_load) : null
-  const totalGenTime = metrics.generate ? formatMs(metrics.generate) : null
+  const tokenizeTime = metrics.tokenize ? formatDurationMs(metrics.tokenize) : null
+  const weightLoadTime = metrics.weight_load ? formatDurationMs(metrics.weight_load) : null
+  const totalGenTime = metrics.generate ? formatDurationMs(metrics.generate) : null
 
   return (
     <div className="developer-diagnostics-container">
@@ -512,7 +505,7 @@ function DeveloperDiagnosticsBlock({ message }) {
                     <div key={layer.layer_index} className="layer-bar-row">
                       <div className="layer-label">
                         <span>L{layer.layer_index}</span>
-                        <small>{formatMs(layer.total)}</small>
+                        <small>{formatDurationMs(layer.total)}</small>
                       </div>
                       <div className="layer-bar-track">
                         <div
@@ -523,21 +516,21 @@ function DeveloperDiagnosticsBlock({ message }) {
                             <div
                               className="segment-attn"
                               style={{ width: `${attnPercent}%` }}
-                              title={`Attention: ${formatMs(attnTime)}`}
+                              title={`Attention: ${formatDurationMs(attnTime)}`}
                             />
                           )}
                           {ffnPercent > 0 && (
                             <div
                               className="segment-ffn"
                               style={{ width: `${ffnPercent}%` }}
-                              title={`Feed-Forward: ${formatMs(ffnTime)}`}
+                              title={`Feed-Forward: ${formatDurationMs(ffnTime)}`}
                             />
                           )}
                           {otherPercent > 0 && (
                             <div
                               className="segment-other"
                               style={{ width: `${otherPercent}%` }}
-                              title={`Residual / Overhead: ${formatMs(otherTime)}`}
+                              title={`Residual / Overhead: ${formatDurationMs(otherTime)}`}
                             />
                           )}
                         </div>
