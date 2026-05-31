@@ -3911,6 +3911,7 @@ fn q8_projection_route_telemetry_records_layer_route_bucket() {
     let telemetry = snapshot_q8_schedule_telemetry();
     assert_eq!(telemetry.output_projection_calls, 2);
     assert_eq!(telemetry.ffn_gate_up_decode_consumer_taken, 0);
+    assert_eq!(telemetry.ffn_gate_up_decode_fused_activation_taken, 0);
     assert_eq!(telemetry.ffn_gate_up_decode_consumer_activation_us, 0);
     assert_eq!(telemetry.ffn_gate_up_decode_consumer_tensor_us, 0);
     assert!(telemetry
@@ -4042,7 +4043,8 @@ fn x86_q8_ffn_decode_chain_is_default_off_and_matches_split_consumers() {
     assert_eq!(actual.tensor.shape.dims, expected.shape.dims);
     assert_slice_close_with_tolerance(&actual.tensor.data, &expected.data, 5e-4);
     let telemetry = snapshot_q8_schedule_telemetry();
-    assert_eq!(telemetry.ffn_gate_up_decode_consumer_taken, 1);
+    assert_eq!(telemetry.ffn_gate_up_decode_consumer_taken, 0);
+    assert_eq!(telemetry.ffn_gate_up_decode_fused_activation_taken, 1);
     assert_eq!(telemetry.ffn_decode_chain_taken, 1);
     assert_eq!(telemetry.ffn_down_decode_consumer_taken, 1);
     assert!(telemetry.ffn_decode_chain_total_us > 0);
@@ -5370,6 +5372,7 @@ fn q8_ffn_gate_up_consumer_matches_runtime_packed_baseline() {
     ));
     let telemetry = snapshot_q8_schedule_telemetry();
     assert_eq!(telemetry.ffn_gate_up_decode_consumer_taken, 1);
+    assert_eq!(telemetry.ffn_gate_up_decode_fused_activation_taken, 0);
     reset_q8_schedule_telemetry();
     std::env::remove_var(Q8_SCHEDULE_TELEMETRY_ENV);
 }
