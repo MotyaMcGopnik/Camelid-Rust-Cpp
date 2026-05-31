@@ -1507,8 +1507,8 @@ impl CpuTensor {
             }
             #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             {
-                for i in 0..len {
-                    out[i] = self.data[i] + rhs.data[i];
+                for (i, output) in out.iter_mut().enumerate().take(len) {
+                    *output = self.data[i] + rhs.data[i];
                 }
             }
         }
@@ -1552,8 +1552,8 @@ impl CpuTensor {
             }
             #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             {
-                for i in 0..len {
-                    out[i] = self.data[i] * rhs.data[i];
+                for (i, output) in out.iter_mut().enumerate().take(len) {
+                    *output = self.data[i] * rhs.data[i];
                 }
             }
         }
