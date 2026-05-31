@@ -491,9 +491,10 @@ fn select_linux_x86_q8_plan(
         "CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE",
         optional_x86_q8_gate("CAMELID_X86_Q8_PARALLEL_INPUT_QUANTIZE"),
     );
-    let ffn_decode_chain_enabled = env_flag_enabled("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
-    let ffn_gate_up_decode_consumer_enabled =
-        ffn_decode_chain_enabled || env_flag_enabled("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER");
+    let ffn_decode_chain_explicitly_enabled = env_flag_enabled("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
+    let ffn_decode_chain_enabled = !env_flag_disabled("CAMELID_X86_Q8_FFN_DECODE_CHAIN");
+    let ffn_gate_up_decode_consumer_enabled = ffn_decode_chain_enabled
+        || !env_flag_disabled("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER");
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER",
         if ffn_gate_up_decode_consumer_enabled {
@@ -527,7 +528,7 @@ fn select_linux_x86_q8_plan(
         optional_x86_q8_gate("CAMELID_X86_Q8_FFN_GATE_UP_PACKED_ROWS4_MATMUL"),
     );
     let ffn_down_decode_consumer_enabled =
-        ffn_decode_chain_enabled || env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER");
+        ffn_decode_chain_enabled || !env_flag_disabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER");
     env_updates.insert(
         "CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER",
         if ffn_down_decode_consumer_enabled {
@@ -582,13 +583,17 @@ fn select_linux_x86_q8_plan(
         optional_x86_q8_gate("CAMELID_X86_Q8_OUTPUT_DECODE_OWNER"),
     );
 
-    if ffn_decode_chain_enabled && !env_flag_enabled("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER") {
+    if ffn_decode_chain_explicitly_enabled
+        && !env_flag_enabled("CAMELID_X86_Q8_FFN_GATE_UP_DECODE_CONSUMER")
+    {
         reasons.push(
             "FFN decode-chain opt-in also enables the required FFN gate/up decode consumer gate"
                 .into(),
         );
     }
-    if ffn_decode_chain_enabled && !env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER") {
+    if ffn_decode_chain_explicitly_enabled
+        && !env_flag_enabled("CAMELID_X86_Q8_FFN_DOWN_DECODE_CONSUMER")
+    {
         reasons.push(
             "FFN decode-chain opt-in also enables the required FFN-down decode consumer gate"
                 .into(),
