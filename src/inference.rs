@@ -83,7 +83,7 @@ use crate::tensor::record_q8_0_file_read;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use crate::tensor::Q8_0AmxPackedBlock;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", camelid_x86_amx_shim))]
 #[allow(dead_code)]
 unsafe extern "C" {
     fn camelid_x86_q8_amx_supported() -> std::os::raw::c_int;
@@ -95,6 +95,23 @@ unsafe extern "C" {
         output: *mut f32,
         output_stride: usize,
     );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", not(camelid_x86_amx_shim)))]
+unsafe fn camelid_x86_q8_amx_supported() -> std::os::raw::c_int {
+    0
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", not(camelid_x86_amx_shim)))]
+#[allow(dead_code)]
+unsafe fn camelid_q8_0_amx_compute_tile16(
+    _input_groups: *const Q8_0PackedRows4Block,
+    _blocks_per_row: usize,
+    _m_rows: usize,
+    _weight_blocks: *const Q8_0AmxPackedBlock,
+    _output: *mut f32,
+    _output_stride: usize,
+) {
 }
 
 #[cfg(target_os = "macos")]

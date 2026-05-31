@@ -2,6 +2,8 @@ use std::{env, path::PathBuf, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-changed=src/x86_amx_q8.c");
+    println!("cargo:rerun-if-env-changed=CAMELID_BUILD_X86_AMX_SHIM");
+    println!("cargo:rustc-check-cfg=cfg(camelid_x86_amx_shim)");
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "macos" {
         println!("cargo:rustc-link-lib=framework=Accelerate");
@@ -10,6 +12,7 @@ fn main() {
     if target_os != "linux" || target_arch != "x86_64" {
         return;
     }
+    let require_amx_shim = env_flag_enabled("CAMELID_BUILD_X86_AMX_SHIM");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let obj = out_dir.join("x86_amx_q8.o");
@@ -30,22 +33,54 @@ fn main() {
             "-o",
         ])
         .arg(&obj)
-        .status()
-        .expect("failed to run gcc for x86 AMX Q8 kernel");
+        .status();
+    let Ok(status) = status else {
+        if require_amx_shim {
+            panic!("failed to run gcc for x86 AMX Q8 kernel");
+        }
+        println!("cargo:warning=skipping optional x86 AMX Q8 shim because gcc could not be run");
+        return;
+    };
     if !status.success() {
-        panic!("gcc failed building x86 AMX Q8 kernel");
+        if require_amx_shim {
+            panic!("gcc failed building x86 AMX Q8 kernel");
+        }
+        println!(
+            "cargo:warning=skipping optional x86 AMX Q8 shim because gcc rejected the AMX flags"
+        );
+        return;
     }
 
-    let status = Command::new("ar")
-        .arg("crus")
-        .arg(&lib)
-        .arg(&obj)
-        .status()
-        .expect("failed to run ar for x86 AMX Q8 kernel");
+    let status = Command::new("ar").arg("crus").arg(&lib).arg(&obj).status();
+    let Ok(status) = status else {
+        if require_amx_shim {
+            panic!("failed to run ar for x86 AMX Q8 kernel");
+        }
+        println!("cargo:warning=skipping optional x86 AMX Q8 shim because ar could not be run");
+        return;
+    };
     if !status.success() {
-        panic!("ar failed building x86 AMX Q8 kernel");
+        if require_amx_shim {
+            panic!("ar failed building x86 AMX Q8 kernel");
+        }
+        println!("cargo:warning=skipping optional x86 AMX Q8 shim because ar failed");
+        return;
     }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=camelid_x86_amx_q8");
+    println!("cargo:rustc-cfg=camelid_x86_amx_shim");
+}
+
+fn env_flag_enabled(key: &str) -> bool {
+    env::var(key)
+        .map(|value| {
+            let value = value.trim();
+            value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("enabled")
+                || value.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false)
 }
