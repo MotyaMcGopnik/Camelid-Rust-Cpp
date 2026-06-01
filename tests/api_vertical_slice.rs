@@ -132,7 +132,10 @@ async fn native_compatibility_routes_fail_closed_with_typed_errors() {
         ("POST", "/embeddings", "unsupported_embeddings", "input"),
         ("POST", "/v1/embeddings", "unsupported_embeddings", "input"),
         ("POST", "/rerank", "unsupported_reranking", "input"),
+        ("POST", "/reranking", "unsupported_reranking", "input"),
+        ("POST", "/v1/rerank", "unsupported_reranking", "input"),
         ("POST", "/v1/reranking", "unsupported_reranking", "input"),
+        ("POST", "/v1/responses", "unsupported_responses", "input"),
     ];
 
     for (method, uri, code, param) in cases {
@@ -291,6 +294,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
             && item["status"] == "unsupported"
             && item["notes"].as_str().unwrap().contains("/completion")
             && item["notes"].as_str().unwrap().contains("/v1/embeddings")
+            && item["notes"].as_str().unwrap().contains("/v1/responses")
     }));
     let compatibility = body["model_compatibility"].as_array().unwrap();
     let tinyllama = compatibility

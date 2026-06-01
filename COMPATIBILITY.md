@@ -248,7 +248,8 @@ For **Llama 3 8B** specifically, the durable citation anchors are the current-he
 | `/slots` | Fail-closed typed unsupported | Route presence returns a typed `not_implemented` error. Add real slot data only after Camelid has explicit slot/session lifecycle semantics, cancellation behavior, prompt-cache visibility rules, and privacy-safe fields. |
 | Native `/completion` | Fail-closed typed unsupported | Route presence returns a typed `not_implemented` error. Implement only after mapping llama-server `prompt` shapes, sampler aliases, streaming shape, cancellation, and typed unsupported fields without weakening the stable `/v1/completions` path. |
 | `/apply-template` | Partial llama-server utility compatibility | Loaded-model chat-template rendering is available as a no-inference utility returning a `prompt` string. It is scoped to Camelid's supported tokenizer/template renderers, rejects unknown request fields with typed unsupported errors, and does not imply native `/completion`, `/slots`, arbitrary-template support, or WebUI readiness. |
-| Embeddings and reranking | Fail-closed typed unsupported | Route presence for `/embedding`, `/embeddings`, `/v1/embeddings`, `/rerank`, and `/v1/reranking` returns typed `not_implemented` errors. No embeddings/reranking support claim until model/runtime support, OpenAI `/v1/embeddings` shape, native `/embedding` shape, and capability rows are implemented and tested. |
+| OpenAI Responses API | Fail-closed typed unsupported | Route presence for `/v1/responses` returns a typed `not_implemented` error. Do not bridge it to chat until request conversion, streaming shape, tool/function behavior, cancellation, and error mapping are implemented and tested without widening `/v1/chat/completions` support. |
+| Embeddings and reranking | Fail-closed typed unsupported | Route presence for `/embedding`, `/embeddings`, `/v1/embeddings`, `/rerank`, `/reranking`, `/v1/rerank`, and `/v1/reranking` returns typed `not_implemented` errors. No embeddings/reranking support claim until model/runtime support, OpenAI `/v1/embeddings` shape, native `/embedding` shape, reranking request/response shape, and capability rows are implemented and tested. |
 | Multi-choice generation | Unsupported | Keep typed unsupported until implemented/tested. |
 | Rich OpenAI-compatible logprobs | Partial/planned | Diagnostic logit surfaces exist; complete API parity remains Phase 14 work. |
 | Local OpenAI-compatible provider registration | Open integration verification | Verify registration/use by the target local client surface before calling integration complete. |
@@ -257,11 +258,12 @@ For **Llama 3 8B** specifically, the durable citation anchors are the current-he
 
 Camelid should keep the OpenAI-style subset stable while adding llama-server compatibility in this order:
 
-1. **Discovery/control-plane:** `/props`, then privacy-safe health/model metadata refinements, then `/slots` only after slot semantics exist.
-2. **Template utilities:** `/apply-template` now has a bounded loaded-model no-inference route; next hardening is renderer/source metadata and broader negative fixtures for arbitrary template inputs.
-3. **Native generation aliases:** `/completion` as a thin, tested mapping onto the existing generation path, preserving honest unsupported responses for llama-server sampler/control fields.
-4. **Embeddings/reranking:** implement only after backend support and separate capability rows exist; keep `/v1/embeddings`, `/embedding`, `/embeddings`, `/rerank`, and `/v1/reranking` fail-closed until then.
-5. **WebUI readiness:** keep frontend chat enabled only from `/api/capabilities` exact-row support plus `/v1/health loaded_now=true generation_ready=true`; native route presence alone must never unlock readiness.
+1. **Discovery/control-plane:** keep `/health`, `/v1/models`, `/api/models/current`, and `/props` privacy-safe; refine model metadata shape next, then add `/slots` only after slot/session lifecycle, prompt-cache visibility, cancellation, and privacy rules exist.
+2. **Template/token utilities:** keep `/tokenize`, `/detokenize`, and `/apply-template` bounded to loaded-model tokenizer/template behavior; next hardening is renderer/source metadata plus negative fixtures for unsupported piece metadata, arbitrary template inputs, and unsupported request fields.
+3. **Stable generation first:** preserve `/v1/completions` and `/v1/chat/completions` as the stable OpenAI-style subset, including streaming, cancellation cleanup, and typed errors; do not let native route work change exact-row support gates.
+4. **Native generation aliases:** add `/completion` only as a thin, tested mapping onto the existing generation path after llama-server prompt shapes, sampler aliases, streaming shape, cancellation, and unsupported-field behavior are specified.
+5. **Responses/embeddings/reranking:** implement `/v1/responses`, embeddings, and reranking only after backend support and separate capability rows exist; keep `/v1/responses`, `/v1/embeddings`, `/embedding`, `/embeddings`, `/rerank`, `/reranking`, `/v1/rerank`, and `/v1/reranking` fail-closed until then.
+6. **WebUI readiness:** keep frontend chat enabled only from `/api/capabilities` exact-row support plus `/v1/health loaded_now=true generation_ready=true`; native route presence alone must never unlock readiness.
 
 ## Phase 9-15 next actions and owners
 

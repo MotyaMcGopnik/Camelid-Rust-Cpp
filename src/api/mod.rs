@@ -861,6 +861,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/embedding", post(unsupported_embeddings))
         .route("/embeddings", post(unsupported_embeddings))
         .route("/rerank", post(unsupported_reranking))
+        .route("/reranking", post(unsupported_reranking))
         .route(
             "/api/generation/sessions",
             get(generation_sessions).post(create_generation_session),
@@ -874,6 +875,8 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/v1/completions", post(completions))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(unsupported_embeddings))
+        .route("/v1/responses", post(unsupported_responses))
+        .route("/v1/rerank", post(unsupported_reranking))
         .route("/v1/reranking", post(unsupported_reranking))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -1016,6 +1019,14 @@ async fn unsupported_reranking() -> Response {
     unsupported_route(
         "unsupported_reranking",
         "reranking is not supported yet; Camelid has no reranking runtime or compatibility contract for this route",
+        Some("input"),
+    )
+}
+
+async fn unsupported_responses() -> Response {
+    unsupported_route(
+        "unsupported_responses",
+        "OpenAI Responses compatibility is not supported yet; Camelid keeps generation on /v1/completions and /v1/chat/completions until request conversion, streaming, tool, and cancellation semantics are implemented and tested",
         Some("input"),
     )
 }
@@ -1589,7 +1600,7 @@ fn capabilities_response_with_plan(execution_plan: Option<ExecutionPlan>) -> Cap
             SupportItem {
                 id: "fail_closed_native_compatibility_routes",
                 status: "unsupported",
-                notes: "Native /slots, /completion, /embedding, /embeddings, /v1/embeddings, /rerank, and /v1/reranking compatibility routes return typed not_implemented errors until real route semantics and backend support exist.",
+                notes: "Native /slots, /completion, /embedding, /embeddings, /v1/embeddings, /rerank, /reranking, /v1/rerank, /v1/reranking, and /v1/responses compatibility routes return typed not_implemented errors until real route semantics and backend support exist.",
             },
             SupportItem {
                 id: "multi_choice_generation",
