@@ -1155,6 +1155,7 @@ async fn llama_server_props(State(state): State<AppState>) -> Json<LlamaServerPr
     let chat_template = model
         .and_then(|model| model.tokenizer_runtime.as_ref())
         .and_then(|tokenizer| tokenizer.chat_template.clone());
+    let chat_template_caps = llama_server_chat_template_caps(model);
     let model_id = model.map(|model| model.id.clone());
 
     Json(LlamaServerPropsResponse {
@@ -1192,7 +1193,7 @@ async fn llama_server_props(State(state): State<AppState>) -> Json<LlamaServerPr
         model_path: None,
         model_id,
         chat_template,
-        chat_template_caps: serde_json::json!({}),
+        chat_template_caps,
         modalities: LlamaServerModalities { vision: false },
         build_info: "camelid",
         is_sleeping: false,
@@ -1204,13 +1205,53 @@ async fn llama_server_props(State(state): State<AppState>) -> Json<LlamaServerPr
                 "post_props",
                 "post_slots",
                 "slot_cache_actions",
-                "native_completion",
+                "native_completion_streaming",
+                "full_native_completion_parity",
                 "embeddings",
                 "reranking",
                 "multimodal",
             ],
         },
     })
+}
+
+fn llama_server_chat_template_caps(model: Option<&LoadedModel>) -> serde_json::Value {
+    let template = model.and_then(|model| match &model.tokenizer {
+        TokenizerLoadState::Available(summary) => summary.chat_template.as_ref(),
+        TokenizerLoadState::Unavailable { .. } => None,
+    });
+
+    match template {
+        Some(template) => serde_json::json!({
+            "available": true,
+            "requires_loaded_model": true,
+            "source": template.source,
+            "detected_format": template.detected_format,
+            "length": template.length,
+            "supported_operations": ["render_prompt"],
+            "unsupported": [
+                "arbitrary_template_kwargs",
+                "tool_call_templates",
+                "multimodal_templates",
+                "full_llama_server_template_parity"
+            ],
+        }),
+        None => serde_json::json!({
+            "available": false,
+            "requires_loaded_model": true,
+            "source": null,
+            "detected_format": null,
+            "length": null,
+            "supported_operations": [],
+            "unsupported": [
+                "no_loaded_supported_chat_template",
+                "arbitrary_template_kwargs",
+                "tool_call_templates",
+                "multimodal_templates",
+                "full_llama_server_template_parity"
+            ],
+        }),
+    }
 }
 
 async fn unsupported_llama_server_props() -> Response {
@@ -2064,7 +2105,7 @@ fn capabilities_response_with_plan(execution_plan: Option<ExecutionPlan>) -> Cap
             SupportItem {
                 id: "llama_server_props",
                 status: "partial",
-                notes: "GET /props returns read-only public server properties, default generation settings, chat-template metadata when a model is loaded, and fail-closed Camelid readiness notes. Local model paths are intentionally redacted, POST /props is unsupported, and this does not imply slot lifecycle, /completion, embeddings, or full llama-server WebUI parity.",
+                notes: "GET /props returns read-only public server properties, default generation settings, explicit fail-closed chat_template_caps, chat-template metadata when a model is loaded, and Camelid readiness notes. Local model paths are intentionally redacted, POST /props is unsupported, and this does not imply slot lifecycle, native /completion streaming, embeddings, or full llama-server WebUI parity.",
             },
             SupportItem {
                 id: "llama_server_slots",
@@ -5877,7 +5918,7 @@ fn tokenizer_error_code(err: &BackendError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         path::PathBuf,
         sync::{Arc, Mutex},
     };
@@ -6495,6 +6536,112 @@ mod tests {
             assert!(target.frontend_readiness_gate.contains("fail-closed"));
             assert!(target.evidence.contains("planning only"));
         }
+    }
+
+    #[test]
+    fn llama_server_props_template_caps_fail_closed_without_loaded_template() {
+        let caps = llama_server_chat_template_caps(None);
+
+        assert_eq!(caps["available"], false);
+        assert_eq!(caps["requires_loaded_model"], true);
+        assert!(caps["source"].is_null());
+        assert!(caps["supported_operations"].as_array().unwrap().is_empty());
+        assert!(caps["unsupported"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("no_loaded_supported_chat_template")));
+        assert!(caps["unsupported"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("full_llama_server_template_parity")));
+    }
+
+    #[test]
+    fn llama_server_props_template_caps_expose_loaded_template_without_path() {
+        let model = LoadedModel {
+            id: "loaded-test".to_string(),
+            path: PathBuf::from("/private/models/Loaded-Test.gguf"),
+            gguf: GgufFile {
+                path: PathBuf::from("/private/models/Loaded-Test.gguf"),
+                version: 3,
+                tensor_count: 0,
+                metadata_count: 0,
+                alignment: 32,
+                data_start_offset: 0,
+                metadata: BTreeMap::new(),
+                tensors: Vec::new(),
+            },
+            llama_config: None,
+            llama_tensors: None,
+            unsupported_runtime: None,
+            tokenizer: TokenizerLoadState::Available(TokenizerSummary {
+                model: "llama-bpe",
+                token_count: 128,
+                byte_token_count: 0,
+                special: SpecialTokenSummary {
+                    bos: None,
+                    eos: None,
+                    eot: None,
+                    eom: None,
+                    unk: None,
+                    sep: None,
+                    pad: None,
+                    mask: None,
+                    eog: Vec::new(),
+                },
+                config: TokenizerConfigSummary {
+                    add_bos: false,
+                    add_eos: false,
+                    add_sep: false,
+                    add_space_prefix: false,
+                    remove_extra_whitespaces: false,
+                },
+                chat_template: Some(ChatTemplateSummary {
+                    source: "tokenizer.chat_template",
+                    detected_format: "llama3_header",
+                    length: 42,
+                }),
+            }),
+            tokenizer_runtime: None,
+        };
+
+        let caps = llama_server_chat_template_caps(Some(&model));
+        let serialized = caps.to_string();
+
+        assert_eq!(caps["available"], true);
+        assert_eq!(caps["requires_loaded_model"], true);
+        assert_eq!(caps["source"], "tokenizer.chat_template");
+        assert_eq!(caps["detected_format"], "llama3_header");
+        assert_eq!(caps["length"], 42);
+        assert!(caps["supported_operations"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("render_prompt")));
+        assert!(caps["unsupported"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("full_llama_server_template_parity")));
+        assert!(!serialized.contains("/private"));
+        assert!(!serialized.contains("Loaded-Test.gguf"));
+    }
+
+    #[test]
+    fn capabilities_describe_props_template_caps_without_broad_completion_claim() {
+        let response = capabilities_response();
+        let props = response
+            .api_features
+            .iter()
+            .find(|feature| feature.id == "llama_server_props")
+            .expect("llama-server props feature should stay advertised");
+
+        assert_eq!(props.status, "partial");
+        assert!(props
+            .notes
+            .contains("explicit fail-closed chat_template_caps"));
+        assert!(props.notes.contains("native /completion streaming"));
+        assert!(!props
+            .notes
+            .contains("does not imply slot lifecycle, /completion,"));
     }
 
     #[test]
