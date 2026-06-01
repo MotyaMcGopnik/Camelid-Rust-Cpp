@@ -124,7 +124,7 @@ To smoke-test a downloaded local GGUF without committing model files, pass its p
 
 ```bash
 cd frontend
-npm run smoke -- --model ../models/tinyllama-1.1b-chat-v1.0.Q8_0.gguf --model-id tinyllama-q8
+npm run smoke -- --model /path/to/tinyllama-1.1b-chat-v1.0.Q8_0.gguf --model-id tinyllama-q8
 ```
 
 This verifies the frontend is reachable, loads the GGUF through the backend API, checks `/v1/health`, `/v1/models`, and the UI guardrails around `/api/capabilities`, and only sends a chat request when `generation_ready=true` **and** the active model has an exact supported compatibility row. The smoke output includes coarse timings for frontend reachability, model load, health/model listing, support-contract matching, and chat completion so real-model runs produce repeatable latency evidence. Add `--require-generation` when the model is expected to run end-to-end; otherwise the smoke exits successfully after confirming the UI/API guardrail state for metadata-only or unsupported-runtime models.
