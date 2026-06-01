@@ -1205,6 +1205,7 @@ async fn llama_server_props(State(state): State<AppState>) -> Json<LlamaServerPr
                 "post_props",
                 "post_slots",
                 "slot_cache_actions",
+                "native_completion",
                 "native_completion_streaming",
                 "full_native_completion_parity",
                 "embeddings",
