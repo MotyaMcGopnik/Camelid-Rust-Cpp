@@ -2415,6 +2415,7 @@ async fn llama_server_tokenize_alias_requires_loaded_model_for_piece_metadata() 
 async fn llama_server_tokenize_alias_rejects_unknown_fields_before_runtime() {
     let app = camelid::api::router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -2431,6 +2432,28 @@ async fn llama_server_tokenize_alias_rejects_unknown_fields_before_runtime() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(body["error"]["code"], "unsupported_parameter");
     assert_eq!(body["error"]["param"], "request");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/detokenize")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tokens":[4],"remove_special":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "unsupported_parameter");
+    assert_eq!(body["error"]["param"], "request");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("/detokenize unsupported request field(s): remove_special"));
 }
 
 #[tokio::test]

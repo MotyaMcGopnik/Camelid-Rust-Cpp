@@ -441,6 +441,8 @@ pub enum LlamaServerTokenPieceValue {
 #[derive(Debug, Deserialize)]
 pub struct LlamaServerDetokenizeRequest {
     pub tokens: Option<Vec<u32>>,
+    #[serde(flatten)]
+    pub unsupported_fields: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2884,6 +2886,23 @@ async fn llama_server_detokenize(
         Ok(payload) => payload,
         Err(err) => return malformed_json_error(err),
     };
+    if !req.unsupported_fields.is_empty() {
+        let mut fields = req
+            .unsupported_fields
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        fields.sort_unstable();
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_parameter",
+            format!(
+                "/detokenize unsupported request field(s): {}",
+                fields.join(", ")
+            ),
+            Some("request"),
+        );
+    }
     let tokens = match req.tokens {
         Some(tokens) => tokens,
         None => {
