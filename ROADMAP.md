@@ -244,7 +244,7 @@ Sequenced plan:
 2. Grow read-only llama-server discovery first: `/props`, `/slots`, health/model metadata, and WebUI probes may expose public readiness state, but local paths stay redacted and readiness fails closed unless the loaded exact row is contract-supported and generation-ready.
 3. Keep tokenizer/control-plane utilities bounded: `/tokenize`, `/detokenize`, and `/apply-template` may work for loaded supported tokenizer/template lanes only; piece metadata, arbitrary template kwargs, prompt-cache metadata, and slot lifecycle actions remain unsupported until real semantics exist.
 4. Add native generation compatibility only after request mapping is explicit: `/completion` must translate supported llama-server parameters onto Camelid's generation path without weakening the OpenAI subset, and unsupported sampler, cache, image, infill, and tool fields must remain typed errors.
-5. Defer embeddings, reranking, Responses, multimodal routes, LoRA, metrics, router-mode model management, and full WebUI parity until backend support, route semantics, tests, capabilities text, docs, and frontend gates all move together.
+5. Defer embeddings, reranking, Responses, Messages, multimodal routes, LoRA, metrics, router-mode model management, and full WebUI parity until backend support, route semantics, tests, capabilities text, docs, and frontend gates all move together.
 
 ### Performance, packaging, and portability
 
