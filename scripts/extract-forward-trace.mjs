@@ -34,7 +34,12 @@ const extracted = {
     known_good_text: root.llama_text ?? null,
   },
   prompt_token_ids: diagnostics.prompt_token_ids ?? null,
+  prompt_position_ids: positionIds(diagnostics.prompt_token_ids),
   generated_token_ids: diagnostics.generated_token_ids ?? null,
+  generated_position_ids: positionIds(
+    diagnostics.generated_token_ids,
+    Array.isArray(diagnostics.prompt_token_ids) ? diagnostics.prompt_token_ids.length : 0,
+  ),
   dense_metadata: diagnostics.dense_metadata ?? null,
   layer_count: dense.layers?.length ?? 0,
   selected_layers: layers,
@@ -124,6 +129,12 @@ function buildStages(dense, layers) {
     addStats(`layers.${layerIndex}.attention_residual`, layer.attention_residual, { ...layerExtra, residual_delta: compactReconstruction(layer.residual_flow?.attention_delta) })
     addStats(`layers.${layerIndex}.ffn_input`, layer.residual_flow?.ffn_input, layerExtra)
     addStats(`layers.${layerIndex}.ffn_norm`, layer.ffn_norm, { ...layerExtra, reconstruction: compactReconstruction(layer.ffn_norm_reconstruction) })
+    if (layer.mixtral_moe) {
+      stages.push(stage(`layers.${layerIndex}.mixtral_moe`, 'mixtral_moe_trace', {
+        ...layerExtra,
+        mixtral_moe: compactMixtralMoeTrace(layer.mixtral_moe),
+      }))
+    }
     addStats(`layers.${layerIndex}.ffn_gate`, layer.ffn_gate, { ...layerExtra, reconstruction: compactReconstruction(layer.ffn_gate_reconstruction) })
     addStats(`layers.${layerIndex}.ffn_up`, layer.ffn_up, { ...layerExtra, reconstruction: compactReconstruction(layer.ffn_up_reconstruction) })
     addStats(`layers.${layerIndex}.ffn_activation`, layer.ffn_activation, { ...layerExtra, reconstruction: compactReconstruction(layer.ffn_activation_reconstruction) })
@@ -280,6 +291,19 @@ function compactKvCacheTrace(trace) {
   }
 }
 
+function compactMixtralMoeTrace(trace) {
+  if (!trace) return null
+  return {
+    expert_used_count: integerOrNull(trace.expert_used_count),
+    rows: (trace.rows ?? []).map(row => ({
+      row_index: integerOrNull(row.row_index),
+      router_logits: numericArray(row.router_logits),
+      selected_experts: integerArray(row.selected_experts),
+      selected_weights: numericArray(row.selected_weights),
+    })),
+  }
+}
+
 function compactOutputProjection(rows) {
   return rows.map(row => ({
     token_id: integerOrNull(row.token_id),
@@ -326,6 +350,14 @@ function copyScalarOrArray(value) {
 
 function numericArray(value) {
   return Array.isArray(value) ? value.map(numberOrNull) : []
+}
+
+function integerArray(value) {
+  return Array.isArray(value) ? value.map(integerOrNull) : []
+}
+
+function positionIds(tokens, start = 0) {
+  return Array.isArray(tokens) ? tokens.map((_, index) => start + index) : null
 }
 
 function numberOrNull(value) {
