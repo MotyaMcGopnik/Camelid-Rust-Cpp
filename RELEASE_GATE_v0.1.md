@@ -2,9 +2,7 @@
 
 Date: 2026-05-31
 
-Branch: `release/v0.1-evidence`
-
-Release candidate SHA: release branch HEAD after this gate-refresh commit
+Release checkout: branch-agnostic gate ledger; record the exact branch and SHA for the gate run that is used to cut rc1
 
 Tag status: no tag created.
 
@@ -16,7 +14,7 @@ The runtime/API/frontend contract now treats Mistral as evidence-only and fail-c
 
 ## Required Lightweight Gates
 
-Run these from the release checkout:
+Run these from the release-candidate checkout:
 
 ```bash
 cargo fmt --all -- --check
@@ -31,7 +29,7 @@ cd frontend && npm ci && npm run build && npm run smoke:model-state
 
 | Gate | Command | Status | Notes |
 | --- | --- | --- | --- |
-| Branch/SHA | `git status --short --branch && git rev-parse HEAD` | PASS | Confirmed `release/v0.1-evidence`; final SHA will be recorded after this gate-refresh commit. |
+| Branch/SHA | `git status --short --branch && git rev-parse HEAD` | PASS | Confirmed a clean candidate checkout for that gate run; record the exact branch and SHA alongside the gate output that is used to cut rc1. |
 | Rust format | `cargo fmt --all -- --check` | PASS | Source tree is formatted after applying the Mistral contract and clippy fixes. |
 | Rust clippy | `CARGO_TERM_COLOR=never cargo clippy --all-targets --all-features -- -D warnings` | PASS | Clippy passed. Cargo emitted build-script hardlink warnings from the external target cache only. |
 | Rust check | `CARGO_TERM_COLOR=never cargo check --all-targets --all-features` | PASS | Cargo check passed with external target-cache hardlink warnings only. |

@@ -2,9 +2,7 @@
 
 Last updated: 2026-05-31
 
-Branch: `release/v0.1-evidence`
-
-Current release SHA: release branch HEAD after this gate-refresh commit
+Release checkout: branch-agnostic status ledger; record the exact branch and SHA when refreshing rc1 readiness
 
 Release target: `v0.1.0-rc1`
 
@@ -46,11 +44,9 @@ Need Tim:
 
 ## Current Checkout
 
-- Primary repo checkout inspected: `<primary-checkout>`
-- Primary checkout state at start: `main`, SHA `1b207f953ad8d40abcd833bf4d4677b22d44b334`, behind `origin/main` by 17 commits, with existing uncommitted work.
-- Release worktree: `<release-worktree>`
-- Release worktree state at start: clean branch `release/v0.1-evidence` from `origin/main` at the release branch HEAD
-- Preservation rule: the dirty primary checkout is not modified by this release lane.
+- Record the exact checkout path, branch, SHA, and cleanliness for the release-candidate run that refreshes this file.
+- Do not hard-code historical worktree names or stale branch labels into the public release ledger.
+- Preservation rule: if a release lane uses a separate worktree, leave any dirty primary checkout untouched and state that fact explicitly for the run that produced the evidence.
 
 ## Release Captain Update Format
 

@@ -2,9 +2,7 @@
 
 Date: 2026-05-31
 
-Branch: `release/v0.1-evidence`
-
-Release candidate SHA: release branch HEAD; record exact SHA when cutting rc1
+Release checkout: branch-agnostic working notes; record the exact branch and SHA when cutting rc1
 
 ## Release Posture
 
