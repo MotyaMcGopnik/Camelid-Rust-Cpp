@@ -417,7 +417,7 @@ In order of importance:
 3. Preserve the Llama 3.2 3B broader prompt-pack win in docs, API, and regression evidence without lending it to neighboring rows.
 4. Preserve the Llama 3 8B exact-row smoke plus checked-512/1024/2048 bounded-pack promotion in docs, API, frontend readiness, and regression evidence; do not lend any result to model-native/larger contexts or neighboring rows.
 5. Harden the supported exact rows toward full support without changing labels until the missing normalized evidence exists: model-native/larger context beyond checked packs, broader arbitrary-template coverage beyond the supported 1B metadata-Jinja row template, production throughput, portability, and durable repeated current-head bundles.
-6. Preserve and protect the supported Mistral-7B-Instruct-v0.3.Q8_0.gguf exact-row smoke lane across all surfaces.
+6. Preserve and protect the Mistral-7B-Instruct-v0.3.Q8_0.gguf active exact-row validation lane across all surfaces without promoting it to supported status.
 7. Preserve `Mixtral-8x7B-Instruct-v0.1.Q8_0.gguf` as active validation / partial backend runtime only; next promotable work is fixing later-generation divergence and the continuation hang, then rerunning row-specific API/WebUI/RSS/frontend evidence before any support/readiness claim.
 8. Keep docs, `/api/capabilities`, frontend readiness copy, and CI gates aligned with the exact-row support contract.
 9. Plan the README frontend screenshot for the UI-demo-ready moment; do not use screenshot polish to block or distract from CI/support hardening.
