@@ -10432,6 +10432,15 @@ fn softmax_top_k_renormalizes_selected_router_weights() {
 }
 
 #[test]
+fn softmax_top_k_breaks_router_ties_by_expert_id() {
+    let top = softmax_top_k(&[1.0, 1.0, 1.0, 0.0], 2);
+    assert_eq!(top[0].0, 0);
+    assert_eq!(top[1].0, 1);
+    assert!((top[0].1 - 0.5).abs() < 1.0e-6, "{top:?}");
+    assert!((top[1].1 - 0.5).abs() < 1.0e-6, "{top:?}");
+}
+
+#[test]
 fn mixtral_moe_ffn_routes_top_k_experts() {
     let input = CpuTensor::from_f32("input", vec![1, 2], vec![1.0, 1.0]).unwrap();
     let router = CpuTensor::from_f32("router", vec![2, 2], vec![10.0, 0.0, 0.0, 0.0]).unwrap();

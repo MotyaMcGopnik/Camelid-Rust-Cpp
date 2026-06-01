@@ -6781,29 +6781,55 @@ fn try_gated_ffn_activation_batch_packed_prefill_i8mm(
 }
 
 fn softmax_top_k(logits: &[f32], k: usize) -> Vec<(usize, f32)> {
-    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let mut scored = logits
+    if logits.is_empty() || k == 0 {
+        return Vec::new();
+    }
+
+    let mut selected = logits
         .iter()
         .enumerate()
-        .map(|(idx, value)| (idx, (*value - max).exp()))
+        .map(|(idx, value)| (idx, *value))
         .collect::<Vec<_>>();
-    let sum = scored.iter().map(|(_, value)| *value).sum::<f32>();
-    for (_, value) in &mut scored {
-        *value /= sum;
-    }
-    scored.sort_by(|left, right| {
+    selected.sort_by(|left, right| {
         right
             .1
-            .partial_cmp(&left.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
     });
-    scored.truncate(k);
+    selected.truncate(k.min(selected.len()));
+
+    let max = selected
+        .iter()
+        .map(|(_, value)| *value)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let mut scored = selected
+        .into_iter()
+        .map(|(idx, value)| {
+            let weight = if value.is_finite() {
+                (value - max).exp()
+            } else {
+                0.0
+            };
+            (idx, weight)
+        })
+        .collect::<Vec<_>>();
     let selected_sum = scored.iter().map(|(_, value)| *value).sum::<f32>();
     if selected_sum > 0.0 {
         for (_, value) in &mut scored {
             *value /= selected_sum;
         }
+    } else {
+        let uniform = 1.0 / scored.len() as f32;
+        for (_, value) in &mut scored {
+            *value = uniform;
+        }
     }
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
     scored
 }
 
