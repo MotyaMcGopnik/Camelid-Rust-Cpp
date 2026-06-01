@@ -925,6 +925,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(unsupported_embeddings))
         .route("/v1/responses", post(unsupported_responses))
+        .route("/v1/messages", post(unsupported_messages))
         .route("/v1/rerank", post(unsupported_reranking))
         .route("/v1/reranking", post(unsupported_reranking))
         .layer(CorsLayer::permissive())
@@ -1161,6 +1162,14 @@ async fn unsupported_responses() -> Response {
     unsupported_route(
         "unsupported_responses",
         "OpenAI Responses compatibility is not supported yet; Camelid keeps generation on /v1/completions and /v1/chat/completions until request conversion, streaming, tool, and cancellation semantics are implemented and tested",
+        Some("input"),
+    )
+}
+
+async fn unsupported_messages() -> Response {
+    unsupported_route(
+        "unsupported_messages",
+        "Anthropic Messages compatibility is not supported yet; Camelid keeps generation on /v1/completions and /v1/chat/completions until request conversion, streaming, tool, and cancellation semantics are implemented and tested",
         Some("input"),
     )
 }
@@ -1739,7 +1748,7 @@ fn capabilities_response_with_plan(execution_plan: Option<ExecutionPlan>) -> Cap
             SupportItem {
                 id: "fail_closed_native_compatibility_routes",
                 status: "unsupported",
-                notes: "Native /completion, /embedding, /embeddings, /v1/embeddings, /rerank, /reranking, /v1/rerank, /v1/reranking, /v1/responses, POST /slots, and slot cache actions return typed not_implemented errors until real route semantics and backend support exist.",
+                notes: "Native /completion, /embedding, /embeddings, /v1/embeddings, /v1/messages, /rerank, /reranking, /v1/rerank, /v1/reranking, /v1/responses, POST /slots, and slot cache actions return typed not_implemented errors until real route semantics and backend support exist.",
             },
             SupportItem {
                 id: "multi_choice_generation",

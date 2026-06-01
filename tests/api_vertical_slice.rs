@@ -137,6 +137,7 @@ async fn native_compatibility_routes_fail_closed_with_typed_errors() {
         ("POST", "/v1/rerank", "unsupported_reranking", "input"),
         ("POST", "/v1/reranking", "unsupported_reranking", "input"),
         ("POST", "/v1/responses", "unsupported_responses", "input"),
+        ("POST", "/v1/messages", "unsupported_messages", "input"),
     ];
 
     for (method, uri, code, param) in cases {
@@ -385,6 +386,7 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
             && item["notes"].as_str().unwrap().contains("/completion")
             && item["notes"].as_str().unwrap().contains("/v1/embeddings")
             && item["notes"].as_str().unwrap().contains("/v1/responses")
+            && item["notes"].as_str().unwrap().contains("/v1/messages")
             && item["notes"].as_str().unwrap().contains("POST /slots")
     }));
     let compatibility = body["model_compatibility"].as_array().unwrap();
