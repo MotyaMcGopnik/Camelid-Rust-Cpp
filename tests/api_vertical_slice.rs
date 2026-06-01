@@ -1439,6 +1439,7 @@ async fn v1_models_supports_openai_style_model_retrieve() {
     assert_eq!(body["object"], "model");
     assert_eq!(body["owned_by"], "camelid");
     assert_eq!(body["created"], 0);
+    assert_eq!(body["meta"], Value::Null);
 }
 
 #[tokio::test]
@@ -1500,6 +1501,30 @@ async fn v1_model_retrieve_reports_loaded_dense_model_shape() {
     assert_eq!(body["object"], "model");
     assert_eq!(body["owned_by"], "camelid");
     assert_eq!(body["created"], 0);
+    assert_eq!(body["meta"]["n_vocab"], 4);
+    assert_eq!(body["meta"]["n_ctx_train"], 64);
+    assert_eq!(body["meta"]["n_embd"], 4);
+    assert_eq!(body["meta"]["n_params"], 164);
+    assert_eq!(body["meta"]["file_type"], 0);
+    assert!(body["meta"]["size"].as_u64().unwrap() > 0);
+
+    let serialized = body.to_string();
+    for forbidden in [
+        "/Users/",
+        "/home/",
+        "file://",
+        "file:\\",
+        "/Volumes/",
+        "/private/tmp/",
+        "C:\\Users\\",
+        "C:/Users/",
+        "\\Users\\",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "/v1/models/:model meta must not expose local/private path marker {forbidden:?}"
+        );
+    }
 }
 
 #[tokio::test]

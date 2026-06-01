@@ -29,14 +29,16 @@ try {
   assert.match(stdout, /selected_layers=0,1/)
   assert.match(stdout, /first_stage=embedding/)
   assert.match(stdout, /last_stage=logits/)
-  assert.match(stdout, /stage_count=43/)
+  assert.match(stdout, /stage_count=44/)
 
   const trace = JSON.parse(await readFile(outputPath, 'utf8'))
   assert.equal(trace.schema, 'camelid.forward-trace.v1')
   assert.deepEqual(trace.selected_layers, [0, 1])
-  assert.equal(trace.stage_count, 43)
+  assert.equal(trace.stage_count, 44)
   assert.deepEqual(trace.prompt_token_ids, [1, 529, 29989])
+  assert.deepEqual(trace.prompt_position_ids, [0, 1, 2])
   assert.deepEqual(trace.generated_token_ids, [16301])
+  assert.deepEqual(trace.generated_position_ids, [3])
   assert.deepEqual(trace.source.known_good_token_ids, [29907])
   assert.deepEqual(trace.source.known_good_token_ids_from_text, [315])
   assert.deepEqual(trace.source.known_good_top_logprobs, [
@@ -63,6 +65,8 @@ try {
   assert.deepEqual(paths.slice(-4), ['final_hidden', 'final_norm', 'output_norm', 'logits'])
   assert.equal(paths.indexOf('layers.1.attention_input'), 20)
   assert.ok(paths.indexOf('layers.0.ffn_gate') < paths.indexOf('layers.0.ffn_activation'))
+  assert.ok(paths.indexOf('layers.1.ffn_norm') < paths.indexOf('layers.1.mixtral_moe'))
+  assert.ok(paths.indexOf('layers.1.mixtral_moe') < paths.indexOf('layers.1.ffn_gate'))
   assert.ok(paths.indexOf('layers.0.attention_q_rope') < paths.indexOf('layers.0.kv_cache_trace'))
   assert.ok(paths.indexOf('layers.0.kv_cache_trace') < paths.indexOf('layers.0.attention_trace'))
   assert.ok(paths.indexOf('layers.0.attention_trace') < paths.indexOf('layers.0.attention_context'))
@@ -101,6 +105,13 @@ try {
   assert.equal(finalNorm.reconstruction.epsilon, 0.00001)
   assert.equal(finalNorm.reconstruction.scale, 2)
 
+  const mixtralMoe = trace.stages.find(stage => stage.path === 'layers.1.mixtral_moe')
+  assert.equal(mixtralMoe.kind, 'mixtral_moe_trace')
+  assert.equal(mixtralMoe.mixtral_moe.expert_used_count, 2)
+  assert.deepEqual(mixtralMoe.mixtral_moe.rows[0].router_logits, [3.5, 1.5, -0.25])
+  assert.deepEqual(mixtralMoe.mixtral_moe.rows[0].selected_experts, [0, 1])
+  assert.deepEqual(mixtralMoe.mixtral_moe.rows[0].selected_weights, [0.88, 0.12])
+
   assert.equal(trace.output_projection[0].token_id, 16301)
   assert.equal(trace.output_projection[0].top_positive_components[0].index, 1315)
   assert.equal(trace.output_projection[1].top_negative_components[0].component, -0.37)
@@ -113,11 +124,12 @@ try {
     '--json-out', oneLayerPath,
   ], { cwd: resolve(scriptDir, '..') })
   assert.match(oneLayerStdout, /selected_layers=1/)
-  assert.match(oneLayerStdout, /stage_count=24/)
+  assert.match(oneLayerStdout, /stage_count=25/)
   const oneLayerTrace = JSON.parse(await readFile(oneLayerPath, 'utf8'))
   assert.deepEqual(oneLayerTrace.selected_layers, [1])
   assert.ok(!oneLayerTrace.stages.some(stage => stage.path.startsWith('layers.0.')))
   assert.equal(oneLayerTrace.stages[1].path, 'layers.1.attention_input')
+  assert.ok(oneLayerTrace.stages.some(stage => stage.path === 'layers.1.mixtral_moe'))
 
   await assert.rejects(
     () => execFileAsync(process.execPath, [extractScript, '--input', inputPath, '--layers', '2', '--json-out', join(tempDir, 'bad.json')], { cwd: resolve(scriptDir, '..') }),
@@ -178,7 +190,7 @@ function capture() {
 }
 
 function layer(layerIndex) {
-  return {
+  const result = {
     layer_index: layerIndex,
     residual_flow: {
       attention_input: stats([0.25 + layerIndex, -0.5]),
@@ -216,6 +228,18 @@ function layer(layerIndex) {
     ffn_down_reconstruction: reconstruction({ layout: 'descriptor', role: 'ffn_down' }),
     ffn_residual: stats([0.44 + layerIndex, -0.72]),
   }
+  if (layerIndex === 1) {
+    result.mixtral_moe = {
+      expert_used_count: 2,
+      rows: [{
+        row_index: 0,
+        router_logits: [3.5, 1.5, -0.25],
+        selected_experts: [0, 1],
+        selected_weights: [0.88, 0.12],
+      }],
+    }
+  }
+  return result
 }
 
 function stats(values) {

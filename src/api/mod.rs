@@ -291,6 +291,23 @@ pub struct ModelListItem {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: &'static str,
+    pub meta: Option<ModelListMeta>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelListMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_vocab: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_ctx_train: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_embd: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_params: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_type: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2377,7 +2394,32 @@ fn model_list_item(model: &LoadedModel) -> ModelListItem {
         object: "model",
         created: 0,
         owned_by: "camelid",
+        meta: model_list_meta(model),
     }
+}
+
+fn model_list_meta(model: &LoadedModel) -> Option<ModelListMeta> {
+    let config = model.llama_config.as_ref()?;
+    Some(ModelListMeta {
+        n_vocab: config.vocab_size,
+        n_ctx_train: Some(config.context_length),
+        n_embd: Some(config.embedding_length),
+        n_params: model_parameter_count(&model.gguf),
+        size: std::fs::metadata(&model.path)
+            .ok()
+            .map(|metadata| metadata.len()),
+        file_type: config.file_type,
+    })
+}
+
+fn model_parameter_count(gguf: &GgufFile) -> Option<u64> {
+    gguf.tensors.iter().try_fold(0u64, |total, tensor| {
+        let tensor_params = tensor
+            .dimensions
+            .iter()
+            .try_fold(1u64, |product, dim| product.checked_mul(*dim))?;
+        total.checked_add(tensor_params)
+    })
 }
 
 async fn generation_sessions(State(state): State<AppState>) -> Json<GenerationSessionListResponse> {

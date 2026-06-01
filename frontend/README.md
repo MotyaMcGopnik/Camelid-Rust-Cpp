@@ -10,6 +10,7 @@ The backend data hook is adapted for Camelid's current API surface:
 
 - checks `GET /v1/health`
 - lists `GET /v1/models`
+- treats `/v1/models` public `meta` fields as descriptive model-shape and quant metadata only; those fields must not expose local paths and must not unlock support or chat readiness by themselves
 - loads local GGUF paths through `POST /api/models/load`
 - reads the support contract from `GET /api/capabilities`
 - shows the support gate, current compatibility row, model-family/quantization evidence, and guarded API feature rows directly in chat, model setup, per-model/catalog cards, API, analytics, and system surfaces
