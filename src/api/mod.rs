@@ -441,7 +441,7 @@ pub struct LlamaServerApplyTemplateResponse {
 #[derive(Debug, Deserialize)]
 pub struct LlamaServerCompletionRequest {
     pub model: Option<String>,
-    pub prompt: Option<String>,
+    pub prompt: Option<LlamaServerCompletionPrompt>,
     pub n_predict: Option<i32>,
     pub max_tokens: Option<u32>,
     pub stream: Option<bool>,
@@ -457,6 +457,15 @@ pub struct LlamaServerCompletionRequest {
     #[serde(flatten)]
     pub unsupported_fields: HashMap<String, serde_json::Value>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum LlamaServerCompletionPrompt {
+    Text(String),
+    TokenIds(Vec<u32>),
+}
+
+type LlamaServerCompletionPromptParts = (Option<String>, Option<Vec<u32>>);
 
 #[derive(Debug, Serialize)]
 pub struct LlamaServerCompletionResponse {
@@ -1325,9 +1334,13 @@ async fn llama_server_completion(
         Ok(max_tokens) => max_tokens,
         Err(response) => return *response,
     };
+    let (prompt, camelid_prompt_token_ids) = match llama_server_completion_prompt(req.prompt) {
+        Ok(prompt) => prompt,
+        Err(response) => return *response,
+    };
     let req = GenerationSessionRequest {
         model: req.model,
-        prompt: req.prompt,
+        prompt,
         messages: None,
         max_tokens,
         stream: Some(false),
@@ -1345,7 +1358,7 @@ async fn llama_server_completion(
         chat_logprobs: None,
         top_logprobs: None,
         camelid_logit_token_ids: None,
-        camelid_prompt_token_ids: None,
+        camelid_prompt_token_ids,
         camelid_dense_diagnostics: None,
         camelid_dense_diagnostic_generated_index: None,
         unsupported_fields: req.unsupported_fields,
@@ -1427,6 +1440,24 @@ fn llama_server_completion_max_tokens(
     }
 
     Ok(n_predict_max_tokens.or(max_tokens))
+}
+
+fn llama_server_completion_prompt(
+    prompt: Option<LlamaServerCompletionPrompt>,
+) -> std::result::Result<LlamaServerCompletionPromptParts, Box<Response>> {
+    match prompt {
+        Some(LlamaServerCompletionPrompt::Text(prompt)) => Ok((Some(prompt), None)),
+        Some(LlamaServerCompletionPrompt::TokenIds(token_ids)) if token_ids.is_empty() => {
+            Err(Box::new(api_error(
+                StatusCode::BAD_REQUEST,
+                "empty_prompt_tokens",
+                "/completion prompt token-id arrays must contain at least one token".to_string(),
+                Some("prompt"),
+            )))
+        }
+        Some(LlamaServerCompletionPrompt::TokenIds(token_ids)) => Ok((None, Some(token_ids))),
+        None => Ok((None, None)),
+    }
 }
 
 async fn unsupported_llama_server_infill() -> Response {
@@ -2048,7 +2079,7 @@ fn capabilities_response_with_plan(execution_plan: Option<ExecutionPlan>) -> Cap
             SupportItem {
                 id: "llama_server_completion",
                 status: "partial",
-                notes: "POST /completion accepts a narrow non-streaming text-generation subset: prompt, n_predict/max_tokens, supported sampler fields, and stop sequences are mapped onto Camelid's existing generation path. Native stream=true chunks, slot selection, cache_prompt controls, llama-server timings shape, rich token probabilities, and full llama-server generation parity remain unsupported.",
+                notes: "POST /completion accepts a narrow non-streaming text-generation subset: text prompts, token-id prompt arrays, n_predict/max_tokens, supported sampler fields, and stop sequences are mapped onto Camelid's existing generation path. Native stream=true chunks, slot selection, cache_prompt controls, llama-server timings shape, rich token probabilities, and full llama-server generation parity remain unsupported.",
             },
             SupportItem {
                 id: "fail_closed_native_compatibility_routes",

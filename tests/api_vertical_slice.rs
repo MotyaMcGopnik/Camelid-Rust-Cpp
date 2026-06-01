@@ -468,6 +468,10 @@ async fn capabilities_report_support_contract_and_planned_lanes() {
             && item["status"] == "partial"
             && item["notes"].as_str().unwrap().contains("POST /completion")
             && item["notes"].as_str().unwrap().contains("n_predict")
+            && item["notes"]
+                .as_str()
+                .unwrap()
+                .contains("token-id prompt arrays")
             && item["notes"].as_str().unwrap().contains("non-streaming")
             && item["notes"].as_str().unwrap().contains("stream=true")
     }));
@@ -951,6 +955,51 @@ async fn llama_server_completion_maps_n_predict_before_runtime() {
     let body: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(body["error"]["code"], "model_not_loaded");
+}
+
+#[tokio::test]
+async fn llama_server_completion_accepts_token_id_prompt_arrays_before_runtime() {
+    let app = camelid::api::router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/completion")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"tiny","prompt":[1,2,3],"n_predict":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "model_not_loaded");
+}
+
+#[tokio::test]
+async fn llama_server_completion_rejects_empty_token_id_prompt_arrays_before_runtime() {
+    let app = camelid::api::router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/completion")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"tiny","prompt":[],"n_predict":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "empty_prompt_tokens");
+    assert_eq!(body["error"]["param"], "prompt");
 }
 
 #[tokio::test]
