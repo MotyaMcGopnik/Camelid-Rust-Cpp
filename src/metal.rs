@@ -33,6 +33,7 @@ struct MetalLinearKernel {
     q8_0_block_pipeline: ComputePipelineState,
     q8_0_block_simd_pipeline: ComputePipelineState,
     q8_0_block_simd_mr_pipeline: ComputePipelineState,
+    q8_0_block_simd_qmv4_pipeline: ComputePipelineState,
     rms_norm_pipeline: ComputePipelineState,
     residual_add_pipeline: ComputePipelineState,
     silu_mul_pipeline: ComputePipelineState,
@@ -380,6 +381,96 @@ kernel void q8_0_block_linear_row_simd_mr(
     float total = simd_sum(partial);
     if (lane == 0) {
         output[row] = total;
+    }
+}
+
+// MLX-layout Q8_0 GEMV: two simdgroups per threadgroup, FOUR output rows per simdgroup.
+// Each lane caches its 32-value input block (quants + scale) in registers once per block
+// iteration, then runs four independent dot-product chains against four weight-row streams:
+// 4x the outstanding weight loads and four independent accumulators per lane for memory
+// latency hiding (the layout MLX's qmv uses; results_per_simdgroup=4, no threadgroup
+// memory, no pragmas). Same per-row arithmetic as q8_0_block_linear_row_simd.
+// Requires rows % 4 == 0 (every decode projection satisfies this); callers fall back to
+// the single-row kernel otherwise.
+kernel void q8_0_block_linear_row_simd_qmv4(
+    device const float* input_scales [[buffer(0)]],
+    device const char* input_quants [[buffer(1)]],
+    device const char* weight_blocks [[buffer(2)]],
+    device float* output [[buffer(3)]],
+    constant uint& blocks_per_row [[buffer(4)]],
+    constant uint& rows [[buffer(5)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint sgs [[simdgroups_per_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    constexpr uint block_values = 32;
+    constexpr uint q8_block_bytes = 36;
+    uint row0 = (tg * sgs + sg) * 4;
+    if (row0 >= rows) return;
+    uint row_stride = blocks_per_row * q8_block_bytes;
+    uint base0 = row0 * row_stride;
+    float acc0 = 0.0;
+    float acc1 = 0.0;
+    float acc2 = 0.0;
+    float acc3 = 0.0;
+    for (uint block_idx = lane; block_idx < blocks_per_row; block_idx += 32) {
+        char xq[32];
+        uint input_base = block_idx * block_values;
+        for (uint l = 0; l < block_values; ++l) {
+            xq[l] = input_quants[input_base + l];
+        }
+        float x_scale = input_scales[block_idx];
+        uint b0 = base0 + block_idx * q8_block_bytes;
+        {
+            device const float* wsc = reinterpret_cast<device const float*>(weight_blocks + b0);
+            uint q = b0 + 4;
+            int isum = 0;
+            for (uint l = 0; l < block_values; ++l) {
+                isum += int(weight_blocks[q + l]) * int(xq[l]);
+            }
+            acc0 += float(isum) * (*wsc) * x_scale;
+        }
+        {
+            uint b = b0 + row_stride;
+            device const float* wsc = reinterpret_cast<device const float*>(weight_blocks + b);
+            uint q = b + 4;
+            int isum = 0;
+            for (uint l = 0; l < block_values; ++l) {
+                isum += int(weight_blocks[q + l]) * int(xq[l]);
+            }
+            acc1 += float(isum) * (*wsc) * x_scale;
+        }
+        {
+            uint b = b0 + 2u * row_stride;
+            device const float* wsc = reinterpret_cast<device const float*>(weight_blocks + b);
+            uint q = b + 4;
+            int isum = 0;
+            for (uint l = 0; l < block_values; ++l) {
+                isum += int(weight_blocks[q + l]) * int(xq[l]);
+            }
+            acc2 += float(isum) * (*wsc) * x_scale;
+        }
+        {
+            uint b = b0 + 3u * row_stride;
+            device const float* wsc = reinterpret_cast<device const float*>(weight_blocks + b);
+            uint q = b + 4;
+            int isum = 0;
+            for (uint l = 0; l < block_values; ++l) {
+                isum += int(weight_blocks[q + l]) * int(xq[l]);
+            }
+            acc3 += float(isum) * (*wsc) * x_scale;
+        }
+    }
+    float t0 = simd_sum(acc0);
+    float t1 = simd_sum(acc1);
+    float t2 = simd_sum(acc2);
+    float t3 = simd_sum(acc3);
+    if (lane == 0) {
+        output[row0] = t0;
+        output[row0 + 1u] = t1;
+        output[row0 + 2u] = t2;
+        output[row0 + 3u] = t3;
     }
 }
 "#;
@@ -792,6 +883,12 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
             let q8_0_block_simd_mr_pipeline = device
                 .new_compute_pipeline_state_with_function(&q8_0_block_simd_mr_function)
                 .ok()?;
+            let q8_0_block_simd_qmv4_function = library
+                .get_function("q8_0_block_linear_row_simd_qmv4", None)
+                .ok()?;
+            let q8_0_block_simd_qmv4_pipeline = device
+                .new_compute_pipeline_state_with_function(&q8_0_block_simd_qmv4_function)
+                .ok()?;
             let queue = device.new_command_queue();
             Some(MetalLinearKernel {
                 device,
@@ -803,6 +900,7 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
                 q8_0_block_pipeline,
                 q8_0_block_simd_pipeline,
                 q8_0_block_simd_mr_pipeline,
+                q8_0_block_simd_qmv4_pipeline,
                 rms_norm_pipeline,
                 residual_add_pipeline,
                 silu_mul_pipeline,
@@ -2329,11 +2427,22 @@ fn encode_q8_matmul(
     scalar: &Buffer,
     rows: usize,
 ) {
-    // SIMD-group GEMV with several rows per threadgroup (one row per SIMD group): keeps more
-    // weight reads in flight per threadgroup for better memory-latency hiding on the
-    // bandwidth-bound decode path.
+    // MLX-layout GEMV (two simdgroups per TG, four rows per simdgroup, input cached in
+    // registers, four independent accumulator chains) when rows divide evenly; otherwise the
+    // one-row-per-simdgroup kernel. Both are parity-identical per row.
     const SIMD_GROUPS_PER_TG: u64 = 2;
-    e.set_compute_pipeline_state(&k.q8_0_block_simd_mr_pipeline);
+    let qmv4 = rows.is_multiple_of(4);
+    let pipeline = if qmv4 {
+        &k.q8_0_block_simd_qmv4_pipeline
+    } else {
+        &k.q8_0_block_simd_mr_pipeline
+    };
+    let rows_per_tg = if qmv4 {
+        SIMD_GROUPS_PER_TG * 4
+    } else {
+        SIMD_GROUPS_PER_TG
+    };
+    e.set_compute_pipeline_state(pipeline);
     e.set_buffer(0, Some(scales), 0);
     e.set_buffer(1, Some(quants), 0);
     e.set_buffer(2, Some(weight), 0);
@@ -2342,7 +2451,7 @@ fn encode_q8_matmul(
     e.set_buffer(5, Some(scalar), 4);
     e.dispatch_thread_groups(
         metal::MTLSize {
-            width: (rows as u64).div_ceil(SIMD_GROUPS_PER_TG),
+            width: (rows as u64).div_ceil(rows_per_tg),
             height: 1,
             depth: 1,
         },
