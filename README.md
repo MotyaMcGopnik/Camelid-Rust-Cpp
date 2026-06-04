@@ -16,20 +16,19 @@ Same-host, same-prompt throughput snapshot on one Apple M4 (10-core GPU, 16GB un
 
 | Lane | Camelid | llama.cpp (Metal) | MLX-LM (8-bit) |
 | --- | ---: | ---: | ---: |
-| Prefill, 601-token prompt (tok/s) | **536.7** | 536.5 | 578.3 |
+| Prefill, 601-token prompt (tok/s) | **583.3** | 543.5 | 575.5 |
 | Decode, short context (tok/s) | 25.3 | 28.7 | 28.7 |
-| Time to first token, 601-token prompt | **1.19 s** | - | - |
+| Time to first token, 601-token prompt | **1.08 s** | - | - |
 
 Reading boundary, in this repository's house style:
 
-- Prefill on this row and host is **parity-level with llama.cpp**: the medians differ by less than the observed inter-round variance (roughly ±4% for both runtimes), so this table claims parity, not a win.
-- MLX-LM prompt processing is faster than both runtimes on this host in this snapshot.
-- Camelid decode currently reads below both comparators here; decode tuning is tracked separately.
+- Prefill on this row and host reads **above both comparators in every round of this session** (camelid 576.7 / 583.3 / 586.8 vs MLX-LM 575.5 / 575.4 / 579.9 and llama.cpp 543.5 / 540.5 / 543.9). The session-median margin over MLX-LM is +1.4% — larger than either runtime's observed inter-round spread in this session (camelid ±0.9%, MLX-LM ±0.4%), but narrow. This table claims a same-session win on this exact row, not a durable or general one.
+- Camelid decode currently reads below both comparators here (decode row from the prior same-host session; MLX-LM decode re-read 28.7 in this session); decode tuning is tracked separately.
 - One exact row, one host. Nothing transfers to other models, quantizations, context shapes, or machines.
 
-Full method, raw logs, and per-round detail: [`BENCHMARKS.md`](docs/benchmarks/BENCHMARKS.md) and the committed evidence bundle `qa/evidence-bundles/apple-silicon-m4-3b-q8-throughput-camelid-llamacpp-mlx-20260604T154728Z-head-b131f1a/`.
+Full method, raw logs, and per-round detail: [`BENCHMARKS.md`](docs/benchmarks/BENCHMARKS.md) and the committed evidence bundle `qa/evidence-bundles/apple-silicon-m4-3b-q8-throughput-camelid-llamacpp-mlx-20260604T201642Z-head-7311e0b/` (decode row: `...-20260604T154728Z-head-b131f1a/`).
 
-For context: at the start of the current GPU-prefill work this same 601-token prompt prefilled at ~40 tok/s (15.1 s to first token). The prefill path now runs batched per-layer dispatch, a simdgroup-matrix Q8_0 GEMM, and attention-as-batched-matmul, all greedy-token-parity-checked against the CPU reference path.
+For context: at the start of the current GPU-prefill work this same 601-token prompt prefilled at ~40 tok/s (15.1 s to first token). The prefill path now runs batched per-layer dispatch, a simdgroup-matrix Q8_0 GEMM, attention-as-batched-matmul, a final-layer cut that stops at the KV-cache writes (the discarded hidden stream is never computed), and host-side encode overlapped with GPU execution — all greedy-token-parity-checked against the CPU reference path.
 
 ## Current Release Boundary
 
