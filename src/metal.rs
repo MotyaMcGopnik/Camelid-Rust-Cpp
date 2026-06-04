@@ -6457,6 +6457,14 @@ pub struct ResidentDecodeState {
     /// Token id the previous graph's tail sampled (greedy fast path); the next call skips
     /// the CPU embedding write only when its input token matches.
     last_sampled: Option<u32>,
+    /// Signaled BY the GPU as each token graph's last command; the fast lane polls this
+    /// (a shared-memory read) instead of wait_until_completed, skipping the
+    /// completion-handler wake-up latency on the per-token critical path.
+    done_event: metal::SharedEvent,
+    /// The previously returned fast-lane graph, kept alive until the next call calls
+    /// wait_until_completed on it (its GPU work was already observed done via done_event;
+    /// the deferred wait only settles command-buffer bookkeeping off the critical path).
+    retiring: Option<PreparedToken>,
     /// Gates pre-committed token graphs; monotonically increasing values.
     gate_event: metal::SharedEvent,
     event_counter: u64,
@@ -6554,6 +6562,8 @@ impl ResidentDecodeState {
             pending: None,
             pending_signaled: false,
             last_sampled: None,
+            done_event: k.device.new_shared_event(),
+            retiring: None,
             gate_event: k.device.new_shared_event(),
             event_counter: 0,
             kv16,
@@ -6778,7 +6788,23 @@ impl ResidentDecodeState {
                 }
             }
         }
-        prepared.cb.wait_until_completed();
+        if want_sample && prepared.sampled_buf.is_some() && !trace {
+            // Settle the PREVIOUS fast-lane graph's bookkeeping (its GPU work finished at
+            // least one token ago) while this token still executes.
+            if let Some(r) = self.retiring.take() {
+                r.cb.wait_until_completed();
+            }
+            // Observe THIS graph's completion via the GPU-stamped event: a shared-memory
+            // poll, no kernel wake-up on the critical path.
+            while self.done_event.signaled_value() < prepared.event_value {
+                std::hint::spin_loop();
+            }
+        } else {
+            if let Some(r) = self.retiring.take() {
+                r.cb.wait_until_completed();
+            }
+            prepared.cb.wait_until_completed();
+        }
         if trace {
             let gpu_us = gpu_started.elapsed().as_micros();
             // True GPU-busy window from the command buffer's hardware timestamps: splits
@@ -6794,6 +6820,9 @@ impl ResidentDecodeState {
         if let Some(sampled_buf) = &prepared.sampled_buf {
             let id = unsafe { *(sampled_buf.contents() as *const u32) };
             self.last_sampled = Some(id);
+            // Keep the graph (and its scratch buffers) alive until the next call settles
+            // it; its GPU work was observed complete above.
+            self.retiring = Some(prepared);
             return Some(ResidentTokenOut::Sampled(id));
         }
         self.last_sampled = None;
@@ -7025,6 +7054,9 @@ impl ResidentDecodeState {
             _ => None,
         };
         e.end_encoding();
+        // The GPU stamps the done event as the graph's last command; the fast lane polls
+        // it to observe completion without the completion-handler wake-up.
+        cb.encode_signal_event(&self.done_event, event_value);
         // Commit NOW (still gated on the event): commandBuffer scheduling happens while the
         // previous token executes, so signaling the event later starts the GPU immediately.
         cb.commit();
@@ -8053,6 +8085,9 @@ impl Drop for ResidentDecodeState {
         // commit on the shared serial queue; release it before the session goes away.
         if let Some(stale) = self.pending.take() {
             self.release_stale(stale);
+        }
+        if let Some(r) = self.retiring.take() {
+            r.cb.wait_until_completed();
         }
     }
 }
