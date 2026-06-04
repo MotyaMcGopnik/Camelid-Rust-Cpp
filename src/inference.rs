@@ -1510,27 +1510,23 @@ impl LlamaInferenceSession {
         }
         let rms_eps = diagnostic_rms_norm_epsilon(self.config.rms_norm_epsilon)?;
         let scale = attention_score_scale_value(head_dim, diagnostic_attention_score_scale()?);
+        // CAMELID_PREFILL_TIME=1: report the CPU-side edges around the GPU command buffer.
+        let time_edges = std::env::var_os("CAMELID_PREFILL_TIME").is_some();
+        let edge_started = Instant::now();
 
         // Rope tables for every prefill position, flattened.
-        let mut cos_all = Vec::new();
-        let mut sin_all = Vec::new();
-        let mut split_half_pairing = false;
-        for pos in 0..n {
-            match rope::resident_decode_rope_tables(
-                pos,
-                head_dim,
-                &self.config,
-                weights.rope_freqs.as_ref(),
-            )? {
-                Some(t) => {
-                    cos_all.extend_from_slice(&t.cos);
-                    sin_all.extend_from_slice(&t.sin);
-                    split_half_pairing = t.split_half_pairing;
-                }
-                None => return Ok(false),
-            }
-        }
+        let (cos_all, sin_all, split_half_pairing) = match rope::resident_prefill_rope_tables(
+            n,
+            head_dim,
+            &self.config,
+            weights.rope_freqs.as_ref(),
+        )? {
+            Some(t) => t,
+            None => return Ok(false),
+        };
 
+        let rope_us = edge_started.elapsed().as_micros();
+        let session_started = Instant::now();
         let initial_positions = (n + 1).next_multiple_of(512).min(kv_cap);
         let mut session = match metal::ResidentDecodeState::new(
             n_layers,
@@ -1548,6 +1544,8 @@ impl LlamaInferenceSession {
             None => return Ok(false),
         };
 
+        let session_us = session_started.elapsed().as_micros();
+        let embed_started = Instant::now();
         let embeddings = self
             .weights
             .token_embedding
@@ -1570,11 +1568,23 @@ impl LlamaInferenceSession {
             })
             .collect();
 
+        let embed_us = embed_started.elapsed().as_micros();
+        let gpu_started = Instant::now();
         if session
             .prefill_tokens(&embeddings.data, n, &layer_views, &cos_all, &sin_all, scale)
             .is_none()
         {
             return Ok(false);
+        }
+        if time_edges {
+            eprintln!(
+                "[prefill-time] rope {:.1}ms | session {:.1}ms | embed+views {:.1}ms | prefill_tokens {:.1}ms | total {:.1}ms",
+                rope_us as f64 / 1000.0,
+                session_us as f64 / 1000.0,
+                embed_us as f64 / 1000.0,
+                gpu_started.elapsed().as_micros() as f64 / 1000.0,
+                edge_started.elapsed().as_micros() as f64 / 1000.0,
+            );
         }
         // GPU cache now holds positions 0..n; the resident decode continues this sequence.
         self.kv_cache.position = n;

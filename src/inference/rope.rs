@@ -506,6 +506,64 @@ pub(super) fn resident_decode_rope_tables(
     }))
 }
 
+/// Flattened RoPE cos/sin tables for positions `0..n_positions`, for the GPU resident
+/// prefill. Identical angle math to `resident_decode_rope_tables` (same
+/// `rope_pair_frequency` incl. llama3 scaling and `rope_freqs`, same
+/// `effective_position`), but the position-independent per-pair frequencies are derived
+/// once instead of once per position.
+pub(super) fn resident_prefill_rope_tables(
+    n_positions: usize,
+    head_dim: usize,
+    config: &LlamaModelConfig,
+    rope_freqs: Option<&CpuTensor>,
+) -> Result<Option<(Vec<f32>, Vec<f32>, bool)>> {
+    let first = match resident_decode_rope_tables(0, head_dim, config, rope_freqs)? {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    let half = first.cos.len();
+    let position_mode = diagnostic_rope_position_mode()?;
+
+    // Recover the per-pair frequencies the same way the per-position builder derives
+    // them, then sweep positions with only sin_cos in the inner loop.
+    let rope_dim = config.rope_dimension_count.unwrap_or(head_dim as u32) as usize;
+    let freq_base = config.rope_freq_base.unwrap_or(10_000.0);
+    let pairing = diagnostic_rope_pairing()?;
+    let scaling = rope_scaling_from_config(config)?;
+    let validated_freqs = rope_freqs
+        .map(|freqs| validate_rope_frequency_tensor(freqs, rope_dim))
+        .transpose()?;
+    let params = RopeParams {
+        position: 0,
+        head_count: 1,
+        head_dim,
+        rope_dim,
+        freq_base,
+        pairing,
+        direction: RopeDirection::Forward,
+        position_mode,
+        scaling,
+        rope_freqs: validated_freqs,
+    };
+    let freqs: Vec<f32> = (0..half)
+        .map(|pair| rope_pair_frequency(pair, &params))
+        .collect();
+
+    let mut cos_all = Vec::with_capacity(n_positions * half);
+    let mut sin_all = Vec::with_capacity(n_positions * half);
+    cos_all.extend_from_slice(&first.cos);
+    sin_all.extend_from_slice(&first.sin);
+    for pos in 1..n_positions {
+        let eff = position_mode.effective_position(pos) as f32;
+        for &f in &freqs {
+            let (s, c) = (eff * f).sin_cos();
+            cos_all.push(c);
+            sin_all.push(s);
+        }
+    }
+    Ok(Some((cos_all, sin_all, first.split_half_pairing)))
+}
+
 fn llama3_scaled_rope_frequency(frequency: f32, scaling: RopeScaling) -> f32 {
     let original_context_length = scaling
         .original_context_length

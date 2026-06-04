@@ -10572,3 +10572,45 @@ fn q8_0_residency_report_counts_resident_blocks_and_flags_file_backed() {
         report.violations
     );
 }
+
+#[test]
+fn resident_prefill_rope_tables_match_per_position_builder() {
+    // Llama3-scaled config so the batched builder exercises the smooth-factor path the
+    // 3B row actually uses; the claim is bit-identical tables, not approximate ones.
+    let config = LlamaModelConfig {
+        context_length: 64,
+        embedding_length: 8,
+        block_count: 1,
+        feed_forward_length: 16,
+        attention_head_count: 2,
+        attention_head_count_kv: 1,
+        rope_dimension_count: Some(8),
+        rope_freq_base: Some(500_000.0),
+        rope_scaling_type: Some("llama3".to_string()),
+        rope_scaling_factor: Some(32.0),
+        rope_scaling_original_context_length: Some(8192),
+        rope_scaling_low_freq_factor: Some(1.0),
+        rope_scaling_high_freq_factor: Some(4.0),
+        rms_norm_epsilon: 1e-6,
+        vocab_size: None,
+        file_type: None,
+        moe: None,
+    };
+    let n = 7;
+    let head_dim = 8;
+    let (cos_all, sin_all, split_half) =
+        rope::resident_prefill_rope_tables(n, head_dim, &config, None)
+            .unwrap()
+            .expect("batched tables");
+    let half = head_dim / 2;
+    assert_eq!(cos_all.len(), n * half);
+    assert_eq!(sin_all.len(), n * half);
+    for pos in 0..n {
+        let t = rope::resident_decode_rope_tables(pos, head_dim, &config, None)
+            .unwrap()
+            .expect("per-position tables");
+        assert_eq!(&cos_all[pos * half..(pos + 1) * half], &t.cos[..], "cos pos {pos}");
+        assert_eq!(&sin_all[pos * half..(pos + 1) * half], &t.sin[..], "sin pos {pos}");
+        assert_eq!(split_half, t.split_half_pairing);
+    }
+}

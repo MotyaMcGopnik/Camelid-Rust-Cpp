@@ -274,26 +274,6 @@ fn command_buffer_gpu_times_us(cb: &metal::CommandBuffer) -> (u128, u128) {
     }
 }
 
-/// IEEE 754 binary16 bits -> f32 (for reading half GPU buffers on the host).
-#[cfg(target_os = "macos")]
-fn f16_bits_to_f32(b: u16) -> f32 {
-    let sign = if b >> 15 == 1 { -1.0f32 } else { 1.0 };
-    let e = ((b >> 10) & 0x1f) as i32;
-    let m = (b & 0x3ff) as i32;
-    let v = if e == 0 {
-        (m as f32) * 2f32.powi(-24)
-    } else if e == 0x1f {
-        if m == 0 {
-            f32::INFINITY
-        } else {
-            f32::NAN
-        }
-    } else {
-        (1.0 + m as f32 / 1024.0) * 2f32.powi(e - 15)
-    };
-    sign * v
-}
-
 /// f32 -> IEEE 754 binary16 bits, round-to-nearest-even (exact for values that started as
 /// f16, which all GGUF Q8_0 scales did).
 #[cfg(target_os = "macos")]
@@ -3521,15 +3501,6 @@ fn write_buffer_bytes<T>(buffer: &Buffer, values: &[T]) {
             buffer.contents().cast::<u8>(),
             len,
         );
-    }
-}
-
-#[cfg(target_os = "macos")]
-#[cfg(target_os = "macos")]
-fn read_buffer_f32_off(buffer: &Buffer, start_elems: usize, out: &mut [f32]) {
-    unsafe {
-        let ptr = (buffer.contents() as *const f32).add(start_elems);
-        std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
     }
 }
 
@@ -6891,7 +6862,7 @@ impl ResidentDecodeState {
         cos_all: &[f32],
         sin_all: &[f32],
         scale: f32,
-    ) -> Option<Vec<f32>> {
+    ) -> Option<()> {
         if n_tokens == 0
             || self.kv16
             || !wire_weights_enabled()
@@ -6967,18 +6938,17 @@ impl ResidentDecodeState {
         let down_buf = nb(n_tokens * self.hidden * es);
         let cos_buf = nb(cos_all.len() * 4);
         let sin_buf = nb(sin_all.len() * 4);
-        if use_h16 {
-            let bits: Vec<u16> = embeddings.iter().map(|&v| f32_to_f16_bits(v)).collect();
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    bits.as_ptr() as *const u8,
-                    seq.contents() as *mut u8,
-                    bits.len() * 2,
-                );
-            }
+        // h16: memcpy raw f32 to a staging buffer; the command buffer's first dispatch
+        // converts it to the half panel on the GPU (the per-element CPU conversion cost
+        // ~3ms of wall time on a 601-token prompt).
+        let seq_f32 = if use_h16 {
+            let b = nb(n_tokens * self.hidden * 4);
+            write_buffer_f32(&b, embeddings);
+            Some(b)
         } else {
             write_buffer_f32(&seq, embeddings);
-        }
+            None
+        };
         write_buffer_f32(&cos_buf, cos_all);
         write_buffer_f32(&sin_buf, sin_all);
 
@@ -7273,8 +7243,16 @@ impl ResidentDecodeState {
                 },
             );
         };
+        if let Some(seq_f32) = &seq_f32 {
+            convert(&e, seq_f32, &seq, &n_elems, 0, n_tokens * self.hidden);
+        }
         let (cur, nxt) = (&seq, &seq_out);
         for (i, layer) in layers.iter().enumerate() {
+            // The resident prefill exists to fill the KV cache: the caller discards the
+            // hidden stream and the last prompt token re-runs through the resident
+            // single-token path. So the final layer only needs norm -> K/V GEMMs ->
+            // rope/scatter; its Q projection, attention, O, and FFN outputs are dead.
+            let last_layer = i + 1 == layers.len();
             let w = &resident[i];
             let attn_norm_buf;
             let ffn_norm_buf;
@@ -7314,7 +7292,9 @@ impl ResidentDecodeState {
                 &normf
             };
             stage!("1:norm+cvt");
-            gemm(&e, qkv_y, &w[0], &q_buf, &qkv_scalar, 0, 4, 12, q_dim);
+            if !last_layer {
+                gemm(&e, qkv_y, &w[0], &q_buf, &qkv_scalar, 0, 4, 12, q_dim);
+            }
             gemm(&e, qkv_y, &w[1], &k_buf, &qkv_scalar, 0, 8, 12, kv_dim);
             gemm(&e, qkv_y, &w[2], &v_buf, &qkv_scalar, 0, 8, 12, kv_dim);
             stage!("2:gemm_qkv");
@@ -7389,6 +7369,11 @@ impl ResidentDecodeState {
                 dispatch_rows(&e, &k.kv_scatter_batch_pipeline, kv_dim, n_tokens);
             }
             stage!("3:rope+scatter");
+            if last_layer {
+                // KV cache writes for this layer are complete; everything below only
+                // feeds the discarded hidden stream.
+                continue;
+            }
             let use_flash_attn = use_mm && self.head_dim.is_multiple_of(8) && self.head_dim <= 128;
             if use_attn_mm {
                 // Attention as two batched half GEMMs + a causal row softmax: the
@@ -7710,10 +7695,31 @@ impl ResidentDecodeState {
             stage!("9:resid+silu");
             // Attention residual wrote cur -> nxt; FFN residual wrote nxt -> cur, so this
             // layer's output is back in `cur` for the next layer.
+
+            // Commit the first layer as its own command buffer so the GPU starts (~35ms
+            // of work) while the host encodes the remaining layers (~10ms): the encode
+            // cost disappears behind GPU execution. The serial queue keeps ordering.
+            if i == 0 && !trace {
+                e.end_encoding();
+                cb.commit();
+                cb = k.queue.new_command_buffer().to_owned();
+                e = cb.new_compute_command_encoder().to_owned();
+            }
         }
         e.end_encoding();
+        let time_edges = std::env::var_os("CAMELID_PREFILL_TIME").is_some();
+        let commit_started = std::time::Instant::now();
         cb.commit();
         cb.wait_until_completed();
+        if time_edges && !trace {
+            let (busy_us, window_us) = command_buffer_gpu_times_us(&cb);
+            eprintln!(
+                "[prefill-time] commit->complete {:.1}ms | gpu busy {:.1}ms | gpu window {:.1}ms",
+                commit_started.elapsed().as_micros() as f64 / 1000.0,
+                busy_us as f64 / 1000.0,
+                window_us as f64 / 1000.0,
+            );
+        }
         if trace {
             let total: u128 = stage_us.values().sum();
             eprintln!(
@@ -7725,18 +7731,7 @@ impl ResidentDecodeState {
             }
         }
         self.filled = n_tokens;
-        let mut hidden_last = vec![0.0f32; self.hidden];
-        if use_h16 {
-            unsafe {
-                let p = (seq.contents() as *const u16).add((n_tokens - 1) * self.hidden);
-                for (idx, out) in hidden_last.iter_mut().enumerate() {
-                    *out = f16_bits_to_f32(*p.add(idx));
-                }
-            }
-        } else {
-            read_buffer_f32_off(&seq, (n_tokens - 1) * self.hidden, &mut hidden_last);
-        }
-        Some(hidden_last)
+        Some(())
     }
 
     /// Release a stale pre-committed token graph: it sits on the serial queue gated behind
@@ -7908,7 +7903,7 @@ impl ResidentDecodeState {
         _cos_all: &[f32],
         _sin_all: &[f32],
         _scale: f32,
-    ) -> Option<Vec<f32>> {
+    ) -> Option<()> {
         None
     }
 
