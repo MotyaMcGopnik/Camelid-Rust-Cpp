@@ -1515,7 +1515,7 @@ impl LlamaInferenceSession {
         let edge_started = Instant::now();
 
         // Rope tables for every prefill position, flattened.
-        let (cos_all, sin_all, split_half_pairing) = match rope::resident_prefill_rope_tables(
+        let tables = match rope::resident_prefill_rope_tables(
             n,
             head_dim,
             &self.config,
@@ -1524,6 +1524,8 @@ impl LlamaInferenceSession {
             Some(t) => t,
             None => return Ok(false),
         };
+        let (cos_all, sin_all, split_half_pairing) =
+            (tables.cos, tables.sin, tables.split_half_pairing);
 
         let rope_us = edge_started.elapsed().as_micros();
         let session_started = Instant::now();

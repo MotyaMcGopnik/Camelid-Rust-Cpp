@@ -516,7 +516,7 @@ pub(super) fn resident_prefill_rope_tables(
     head_dim: usize,
     config: &LlamaModelConfig,
     rope_freqs: Option<&CpuTensor>,
-) -> Result<Option<(Vec<f32>, Vec<f32>, bool)>> {
+) -> Result<Option<ResidentRopeTables>> {
     let first = match resident_decode_rope_tables(0, head_dim, config, rope_freqs)? {
         Some(t) => t,
         None => return Ok(None),
@@ -561,7 +561,11 @@ pub(super) fn resident_prefill_rope_tables(
             sin_all.push(s);
         }
     }
-    Ok(Some((cos_all, sin_all, first.split_half_pairing)))
+    Ok(Some(ResidentRopeTables {
+        cos: cos_all,
+        sin: sin_all,
+        split_half_pairing: first.split_half_pairing,
+    }))
 }
 
 fn llama3_scaled_rope_frequency(frequency: f32, scaling: RopeScaling) -> f32 {

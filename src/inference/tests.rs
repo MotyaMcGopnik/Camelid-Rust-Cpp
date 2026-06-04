@@ -10598,10 +10598,10 @@ fn resident_prefill_rope_tables_match_per_position_builder() {
     };
     let n = 7;
     let head_dim = 8;
-    let (cos_all, sin_all, split_half) =
-        rope::resident_prefill_rope_tables(n, head_dim, &config, None)
-            .unwrap()
-            .expect("batched tables");
+    let tables = rope::resident_prefill_rope_tables(n, head_dim, &config, None)
+        .unwrap()
+        .expect("batched tables");
+    let (cos_all, sin_all, split_half) = (tables.cos, tables.sin, tables.split_half_pairing);
     let half = head_dim / 2;
     assert_eq!(cos_all.len(), n * half);
     assert_eq!(sin_all.len(), n * half);
@@ -10609,8 +10609,16 @@ fn resident_prefill_rope_tables_match_per_position_builder() {
         let t = rope::resident_decode_rope_tables(pos, head_dim, &config, None)
             .unwrap()
             .expect("per-position tables");
-        assert_eq!(&cos_all[pos * half..(pos + 1) * half], &t.cos[..], "cos pos {pos}");
-        assert_eq!(&sin_all[pos * half..(pos + 1) * half], &t.sin[..], "sin pos {pos}");
+        assert_eq!(
+            &cos_all[pos * half..(pos + 1) * half],
+            &t.cos[..],
+            "cos pos {pos}"
+        );
+        assert_eq!(
+            &sin_all[pos * half..(pos + 1) * half],
+            &t.sin[..],
+            "sin pos {pos}"
+        );
         assert_eq!(split_half, t.split_half_pairing);
     }
 }
