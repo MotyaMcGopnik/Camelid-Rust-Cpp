@@ -72,6 +72,8 @@ struct MetalLinearKernel {
     softmax_causal_rows_pipeline: ComputePipelineState,
     rms_norm_quantize_pipeline: ComputePipelineState,
     silu_mul_quantize_pipeline: ComputePipelineState,
+    argmax_f32_greedy_pipeline: ComputePipelineState,
+    embed_row_gather_q8_wire_pipeline: ComputePipelineState,
     active_command_buffer: Mutex<Option<metal::CommandBuffer>>,
 }
 
@@ -3077,6 +3079,66 @@ kernel void attention_prefill_v2_f32(
         }
     }
 }
+
+// Greedy argmax over one logits row, matching the CPU greedy_sample exactly:
+// strict greater-than with lowest-index tie-break. One threadgroup; each thread
+// scans an ascending index stride (strict > keeps the lowest index within a
+// thread), then the tree reduction prefers the lower index on equal values.
+// NaN logits are never selected (the CPU path errors instead; the resident fast
+// path only sees logits the model just produced).
+kernel void argmax_f32_greedy(
+    device const float* logits [[buffer(0)]],
+    device uint* out_id [[buffer(1)]],
+    constant uint& count [[buffer(2)]],
+    uint tid [[thread_position_in_threadgroup]],
+    uint tg_size [[threads_per_threadgroup]]
+) {
+    threadgroup float sh_val[1024];
+    threadgroup uint sh_idx[1024];
+    float best = -INFINITY;
+    uint best_i = 0xffffffffu;
+    for (uint i = tid; i < count; i += tg_size) {
+        const float v = logits[i];
+        if (v > best) {
+            best = v;
+            best_i = i;
+        }
+    }
+    sh_val[tid] = best;
+    sh_idx[tid] = best_i;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = tg_size / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            const float ov = sh_val[tid + s];
+            const uint oi = sh_idx[tid + s];
+            if (ov > sh_val[tid] || (ov == sh_val[tid] && oi < sh_idx[tid])) {
+                sh_val[tid] = ov;
+                sh_idx[tid] = oi;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0) {
+        out_id[0] = sh_idx[0];
+    }
+}
+
+// Dequantize the sampled token's Q8_0 embedding row (wire 34-byte blocks) into the
+// f32 input buffer the next pre-encoded token graph reads. Same dequant math as the
+// CPU embedding_lookup (f16 scale -> f32, times the i8 quant), so the values are
+// bit-identical to the CPU-written embedding.
+kernel void embed_row_gather_q8_wire(
+    device const char* emb [[buffer(0)]],
+    device const uint* token_id [[buffer(1)]],
+    device float* out [[buffer(2)]],
+    constant uint& bpr [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= bpr * 32) return;
+    device const char* wb = emb + ((ulong)token_id[0] * bpr + gid / 32) * 34;
+    const float scale = float(*reinterpret_cast<device const half*>(wb));
+    out[gid] = float(wb[2 + (gid % 32)]) * scale;
+}
 "#;
 
 #[cfg(target_os = "macos")]
@@ -3272,6 +3334,18 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
             let silu_mul_quantize_pipeline = device
                 .new_compute_pipeline_state_with_function(&silu_mul_quantize_function)
                 .ok()?;
+            let argmax_f32_greedy_function = elementwise_library
+                .get_function("argmax_f32_greedy", None)
+                .ok()?;
+            let argmax_f32_greedy_pipeline = device
+                .new_compute_pipeline_state_with_function(&argmax_f32_greedy_function)
+                .ok()?;
+            let embed_row_gather_q8_wire_function = elementwise_library
+                .get_function("embed_row_gather_q8_wire", None)
+                .ok()?;
+            let embed_row_gather_q8_wire_pipeline = device
+                .new_compute_pipeline_state_with_function(&embed_row_gather_q8_wire_function)
+                .ok()?;
             let descriptor_function = library.get_function("linear_row_f32", None).ok()?;
             let descriptor_pipeline = device
                 .new_compute_pipeline_state_with_function(&descriptor_function)
@@ -3408,6 +3482,8 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
                 softmax_causal_rows_pipeline,
                 rms_norm_quantize_pipeline,
                 silu_mul_quantize_pipeline,
+                argmax_f32_greedy_pipeline,
+                embed_row_gather_q8_wire_pipeline,
                 active_command_buffer: Mutex::new(None),
             })
         })
@@ -6325,6 +6401,21 @@ pub struct LogitsStage<'a> {
     pub vocab_size: usize,
 }
 
+/// GPU-side greedy sampling stage for the resident decode fast path: the token graph's
+/// tail argmaxes the logits and gathers the sampled token's embedding row into the next
+/// graph's input buffer, so the CPU never sits between two tokens on the critical path.
+pub struct SampleStage<'a> {
+    /// Token-embedding Q8_0 blocks (36-byte CPU layout; wire-converted in the buffer cache).
+    pub embedding_blocks: &'a [u8],
+}
+
+/// What a resident forward_token call produced: the raw logits/hidden vector (CPU
+/// sampling path), or the GPU-sampled next token id (greedy fast path).
+pub enum ResidentTokenOut {
+    Data(Vec<f32>),
+    Sampled(u32),
+}
+
 /// A resident decode session that owns the on-GPU KV cache (per layer, sized to
 /// `max_positions`) and the reused hidden ping-pong buffers. A multi-token greedy decode runs
 /// each token in ONE command buffer with the KV cache persisting on the GPU across tokens --
@@ -6360,6 +6451,12 @@ pub struct ResidentDecodeState {
     /// reallocates (the encoded graph references the old buffers); a committed-but-ungated
     /// stale graph MUST be released via `release_stale` or it deadlocks the serial queue.
     pending: Option<PreparedToken>,
+    /// True when `pending` was already event-signaled (GPU-sampling fast path): its input
+    /// embedding comes from the previous graph's gather, so it may already be executing.
+    pending_signaled: bool,
+    /// Token id the previous graph's tail sampled (greedy fast path); the next call skips
+    /// the CPU embedding write only when its input token matches.
+    last_sampled: Option<u32>,
     /// Gates pre-committed token graphs; monotonically increasing values.
     gate_event: metal::SharedEvent,
     event_counter: u64,
@@ -6374,9 +6471,12 @@ pub struct ResidentDecodeState {
 struct PreparedToken {
     position: usize,
     has_logits: bool,
+    has_sample: bool,
     event_value: u64,
     cb: metal::CommandBuffer,
     logits_buf: Option<Buffer>,
+    /// GPU-sampled token id (uint), present when the graph tail runs the greedy sampler.
+    sampled_buf: Option<Buffer>,
     final_from_a: bool,
     /// Scratch buffers the encoded graph references; kept alive until completion.
     _keep: Vec<Buffer>,
@@ -6452,6 +6552,8 @@ impl ResidentDecodeState {
             mid: nb(hidden),
             filled: 0,
             pending: None,
+            pending_signaled: false,
+            last_sampled: None,
             gate_event: k.device.new_shared_event(),
             event_counter: 0,
             kv16,
@@ -6540,8 +6642,11 @@ impl ResidentDecodeState {
         position: usize,
         scale: f32,
         logits_stage: Option<LogitsStage>,
+        sample_stage: Option<SampleStage>,
+        input_token_id: u32,
         next_rope: Option<(&[f32], &[f32])>,
-    ) -> Option<Vec<f32>> {
+    ) -> Option<ResidentTokenOut> {
+        let fn_started = std::time::Instant::now();
         let half_rope = cos_t.len();
         // Grow the on-GPU KV cache if this token's position is past the current capacity.
         // Growth reallocates the cache buffers, so any pre-encoded pending graph (which
@@ -6554,6 +6659,7 @@ impl ResidentDecodeState {
             if let Some(stale) = self.pending.take() {
                 self.release_stale(stale);
             }
+            self.pending_signaled = false;
         }
         if embedding.len() != self.hidden
             || layers.len() != self.n_layers
@@ -6595,12 +6701,31 @@ impl ResidentDecodeState {
         // while the PREVIOUS token was executing on the GPU, scheduling already paid), or
         // encode inline on the first token / after invalidation. A stale pending graph is
         // committed on the serial queue gated behind its event and MUST be released.
+        // The sampling tail's embedding gather reads wire-format rows; outside wire mode
+        // prepare_token would encode no tail, so drop the stage up front to keep the
+        // pending-graph reuse check consistent with what actually gets encoded.
+        let sample_stage = if f32y_gemv_enabled() && wire_weights_enabled() {
+            sample_stage
+        } else {
+            None
+        };
+        let want_sample = sample_stage.is_some() && logits_stage.is_some();
         let pending = self.pending.take();
+        let pending_signaled = std::mem::take(&mut self.pending_signaled);
         let usable = matches!(
             &pending,
-            Some(p) if p.position == position && p.has_logits == logits_stage.is_some()
+            Some(p) if p.position == position
+                && p.has_logits == logits_stage.is_some()
+                && p.has_sample == want_sample
         );
-        let prepared = if usable {
+        // Fast path: the pending graph was already signaled last call (its input embedding
+        // comes from the previous graph's GPU-side gather). It only matches the caller's
+        // intent when the input token IS the token that gather selected; a forced different
+        // continuation re-runs the position with the CPU-written embedding (the KV scatter
+        // overwrites the same slot, so the re-run is exact).
+        let already_running =
+            usable && pending_signaled && self.last_sampled == Some(input_token_id);
+        let prepared = if usable && (already_running || !pending_signaled) {
             pending.unwrap()
         } else {
             if let Some(stale) = pending {
@@ -6614,13 +6739,16 @@ impl ResidentDecodeState {
                 position,
                 scale,
                 logits_stage.as_ref(),
+                sample_stage.as_ref(),
             )?
         };
-        // The graph's first op reads the embedding from buf_a; it is gated on the shared
-        // event, so writing the embedding and then signaling releases it instantly.
-        write_buffer_f32(&self.buf_a, embedding);
         let gpu_started = std::time::Instant::now();
-        self.gate_event.set_signaled_value(prepared.event_value);
+        if !already_running {
+            // The graph's first op reads the embedding from buf_a; it is gated on the shared
+            // event, so writing the embedding and then signaling releases it instantly.
+            write_buffer_f32(&self.buf_a, embedding);
+            self.gate_event.set_signaled_value(prepared.event_value);
+        }
         // Encode-ahead: build the NEXT token's command buffer on the CPU while this one
         // executes on the GPU (greedy decode advances one position at a time). Skipped at
         // the KV-capacity edge — growth would invalidate the encoded graph, so the next
@@ -6636,8 +6764,16 @@ impl ResidentDecodeState {
                     position + 1,
                     scale,
                     logits_stage.as_ref(),
+                    sample_stage.as_ref(),
                 ) {
                     next_encode_us = next.encode_us;
+                    // Greedy fast path: the next graph's input is produced by THIS graph's
+                    // sampling tail on the GPU timeline (serial queue order), so it can be
+                    // released now — the GPU runs token-to-token with no CPU on the path.
+                    if want_sample && next.has_sample {
+                        self.gate_event.set_signaled_value(next.event_value);
+                        self.pending_signaled = true;
+                    }
                     self.pending = Some(next);
                 }
             }
@@ -6648,17 +6784,24 @@ impl ResidentDecodeState {
             // True GPU-busy window from the command buffer's hardware timestamps: splits
             // "kernel executing" from submission/scheduling gaps inside commit_wait.
             let (gpu_busy_us, kernel_total_us) = command_buffer_gpu_times_us(&prepared.cb);
+            let pre_us = fn_started.elapsed().as_micros() - gpu_us;
             eprintln!(
-                "[resident] pos={position} layers={} encode={}us next_encode={next_encode_us}us commit_wait={gpu_us}us gpu_busy={gpu_busy_us}us kernel_window={kernel_total_us}us",
+                "[resident] pos={position} layers={} pre={pre_us}us encode={}us next_encode={next_encode_us}us commit_wait={gpu_us}us gpu_busy={gpu_busy_us}us kernel_window={kernel_total_us}us",
                 self.n_layers, prepared.encode_us,
             );
         }
         self.filled = position + 1;
+        if let Some(sampled_buf) = &prepared.sampled_buf {
+            let id = unsafe { *(sampled_buf.contents() as *const u32) };
+            self.last_sampled = Some(id);
+            return Some(ResidentTokenOut::Sampled(id));
+        }
+        self.last_sampled = None;
         if let Some(logits_buf) = prepared.logits_buf {
             let vocab = logits_stage.as_ref().map(|s| s.vocab_size).unwrap_or(0);
             let mut out = vec![0.0f32; vocab];
             read_buffer_f32(&logits_buf, &mut out);
-            return Some(out);
+            return Some(ResidentTokenOut::Data(out));
         }
         let final_buf = if prepared.final_from_a {
             &self.buf_a
@@ -6667,7 +6810,7 @@ impl ResidentDecodeState {
         };
         let mut out = vec![0.0f32; self.hidden];
         read_buffer_f32(final_buf, &mut out);
-        Some(out)
+        Some(ResidentTokenOut::Data(out))
     }
 
     /// Encode one token's full graph into an uncommitted command buffer. Everything here is
@@ -6683,12 +6826,14 @@ impl ResidentDecodeState {
         position: usize,
         scale: f32,
         logits_stage: Option<&LogitsStage>,
+        sample_stage: Option<&SampleStage>,
     ) -> Option<PreparedToken> {
         let bpr_hidden = self.hidden / 32;
         // Resolve all resident weight buffers (layer weights + optional output stage) under one
         // cache lock. They are keyed by (pointer, len), so they upload once and persist.
         let resident: Vec<[Buffer; 7]>;
         let stage_bufs: Option<(Buffer, Buffer)>;
+        let emb_buf: Option<Buffer>;
         {
             let mut cache = metal_linear_cache().lock().ok()?;
             let wire = f32y_gemv_enabled() && wire_weights_enabled();
@@ -6719,6 +6864,12 @@ impl ResidentDecodeState {
                     Some((ow, cache.weight_buffer(&k.device, s.final_norm)))
                 }
                 None => None,
+            };
+            // The sampling tail needs the wire-format weight layout for the embedding
+            // gather; outside wire mode the fast path is disabled by the caller.
+            emb_buf = match sample_stage {
+                Some(s) if wire => Some(cache.q8_wire_weight_buffer(&k.device, s.embedding_blocks)),
+                _ => None,
             };
         }
         let position_count = position + 1;
@@ -6830,6 +6981,49 @@ impl ResidentDecodeState {
         } else {
             None
         };
+        // Greedy sampling tail: argmax the logits into a 4-byte id buffer, then gather the
+        // sampled token's embedding row into buf_a — the input the NEXT pre-encoded graph
+        // reads. Both are hazard-ordered after the logits matmul by Metal's tracking.
+        let sampled_buf = match (&logits_buf, &emb_buf, logits_stage) {
+            (Some(lb), Some(eb), Some(s)) => {
+                let nb = |bytes: u64| {
+                    k.device
+                        .new_buffer(bytes, MTLResourceOptions::StorageModeShared)
+                };
+                let id_buf = nb(4);
+                let am_scalar = nb(4);
+                let eg_scalar = nb(4);
+                unsafe {
+                    *(am_scalar.contents() as *mut u32) = s.vocab_size as u32;
+                    *(eg_scalar.contents() as *mut u32) = bpr_hidden as u32;
+                }
+                e.set_compute_pipeline_state(&k.argmax_f32_greedy_pipeline);
+                e.set_buffer(0, Some(lb), 0);
+                e.set_buffer(1, Some(&id_buf), 0);
+                e.set_buffer(2, Some(&am_scalar), 0);
+                e.dispatch_thread_groups(
+                    metal::MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                    metal::MTLSize {
+                        width: 1024,
+                        height: 1,
+                        depth: 1,
+                    },
+                );
+                e.set_compute_pipeline_state(&k.embed_row_gather_q8_wire_pipeline);
+                e.set_buffer(0, Some(eb), 0);
+                e.set_buffer(1, Some(&id_buf), 0);
+                e.set_buffer(2, Some(&self.buf_a), 0);
+                e.set_buffer(3, Some(&eg_scalar), 0);
+                dispatch_1d(e, &k.embed_row_gather_q8_wire_pipeline, self.hidden);
+                keep.extend([am_scalar, eg_scalar]);
+                Some(id_buf)
+            }
+            _ => None,
+        };
         e.end_encoding();
         // Commit NOW (still gated on the event): commandBuffer scheduling happens while the
         // previous token executes, so signaling the event later starts the GPU immediately.
@@ -6838,9 +7032,11 @@ impl ResidentDecodeState {
         Some(PreparedToken {
             position,
             has_logits: logits_stage.is_some(),
+            has_sample: sampled_buf.is_some(),
             event_value,
             cb: cb.to_owned(),
             logits_buf,
+            sampled_buf,
             final_from_a: from_a,
             _keep: keep,
             encode_us,
@@ -7739,7 +7935,11 @@ impl ResidentDecodeState {
     /// to scratch that the next real token overwrites). Skipping this would deadlock the
     /// queue. Happens at most once per KV growth or sequence restart.
     fn release_stale(&mut self, stale: PreparedToken) {
-        self.gate_event.set_signaled_value(stale.event_value);
+        // A fast-path pending graph may already be signaled (pre-released); the shared
+        // event is monotonic, so only raise it when it is actually still gated.
+        if self.gate_event.signaled_value() < stale.event_value {
+            self.gate_event.set_signaled_value(stale.event_value);
+        }
         stale.cb.wait_until_completed();
     }
 
@@ -7889,8 +8089,10 @@ impl ResidentDecodeState {
         _position: usize,
         _scale: f32,
         _logits_stage: Option<LogitsStage>,
+        _sample_stage: Option<SampleStage>,
+        _input_token_id: u32,
         _next_rope: Option<(&[f32], &[f32])>,
-    ) -> Option<Vec<f32>> {
+    ) -> Option<ResidentTokenOut> {
         None
     }
 
@@ -9152,14 +9354,169 @@ mod tests {
             )
             .unwrap();
 
-            let got = session
-                .forward_token(&emb, &weights, &cos_t, &sin_t, t, scale, None, None)
-                .unwrap();
+            let got = match session
+                .forward_token(
+                    &emb, &weights, &cos_t, &sin_t, t, scale, None, None, 0, None,
+                )
+                .unwrap()
+            {
+                ResidentTokenOut::Data(v) => v,
+                ResidentTokenOut::Sampled(_) => panic!("unexpected sampled output"),
+            };
             assert_eq!(got.len(), hidden);
             for (a, b) in got.iter().zip(&expected) {
                 assert!((a - b).abs() < 1.0e-4, "token {t}: {a} != {b}");
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_argmax_greedy_matches_cpu_first_max() {
+        if !detect_metal_device().available {
+            return;
+        }
+        let k = metal_linear_kernel().expect("metal");
+        // Shapes around the real vocab plus tie/edge cases; CPU reference is the
+        // sampler's exact semantics: ascending scan, strict greater-than.
+        let cases: Vec<Vec<f32>> = vec![
+            (0..128256)
+                .map(|i| ((i * 2654435761u64 as usize) % 9973) as f32 * 0.001)
+                .collect(),
+            vec![1.0, 5.0, 5.0, 3.0, 5.0], // tie -> lowest index (1)
+            vec![7.0, 1.0, 2.0],           // max at 0
+            vec![-3.0, -1.5, -2.0],        // all negative
+            (0..1000)
+                .map(|i| if i == 999 { 10.0 } else { 0.0 })
+                .collect(), // max at end
+            vec![42.0],                    // single element
+        ];
+        for logits in cases {
+            let mut best_idx = 0usize;
+            let mut best = f32::NEG_INFINITY;
+            for (i, &v) in logits.iter().enumerate() {
+                if v > best {
+                    best = v;
+                    best_idx = i;
+                }
+            }
+            let lb = k.device.new_buffer_with_data(
+                logits.as_ptr() as *const _,
+                (logits.len() * 4) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let ib = k
+                .device
+                .new_buffer(4, MTLResourceOptions::StorageModeShared);
+            let cb_scalar = k
+                .device
+                .new_buffer(4, MTLResourceOptions::StorageModeShared);
+            unsafe { *(cb_scalar.contents() as *mut u32) = logits.len() as u32 };
+            let cb = k.queue.new_command_buffer();
+            let e = cb.new_compute_command_encoder();
+            e.set_compute_pipeline_state(&k.argmax_f32_greedy_pipeline);
+            e.set_buffer(0, Some(&lb), 0);
+            e.set_buffer(1, Some(&ib), 0);
+            e.set_buffer(2, Some(&cb_scalar), 0);
+            e.dispatch_thread_groups(
+                metal::MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                metal::MTLSize {
+                    width: 1024,
+                    height: 1,
+                    depth: 1,
+                },
+            );
+            e.end_encoding();
+            cb.commit();
+            cb.wait_until_completed();
+            let got = unsafe { *(ib.contents() as *const u32) };
+            assert_eq!(got as usize, best_idx, "len {}", logits.len());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_embed_gather_matches_cpu_dequant() {
+        if !detect_metal_device().available {
+            return;
+        }
+        let k = metal_linear_kernel().expect("metal");
+        let vocab = 7usize;
+        let hidden = 96usize; // 3 blocks per row
+        let bpr = hidden / 32;
+        // Wire blocks: f16 scale + 32 i8 quants, 34 bytes per block.
+        let mut wire = vec![0u8; vocab * bpr * 34];
+        for (b, chunk) in wire.chunks_mut(34).enumerate() {
+            let scale = f32_to_f16_bits(0.013 + b as f32 * 0.0007);
+            chunk[..2].copy_from_slice(&scale.to_le_bytes());
+            for (j, q) in chunk[2..].iter_mut().enumerate() {
+                *q = (((b * 31 + j * 7) % 255) as i32 - 127) as i8 as u8;
+            }
+        }
+        let token: u32 = 5;
+        // CPU reference: f16 scale -> f32, times the i8 quant.
+        let mut expected = vec![0.0f32; hidden];
+        for blk in 0..bpr {
+            let base = (token as usize * bpr + blk) * 34;
+            let scale_bits = u16::from_le_bytes([wire[base], wire[base + 1]]);
+            let scale = f32::from_bits({
+                // same conversion the GPU's float(half) performs
+                let h = scale_bits as u32;
+                let sign = (h & 0x8000) << 16;
+                let exp = (h >> 10) & 0x1f;
+                let man = h & 0x3ff;
+                if exp == 0 && man == 0 {
+                    sign
+                } else if exp == 0 {
+                    let mut e = 127 - 15 + 1;
+                    let mut m = man;
+                    while m & 0x400 == 0 {
+                        m <<= 1;
+                        e -= 1;
+                    }
+                    sign | ((e as u32) << 23) | ((m & 0x3ff) << 13)
+                } else {
+                    sign | ((exp + 127 - 15) << 23) | (man << 13)
+                }
+            });
+            for j in 0..32 {
+                expected[blk * 32 + j] = (wire[base + 2 + j] as i8) as f32 * scale;
+            }
+        }
+        let eb = k.device.new_buffer_with_data(
+            wire.as_ptr() as *const _,
+            wire.len() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let ib = k
+            .device
+            .new_buffer(4, MTLResourceOptions::StorageModeShared);
+        unsafe { *(ib.contents() as *mut u32) = token };
+        let ob = k
+            .device
+            .new_buffer((hidden * 4) as u64, MTLResourceOptions::StorageModeShared);
+        let sc = k
+            .device
+            .new_buffer(4, MTLResourceOptions::StorageModeShared);
+        unsafe { *(sc.contents() as *mut u32) = bpr as u32 };
+        let cb = k.queue.new_command_buffer();
+        let e = cb.new_compute_command_encoder();
+        e.set_compute_pipeline_state(&k.embed_row_gather_q8_wire_pipeline);
+        e.set_buffer(0, Some(&eb), 0);
+        e.set_buffer(1, Some(&ib), 0);
+        e.set_buffer(2, Some(&ob), 0);
+        e.set_buffer(3, Some(&sc), 0);
+        dispatch_1d(e, &k.embed_row_gather_q8_wire_pipeline, hidden);
+        e.end_encoding();
+        cb.commit();
+        cb.wait_until_completed();
+        let mut got = vec![0.0f32; hidden];
+        read_buffer_f32(&ob, &mut got);
+        assert_eq!(got, expected);
     }
 
     #[cfg(target_os = "macos")]

@@ -948,15 +948,62 @@ fn generate_run(
     input.push(first);
 
     // Decode the remaining tokens (pure decode throughput).
+    // CAMELID_DECODE_TIME=1: split per-token wall into forward / sample / other.
+    let time_decode = std::env::var_os("CAMELID_DECODE_TIME").is_some();
+    let (mut fwd_us, mut sample_us, mut steps, mut wall_us) = (0u128, 0u128, 0u64, 0u128);
+    let (mut emb_us, mut layers_us) = (0u128, 0u128);
+    let greedy = matches!(sampler, LlamaSampler::Greedy)
+        && std::env::var_os("CAMELID_NO_GPU_SAMPLE").is_none();
     let decode_start = Instant::now();
     while !finished && generated.len() < max_tokens {
-        let step = session.generate_next_token_with_history_diagnostics(
-            &input,
-            sampler.clone(),
-            &history,
-            false,
-        )?;
-        let next = step.next_token_id;
+        let step_started = Instant::now();
+        // Greedy decode rides the resident fast lane (GPU argmax + embedding gather,
+        // next graph pre-released); anything else takes the general sampling path.
+        let next = if greedy {
+            match session.generate_next_token_greedy_resident(input[0])? {
+                Some((id, forward_us)) => {
+                    if time_decode {
+                        wall_us += step_started.elapsed().as_micros();
+                        fwd_us += forward_us;
+                        steps += 1;
+                    }
+                    id
+                }
+                None => {
+                    let step = session.generate_next_token_with_history_diagnostics(
+                        &input,
+                        sampler.clone(),
+                        &history,
+                        false,
+                    )?;
+                    if time_decode {
+                        wall_us += step_started.elapsed().as_micros();
+                        fwd_us += step.timings.total;
+                        sample_us += step.sample;
+                        emb_us += step.timings.embedding;
+                        layers_us += step.timings.layers_total;
+                        steps += 1;
+                    }
+                    step.next_token_id
+                }
+            }
+        } else {
+            let step = session.generate_next_token_with_history_diagnostics(
+                &input,
+                sampler.clone(),
+                &history,
+                false,
+            )?;
+            if time_decode {
+                wall_us += step_started.elapsed().as_micros();
+                fwd_us += step.timings.total;
+                sample_us += step.sample;
+                emb_us += step.timings.embedding;
+                layers_us += step.timings.layers_total;
+                steps += 1;
+            }
+            step.next_token_id
+        };
         generated.push(next);
         history.push(next);
         finished = tokenizer.special.eog.contains(&next);
@@ -964,6 +1011,18 @@ fn generate_run(
         input.push(next);
     }
     let decode_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
+    if time_decode && steps > 0 {
+        eprintln!(
+            "[decode-time] per token: step wall {:.2}ms | forward {:.2}ms (embed {:.3} layers {:.2}) | sample {:.2}ms | in-step other {:.2}ms | loop other {:.2}ms",
+            wall_us as f64 / steps as f64 / 1000.0,
+            fwd_us as f64 / steps as f64 / 1000.0,
+            emb_us as f64 / steps as f64 / 1000.0,
+            layers_us as f64 / steps as f64 / 1000.0,
+            sample_us as f64 / steps as f64 / 1000.0,
+            (wall_us - fwd_us - sample_us) as f64 / steps as f64 / 1000.0,
+            (decode_start.elapsed().as_micros() - wall_us) as f64 / steps as f64 / 1000.0,
+        );
+    }
 
     Ok(GenerationRun {
         generated,

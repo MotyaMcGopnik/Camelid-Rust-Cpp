@@ -1345,6 +1345,9 @@ pub struct LlamaGenerationStep {
 enum ResidentForward {
     Hidden(CpuTensor),
     Logits(CpuTensor),
+    /// GPU-sampled next token id (greedy fast path): argmax + next-embedding gather ran on
+    /// the GPU; no logits crossed back to the CPU.
+    Sampled(u32),
 }
 
 pub struct LlamaInferenceSession {
@@ -1597,10 +1600,54 @@ impl LlamaInferenceSession {
     /// Run the whole token forward on the GPU resident-decode session. Returns Some(hidden) on
     /// success (the caller applies the existing final norm + output projection), or None to fall
     /// back to the CPU layer loop (ineligible config, unsupported RoPE, or Metal unavailable).
+    /// Greedy-only resident decode fast lane: forward ONE token and return the next token
+    /// id sampled ON the GPU. The token graph's tail runs the argmax (exactly
+    /// `LlamaSampler::Greedy`: strict greater-than, lowest-index tie-break) and gathers the
+    /// sampled token's embedding row into the next pre-encoded graph's input, and that next
+    /// graph is event-released before this one finishes — so consecutive tokens run
+    /// back-to-back on the GPU with no logits readback or CPU sampling on the critical
+    /// path. Returns Ok(None) when the resident fast path is unavailable (the caller falls
+    /// back to the general path, which this call then leaves untouched).
+    pub fn generate_next_token_greedy_resident(
+        &mut self,
+        token_id: u32,
+    ) -> Result<Option<(u32, u128)>> {
+        if !self.kv_cache.can_append() {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "KV cache is full at context length {}",
+                self.kv_cache.plan.max_sequence_length
+            )));
+        }
+        let started = Instant::now();
+        let embedding = self
+            .weights
+            .token_embedding
+            .embedding_lookup(&[token_id], "token_embedding")?;
+        match self.try_resident_decode_forward(&embedding, true, Some(token_id))? {
+            Some(ResidentForward::Sampled(id)) => {
+                self.kv_cache.position += 1;
+                Ok(Some((id, started.elapsed().as_micros())))
+            }
+            // The resident forward ran (KV advanced on the GPU) but without the sampling
+            // tail (e.g. non-wire weight mode): finish with the CPU greedy sampler rather
+            // than falling back, which would re-run the position.
+            Some(ResidentForward::Logits(logits)) => {
+                self.kv_cache.position += 1;
+                let id = LlamaSampler::Greedy.sample(&logits)?;
+                Ok(Some((id, started.elapsed().as_micros())))
+            }
+            Some(ResidentForward::Hidden(_)) => Err(BackendError::RuntimeShapeMismatch(
+                "resident decode returned hidden state where logits were requested".to_string(),
+            )),
+            None => Ok(None),
+        }
+    }
+
     fn try_resident_decode_forward(
         &mut self,
         embedding: &CpuTensor,
         compute_logits: bool,
+        gpu_sample_token: Option<u32>,
     ) -> Result<Option<ResidentForward>> {
         if !self.resident_decode_eligible(compute_logits)? {
             return Ok(None);
@@ -1720,6 +1767,23 @@ impl LlamaInferenceSession {
             None
         };
 
+        // GPU-side greedy sampling stage: only when the caller asked for it, logits run on
+        // the GPU, and the token embedding table is plain Q8_0 (the gather reads its rows).
+        let sample_stage = match gpu_sample_token {
+            Some(_) if compute_logits => weights
+                .token_embedding
+                .q8_0_blocks
+                .as_ref()
+                .filter(|blocks| {
+                    weights.token_embedding.source_type == Some(GgufTensorType::Q8_0)
+                        && q8_0_blocks_as_bytes(blocks).len() == vocab * (hidden / 32) * 36
+                })
+                .map(|blocks| metal::SampleStage {
+                    embedding_blocks: q8_0_blocks_as_bytes(blocks),
+                }),
+            _ => None,
+        };
+
         // Rope tables for position+1 feed the encode-ahead pipeline: the session encodes
         // the NEXT token's command buffer while this token executes on the GPU.
         let next_tables = rope::resident_decode_rope_tables(
@@ -1740,6 +1804,8 @@ impl LlamaInferenceSession {
             position,
             scale,
             logits_stage,
+            sample_stage,
+            gpu_sample_token.unwrap_or(u32::MAX),
             next_tables
                 .as_ref()
                 .map(|t| (t.cos.as_slice(), t.sin.as_slice())),
@@ -1747,18 +1813,18 @@ impl LlamaInferenceSession {
             Some(o) => o,
             None => return Ok(None),
         };
-        if compute_logits {
-            Ok(Some(ResidentForward::Logits(CpuTensor::from_f32(
-                "resident_logits",
-                vec![1, vocab],
-                out,
-            )?)))
-        } else {
-            Ok(Some(ResidentForward::Hidden(CpuTensor::from_f32(
-                "resident_hidden",
-                vec![1, hidden],
-                out,
-            )?)))
+        match out {
+            metal::ResidentTokenOut::Sampled(id) => Ok(Some(ResidentForward::Sampled(id))),
+            metal::ResidentTokenOut::Data(out) if compute_logits => {
+                Ok(Some(ResidentForward::Logits(CpuTensor::from_f32(
+                    "resident_logits",
+                    vec![1, vocab],
+                    out,
+                )?)))
+            }
+            metal::ResidentTokenOut::Data(out) => Ok(Some(ResidentForward::Hidden(
+                CpuTensor::from_f32("resident_hidden", vec![1, hidden], out)?,
+            ))),
         }
     }
 
@@ -1907,7 +1973,7 @@ impl LlamaInferenceSession {
         // prefill and ineligible configs take the CPU chunk path below.
         if seq_len == 1 {
             if let Some(ResidentForward::Hidden(out)) =
-                self.try_resident_decode_forward(hidden, false)?
+                self.try_resident_decode_forward(hidden, false, None)?
             {
                 self.kv_cache.position += 1;
                 return Ok(out);
@@ -2350,7 +2416,7 @@ impl LlamaInferenceSession {
             // would swallow the distributed worker dispatch inside the layer loop below.
             None
         } else {
-            self.try_resident_decode_forward(&hidden, compute_logits)?
+            self.try_resident_decode_forward(&hidden, compute_logits, None)?
         };
         // When the resident path also produced logits on the GPU, carry them here and skip the
         // CPU final norm + output projection below.
@@ -2359,6 +2425,14 @@ impl LlamaInferenceSession {
             match resident {
                 ResidentForward::Logits(l) => resident_logits = Some(l),
                 ResidentForward::Hidden(h) => hidden = h,
+                // Only produced when a caller requests GPU sampling, which this general
+                // path never does (it returns logits to its callers).
+                ResidentForward::Sampled(_) => {
+                    return Err(BackendError::RuntimeShapeMismatch(
+                        "unexpected GPU-sampled token in the logits-returning forward path"
+                            .to_string(),
+                    ))
+                }
             }
         } else {
             for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
