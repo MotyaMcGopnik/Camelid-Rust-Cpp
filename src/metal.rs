@@ -74,6 +74,7 @@ struct MetalLinearKernel {
     silu_mul_quantize_pipeline: ComputePipelineState,
     argmax_f32_greedy_pipeline: ComputePipelineState,
     attention_decode_splitk_pipeline: ComputePipelineState,
+    attention_decode_splitk_kv16_pipeline: ComputePipelineState,
     attention_decode_splitk_merge_pipeline: ComputePipelineState,
     embed_row_gather_q8_wire_pipeline: ComputePipelineState,
     active_command_buffer: Mutex<Option<metal::CommandBuffer>>,
@@ -1749,6 +1750,102 @@ kernel void attention_decode_splitk_merge_f32(
     }
 }
 
+// f16-KV twin of attention_decode_splitk_f32: reads the half K/V mirrors (half the
+// device traffic of the f32 caches — the dominant cost at depth) and converts to f32
+// in the staged tiles, so the flash math after staging is identical.
+kernel void attention_decode_splitk_kv16(
+    device const float* query [[buffer(0)]],
+    device const half* keys [[buffer(1)]],
+    device const half* values [[buffer(2)]],
+    device float* partials [[buffer(3)]], // [n_heads][n_splits][head_dim + 2]
+    constant uint& n_heads [[buffer(5)]],
+    constant uint& head_dim [[buffer(6)]],
+    constant uint& position_count [[buffer(7)]],
+    constant uint& group [[buffer(8)]],
+    constant float& scale [[buffer(9)]],
+    constant uint& position_stride [[buffer(10)]],
+    constant uint& kv_head_stride [[buffer(11)]],
+    constant uint& kv_base_offset [[buffer(12)]],
+    constant uint& n_splits [[buffer(13)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    constexpr uint PT = 8;
+    constexpr uint MAX_DPL = 4;
+    const uint kvh = tg.x;
+    const uint split = tg.y;
+    const uint dpl = head_dim / 32;
+    const uint kv_base = kv_base_offset + kvh * kv_head_stride;
+    const uint chunk = (position_count + n_splits - 1) / n_splits;
+    const uint p0 = min(split * chunk, position_count);
+    const uint p1 = min(p0 + chunk, position_count);
+
+    const uint qh = kvh * group + sg;
+    const bool active = sg < group && qh < n_heads;
+    float q[MAX_DPL];
+    if (active) {
+        for (uint i = 0; i < dpl; ++i) {
+            q[i] = query[qh * head_dim + lane + i * 32] * scale;
+        }
+    }
+    float m = -INFINITY;
+    float l = 0.0f;
+    float acc[MAX_DPL] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    threadgroup float k_s[PT * 128];
+    threadgroup float v_s[PT * 128];
+    const uint tid = sg * 32 + lane;
+    for (uint pt = p0; pt < p1; pt += PT) {
+        const uint count = min(PT, p1 - pt);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // Vectorized half4 loads: scalar 2-byte loads halve effective bus width and
+        // erase the kv16 bandwidth win (head_dim is a multiple of 4 by the v2 gate).
+        for (uint idx4 = tid; idx4 < (count * head_dim) / 4; idx4 += 128) {
+            const uint e4 = idx4 * 4;
+            const uint p = e4 / head_dim;
+            const uint d = e4 % head_dim;
+            const uint base = kv_base + (pt + p) * position_stride + d;
+            const half4 kk = *reinterpret_cast<device const half4*>(keys + base);
+            const half4 vv = *reinterpret_cast<device const half4*>(values + base);
+            threadgroup float* ks = k_s + p * head_dim + d;
+            threadgroup float* vs = v_s + p * head_dim + d;
+            for (uint j = 0; j < 4; ++j) {
+                ks[j] = float(kk[j]);
+                vs[j] = float(vv[j]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (active) {
+            for (uint j = 0; j < count; ++j) {
+                float s = 0.0f;
+                for (uint i = 0; i < dpl; ++i) {
+                    s += q[i] * k_s[j * head_dim + lane + i * 32];
+                }
+                s = simd_sum(s);
+                const float m_new = max(m, s);
+                const float w = exp(s - m_new);
+                const float corr = exp(m - m_new);
+                for (uint i = 0; i < dpl; ++i) {
+                    acc[i] = acc[i] * corr + w * v_s[j * head_dim + lane + i * 32];
+                }
+                l = l * corr + w;
+                m = m_new;
+            }
+        }
+    }
+    if (active) {
+        device float* dst = partials + ((ulong)qh * n_splits + split) * (head_dim + 2);
+        for (uint i = 0; i < dpl; ++i) {
+            dst[lane + i * 32] = acc[i];
+        }
+        if (lane == 0) {
+            dst[head_dim] = m;
+            dst[head_dim + 1] = l;
+        }
+    }
+}
+
 // f16-KV twin of attention_decode_v2_f32.
 kernel void attention_decode_v2_kv16(
     device const float* query [[buffer(0)]],
@@ -1955,6 +2052,9 @@ kernel void kv_scatter_f32(
     constant uint& max_positions [[buffer(5)]],
     constant uint& write_position [[buffer(6)]],
     constant uint& total [[buffer(7)]],
+    device half* cache_k16 [[buffer(8)]],
+    device half* cache_v16 [[buffer(9)]],
+    constant uint& write_kv16 [[buffer(10)]],
     uint i [[thread_position_in_grid]]
 ) {
     if (i >= total) return;
@@ -1963,6 +2063,12 @@ kernel void kv_scatter_f32(
     uint dst = (h * max_positions + write_position) * head_dim + d;
     cache_k[dst] = src_k[i];
     cache_v[dst] = src_v[i];
+    // Half mirrors feed the split-K kv16 decode attention; outside that mode the host
+    // binds placeholders and the flag is 0 (see kv_scatter_batch_f32 for the OOB story).
+    if (write_kv16 != 0) {
+        cache_k16[dst] = half(src_k[i]);
+        cache_v16[dst] = half(src_v[i]);
+    }
 }
 
 // f16-KV variant: the cache stores half-precision K/V (half the bytes per token read back
@@ -3482,6 +3588,12 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
             let attention_decode_splitk_pipeline = device
                 .new_compute_pipeline_state_with_function(&attention_decode_splitk_function)
                 .ok()?;
+            let attention_decode_splitk_kv16_function = elementwise_library
+                .get_function("attention_decode_splitk_kv16", None)
+                .ok()?;
+            let attention_decode_splitk_kv16_pipeline = device
+                .new_compute_pipeline_state_with_function(&attention_decode_splitk_kv16_function)
+                .ok()?;
             let attention_decode_splitk_merge_function = elementwise_library
                 .get_function("attention_decode_splitk_merge_f32", None)
                 .ok()?;
@@ -3638,6 +3750,7 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
                 silu_mul_quantize_pipeline,
                 argmax_f32_greedy_pipeline,
                 attention_decode_splitk_pipeline,
+                attention_decode_splitk_kv16_pipeline,
                 attention_decode_splitk_merge_pipeline,
                 embed_row_gather_q8_wire_pipeline,
                 active_command_buffer: Mutex::new(None),
@@ -5565,6 +5678,7 @@ fn encode_attention(
     query: &Buffer,
     keys: &Buffer,
     values: &Buffer,
+    kv16_mirrors: Option<(&Buffer, &Buffer)>,
     scores: &Buffer,
     out: &Buffer,
     scalar: &Buffer,
@@ -5599,10 +5713,23 @@ fn encode_attention(
         unsafe {
             *(splits_scalar.contents() as *mut u32) = n_splits as u32;
         }
-        e.set_compute_pipeline_state(&k.attention_decode_splitk_pipeline);
-        e.set_buffer(0, Some(query), 0);
-        e.set_buffer(1, Some(keys), 0);
-        e.set_buffer(2, Some(values), 0);
+        // Half-mirror reads halve the dominant KV traffic at depth; opt out with
+        // CAMELID_METAL_ATTN_SPLITK_KV16=0 to keep the f32 split-K reads.
+        let use_mirrors = kv16_mirrors.is_some()
+            && !std::env::var("CAMELID_METAL_ATTN_SPLITK_KV16")
+                .is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false"));
+        if use_mirrors {
+            let (mk, mv) = kv16_mirrors.expect("checked is_some above");
+            e.set_compute_pipeline_state(&k.attention_decode_splitk_kv16_pipeline);
+            e.set_buffer(0, Some(query), 0);
+            e.set_buffer(1, Some(mk), 0);
+            e.set_buffer(2, Some(mv), 0);
+        } else {
+            e.set_compute_pipeline_state(&k.attention_decode_splitk_pipeline);
+            e.set_buffer(0, Some(query), 0);
+            e.set_buffer(1, Some(keys), 0);
+            e.set_buffer(2, Some(values), 0);
+        }
         e.set_buffer(3, Some(&partials), 0);
         e.set_buffer(5, Some(scalar), 0); // n_heads
         e.set_buffer(6, Some(scalar), 4); // head_dim
@@ -5854,6 +5981,7 @@ fn encode_attention_block(
     sin_t: &[f32],
     cache_k_buf: &Buffer,
     cache_v_buf: &Buffer,
+    kv16_mirrors: Option<(&Buffer, &Buffer)>,
     max_positions: usize,
     write_position: usize,
     n_heads: usize,
@@ -6033,6 +6161,19 @@ fn encode_attention_block(
     e.set_buffer(5, Some(&scatter_scalar), 4);
     e.set_buffer(6, Some(&scatter_scalar), 8);
     e.set_buffer(7, Some(&scatter_scalar), 12);
+    if !kv16_enabled() {
+        // Dual-write the half mirrors when the session maintains them; otherwise bind
+        // placeholders with the flag at 0 (the kernel never dereferences them).
+        let kv16_write = nb(4);
+        unsafe {
+            *(kv16_write.contents() as *mut u32) = u32::from(kv16_mirrors.is_some());
+        }
+        let (mk, mv) = kv16_mirrors.unwrap_or((&scatter_scalar, &scatter_scalar));
+        e.set_buffer(8, Some(mk), 0);
+        e.set_buffer(9, Some(mv), 0);
+        e.set_buffer(10, Some(&kv16_write), 0);
+        keep.push(kv16_write);
+    }
     dispatch_1d(e, scatter_pipeline, kv_dim);
     encode_attention(
         e,
@@ -6041,6 +6182,7 @@ fn encode_attention_block(
         &query_buf,
         cache_k_buf,
         cache_v_buf,
+        kv16_mirrors,
         &scores_buf,
         &ctx_buf,
         &attn_scalar,
@@ -6289,6 +6431,7 @@ pub fn try_attention_block_resident(
         sin_t,
         &cache_k_buf,
         &cache_v_buf,
+        None,
         position_count,
         position_count - 1,
         n_heads,
@@ -6414,6 +6557,7 @@ pub fn try_decode_layer_resident(
         sin_t,
         &cache_k_buf,
         &cache_v_buf,
+        None,
         position_count,
         position_count - 1,
         n_heads,
@@ -6580,6 +6724,7 @@ pub fn try_decode_forward_resident(
             sin_t,
             &cache_k_buf,
             &cache_v_buf,
+            None,
             position_count,
             position_count - 1,
             n_heads,
@@ -6680,6 +6825,12 @@ pub struct ResidentDecodeState {
     split_half_pairing: bool,
     cache_k: Vec<Buffer>,
     cache_v: Vec<Buffer>,
+    /// Half-precision mirrors of cache_k/cache_v (empty in kv16-primary mode, where the
+    /// primary caches are already half). Dual-written by the prefill and per-token
+    /// scatters; read by the split-K kv16 decode attention, which halves the dominant
+    /// KV traffic at depth. Zero-filled at allocation/growth so padded positions read 0.
+    cache_k16: Vec<Buffer>,
+    cache_v16: Vec<Buffer>,
     buf_a: Buffer,
     buf_b: Buffer,
     mid: Buffer,
@@ -6784,6 +6935,24 @@ impl ResidentDecodeState {
         };
         let cache_k = (0..n_layers).map(|_| kvb(kv_slots)).collect();
         let cache_v = (0..n_layers).map(|_| kvb(kv_slots)).collect();
+        // Half mirrors for the split-K kv16 decode attention (skip in kv16-primary
+        // mode, where the primary caches are already half). Zero-filled so padded
+        // positions read 0 in the attention kernels.
+        let kvb16 = |slots: usize| {
+            let b = k
+                .device
+                .new_buffer((slots * 2) as u64, MTLResourceOptions::StorageModeShared);
+            unsafe { std::ptr::write_bytes(b.contents() as *mut u8, 0, slots * 2) };
+            b
+        };
+        let (cache_k16, cache_v16) = if kv16 {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                (0..n_layers).map(|_| kvb16(kv_slots)).collect(),
+                (0..n_layers).map(|_| kvb16(kv_slots)).collect(),
+            )
+        };
         Some(Self {
             n_layers,
             n_heads,
@@ -6797,6 +6966,8 @@ impl ResidentDecodeState {
             split_half_pairing,
             cache_k,
             cache_v,
+            cache_k16,
+            cache_v16,
             buf_a: nb(hidden),
             buf_b: nb(hidden),
             mid: nb(hidden),
@@ -6846,6 +7017,23 @@ impl ResidentDecodeState {
                 )
             })
             .collect();
+        let mirror = |_| {
+            let b = k
+                .device
+                .new_buffer((kv_slots * 2) as u64, MTLResourceOptions::StorageModeShared);
+            unsafe { std::ptr::write_bytes(b.contents() as *mut u8, 0, kv_slots * 2) };
+            b
+        };
+        let new_k16: Vec<Buffer> = if self.kv16 {
+            Vec::new()
+        } else {
+            (0..self.n_layers).map(mirror).collect()
+        };
+        let new_v16: Vec<Buffer> = if self.kv16 {
+            Vec::new()
+        } else {
+            (0..self.n_layers).map(mirror).collect()
+        };
         if self.filled > 0 {
             let run = (self.filled * self.head_dim * kv_elem) as u64;
             let cb = k.queue.new_command_buffer();
@@ -6856,6 +7044,25 @@ impl ResidentDecodeState {
                     let dst = (h * new_max * self.head_dim * kv_elem) as u64;
                     blit.copy_from_buffer(&self.cache_k[layer], src, &new_k[layer], dst, run);
                     blit.copy_from_buffer(&self.cache_v[layer], src, &new_v[layer], dst, run);
+                    if !self.kv16 {
+                        let run16 = (self.filled * self.head_dim * 2) as u64;
+                        let src16 = (h * self.max_positions * self.head_dim * 2) as u64;
+                        let dst16 = (h * new_max * self.head_dim * 2) as u64;
+                        blit.copy_from_buffer(
+                            &self.cache_k16[layer],
+                            src16,
+                            &new_k16[layer],
+                            dst16,
+                            run16,
+                        );
+                        blit.copy_from_buffer(
+                            &self.cache_v16[layer],
+                            src16,
+                            &new_v16[layer],
+                            dst16,
+                            run16,
+                        );
+                    }
                 }
             }
             blit.end_encoding();
@@ -6864,6 +7071,8 @@ impl ResidentDecodeState {
         }
         self.cache_k = new_k;
         self.cache_v = new_v;
+        self.cache_k16 = new_k16;
+        self.cache_v16 = new_v16;
         self.max_positions = new_max;
         true
     }
@@ -7175,6 +7384,11 @@ impl ResidentDecodeState {
                 sin_t,
                 &self.cache_k[i],
                 &self.cache_v[i],
+                if self.kv16 {
+                    None
+                } else {
+                    Some((&self.cache_k16[i], &self.cache_v16[i]))
+                },
                 self.max_positions,
                 position,
                 self.n_heads,
@@ -7519,23 +7733,16 @@ impl ResidentDecodeState {
         // only feed output columns past n_tokens, which are never stored).
         // Attention-as-matmul scratch (prompts short enough to materialize S):
         // half K/V copies, half Q, half S scores and P probabilities per head.
-        let kv16_len = self.n_kv_heads * self.max_positions * self.head_dim * 2;
-        let cache_k16 = nb(if use_attn_mm { kv16_len } else { 2 });
-        let cache_v16 = nb(if use_attn_mm { kv16_len } else { 2 });
-        // Tells kv_scatter_batch whether the half KV mirrors above are real buffers.
+        // Half KV mirrors are persistent per-layer session buffers (zero-filled at
+        // allocation/growth): the attention-as-matmul prefill consumes them, the fallback
+        // path's scatter fills them, and the split-K kv16 decode attention reads them.
+        // The half KV mirrors are always real session buffers on this path (resident
+        // prefill requires !kv16-primary), so the scatter always fills them.
         let kv16_flag = nb(4);
         unsafe {
-            *(kv16_flag.contents() as *mut u32) = u32::from(use_attn_mm);
+            *(kv16_flag.contents() as *mut u32) = 1u32;
         }
-        if use_attn_mm {
-            // Zero-fill: the PV pass's k-range covers padded positions the scatter
-            // never writes; uninitialized halfs there can be NaN/Inf and 0 x NaN
-            // poisons the MMA accumulators.
-            unsafe {
-                std::ptr::write_bytes(cache_k16.contents() as *mut u8, 0, kv16_len);
-                std::ptr::write_bytes(cache_v16.contents() as *mut u8, 0, kv16_len);
-            }
-        }
+
         let q_h = nb(if use_attn_mm { n_pad * q_dim * 2 } else { 2 });
         let s_big = nb(if use_attn_mm {
             self.n_heads * n_pad * n_pad * 2
@@ -7787,8 +7994,8 @@ impl ResidentDecodeState {
                 e.set_buffer(3, Some(&q_h), 0);
                 e.set_buffer(4, Some(&self.cache_k[i]), 0);
                 e.set_buffer(5, Some(&self.cache_v[i]), 0);
-                e.set_buffer(6, Some(&cache_k16), 0);
-                e.set_buffer(7, Some(&cache_v16), 0);
+                e.set_buffer(6, Some(&self.cache_k16[i]), 0);
+                e.set_buffer(7, Some(&self.cache_v16[i]), 0);
                 e.set_buffer(8, Some(&cos_buf), 0);
                 e.set_buffer(9, Some(&sin_buf), 0);
                 for j in 0..6u64 {
@@ -7839,8 +8046,8 @@ impl ResidentDecodeState {
                 for j in 0..4u64 {
                     e.set_buffer(4 + j, Some(&scatter_scalar), j * 4);
                 }
-                e.set_buffer(8, Some(&cache_k16), 0);
-                e.set_buffer(9, Some(&cache_v16), 0);
+                e.set_buffer(8, Some(&self.cache_k16[i]), 0);
+                e.set_buffer(9, Some(&self.cache_v16[i]), 0);
                 e.set_buffer(10, Some(&kv16_flag), 0);
                 dispatch_rows(&e, &k.kv_scatter_batch_pipeline, kv_dim, n_tokens);
             }
@@ -7929,7 +8136,7 @@ impl ResidentDecodeState {
                 };
                 smm(
                     &e,
-                    &cache_k16,
+                    &self.cache_k16[i],
                     &q_h,
                     &s_big,
                     0,
@@ -7966,7 +8173,7 @@ impl ResidentDecodeState {
                 );
                 // Transpose this layer's V slice so the PV A-staging is contiguous.
                 e.set_compute_pipeline_state(&k.transpose_v16_pipeline);
-                e.set_buffer(0, Some(&cache_v16), 0);
+                e.set_buffer(0, Some(&self.cache_v16[i]), 0);
                 e.set_buffer(1, Some(&vt_scratch), 0);
                 for j in 0..4u64 {
                     e.set_buffer(2 + j, Some(&vt_scalar), j * 4);
@@ -8271,6 +8478,26 @@ impl ResidentDecodeState {
             seed_positions,
             self.kv16,
         );
+        if !self.kv16 {
+            Self::seed_into(
+                &self.cache_k16[layer],
+                keys,
+                self.n_kv_heads,
+                self.max_positions,
+                self.head_dim,
+                seed_positions,
+                true,
+            );
+            Self::seed_into(
+                &self.cache_v16[layer],
+                values,
+                self.n_kv_heads,
+                self.max_positions,
+                self.head_dim,
+                seed_positions,
+                true,
+            );
+        }
         true
     }
 
