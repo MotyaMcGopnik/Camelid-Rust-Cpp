@@ -7659,7 +7659,11 @@ impl ResidentDecodeState {
         // the untiled math bit-for-bit (q_offset = 0).
         let attn_qb = if use_attn_mm {
             let per_col = self.n_heads * n_pad * 4; // S + P bytes per query column
-            ((attn_mm_scratch_cap_bytes() / per_col) & !63).clamp(256, n_pad)
+                                                    // max-then-min, NOT clamp: short prompts have n_pad < 256 and clamp(256,
+                                                    // n_pad) panics on min > max; a single block covering n_pad is correct there.
+            ((attn_mm_scratch_cap_bytes() / per_col) & !63)
+                .max(256)
+                .min(n_pad)
         } else {
             0
         };
