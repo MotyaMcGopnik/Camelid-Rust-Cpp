@@ -34,6 +34,10 @@ use crate::{
         diagnostic_rope_position_mode, diagnostic_square_linear_layout,
         diagnostic_zero_delta_selector, output_projection_diagnostics,
         q8_schedule_telemetry_enabled, reset_q8_schedule_telemetry, snapshot_q8_schedule_telemetry,
+        speculative::{
+            accepted_draft_prefix, ModelDrafter, NGramDrafter, SpeculativeDrafter,
+            DEFAULT_MODEL_DRAFT_TOKENS, DEFAULT_NGRAM_DRAFT_TOKENS,
+        },
         DeltaZeroTarget, LlamaForwardDiagnostics, LlamaForwardTimings, LlamaGenerationStep,
         LlamaInferenceSession, LlamaLayerMemoryTimings, LlamaLayerTimings, LlamaLoadedWeights,
         LlamaOutputProjectionDiagnostic, LlamaQ8ScheduleTelemetry, LlamaSampler, SamplingConfig,
@@ -55,6 +59,14 @@ const LAZY_Q8_LINEAR_ENV: &str = "CAMELID_LAZY_Q8_0_LINEAR";
 const METADATA_CHAT_TEMPLATE_ENV: &str = "CAMELID_METADATA_CHAT_TEMPLATE";
 const GENERATION_TIMEOUT_ENV: &str = "CAMELID_GENERATION_TIMEOUT_MS";
 const STREAM_TIMING_DIAGNOSTICS_ENV: &str = "CAMELID_STREAM_TIMING_DIAGNOSTICS";
+// Speculative decoding is a default-off serving optimization (lossless greedy
+// speculation; see src/inference/speculative.rs). It makes no support claim.
+const SPEC_DECODE_ENV: &str = "CAMELID_SPEC_DECODE";
+const SPEC_DRAFT_MODEL_ENV: &str = "CAMELID_SPEC_DRAFT_MODEL";
+const SPEC_DRAFT_TOKENS_ENV: &str = "CAMELID_SPEC_DRAFT_TOKENS";
+/// Reserved model id for the speculative draft model; loaded without becoming
+/// the active model.
+const SPEC_DRAFT_MODEL_ID: &str = "spec-draft";
 const STREAM_POLL_YIELD_ENV: &str = "CAMELID_STREAM_POLL_YIELD";
 const DEFAULT_GENERATION_TIMEOUT_MS: u64 = 15 * 60 * 1000;
 const DEFAULT_PUBLIC_CHAT_MAX_TOKENS: u32 = 800;
@@ -966,6 +978,40 @@ struct PreparedGeneration {
     dense_metadata: DenseDiagnosticMetadata,
     timings: GenerationTimings,
     cached_prompt_prefix: Arc<Mutex<Option<CachedPromptPrefix>>>,
+    speculative: Option<PreparedSpeculative>,
+}
+
+/// Server-level speculative decoding mode (`CAMELID_SPEC_DECODE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpecDecodeMode {
+    NGram,
+    DraftModel,
+}
+
+fn spec_decode_mode_from_env() -> Option<SpecDecodeMode> {
+    match env::var(SPEC_DECODE_ENV) {
+        Ok(value) if value.eq_ignore_ascii_case("ngram") => Some(SpecDecodeMode::NGram),
+        Ok(value) if value.eq_ignore_ascii_case("draft") => Some(SpecDecodeMode::DraftModel),
+        _ => None,
+    }
+}
+
+fn spec_draft_tokens_from_env(default: usize) -> usize {
+    env::var(SPEC_DRAFT_TOKENS_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+/// Per-request speculative decoding state: the drafter plus round counters
+/// for the end-of-request acceptance summary.
+struct PreparedSpeculative {
+    drafter: SpeculativeDrafter,
+    draft_tokens: usize,
+    rounds: u64,
+    drafted: u64,
+    accepted_drafts: u64,
 }
 
 struct GeneratedText {
@@ -2258,6 +2304,15 @@ async fn load_model_from_path(
     path: PathBuf,
     id: Option<String>,
 ) -> Result<LoadedModel, BackendError> {
+    load_model_from_path_with_activation(state, path, id, true).await
+}
+
+async fn load_model_from_path_with_activation(
+    state: &AppState,
+    path: PathBuf,
+    id: Option<String>,
+    set_active: bool,
+) -> Result<LoadedModel, BackendError> {
     let gguf = read_metadata(&path)?;
     let outcome = plan_for_model(&path, &gguf, state.configured_threads);
     state.planner_env.apply(&outcome.env_updates);
@@ -2320,9 +2375,10 @@ async fn load_model_from_path(
         .write()
         .await
         .insert(id.clone(), std::time::Instant::now());
-    *state.active_model_id.write().await = Some(id.clone());
-
-    clear_prompt_prefix_cache(state);
+    if set_active {
+        *state.active_model_id.write().await = Some(id.clone());
+        clear_prompt_prefix_cache(state);
+    }
     Ok(loaded)
 }
 
@@ -4038,7 +4094,7 @@ async fn prepare_generation(
     timings.weight_load = weight_load_started.elapsed().as_millis();
     let session_create_started = Instant::now();
     let dense_metadata = dense_diagnostic_metadata(config, binding, &weights);
-    let session = LlamaInferenceSession::new(config.clone(), weights).map_err(|err| {
+    let mut session = LlamaInferenceSession::new(config.clone(), weights).map_err(|err| {
         api_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "dense_session_unavailable",
@@ -4047,6 +4103,40 @@ async fn prepare_generation(
         )
     })?;
     timings.session_create = session_create_started.elapsed().as_millis();
+
+    let collect_dense_diagnostics = req.camelid_dense_diagnostics.unwrap_or(false)
+        || req.camelid_dense_diagnostic_generated_index.is_some();
+    // Lossless greedy speculation is a server-level opt-in and only engages
+    // for plain greedy requests with no per-step logit consumers; anything
+    // else keeps the unchanged vanilla decode loop.
+    let speculative = match spec_decode_mode_from_env() {
+        None => None,
+        Some(_)
+            if sampling != SamplingConfig::default()
+                || collect_dense_diagnostics
+                || !logit_diagnostic_token_ids.is_empty()
+                || session.weights.layer_range.is_some() =>
+        {
+            None
+        }
+        Some(SpecDecodeMode::NGram) => Some(PreparedSpeculative {
+            drafter: SpeculativeDrafter::NGram(NGramDrafter::default()),
+            draft_tokens: spec_draft_tokens_from_env(DEFAULT_NGRAM_DRAFT_TOKENS),
+            rounds: 0,
+            drafted: 0,
+            accepted_drafts: 0,
+        }),
+        Some(SpecDecodeMode::DraftModel) => Some(PreparedSpeculative {
+            drafter: build_model_drafter(state, &model, &tokenizer).await?,
+            draft_tokens: spec_draft_tokens_from_env(DEFAULT_MODEL_DRAFT_TOKENS),
+            rounds: 0,
+            drafted: 0,
+            accepted_drafts: 0,
+        }),
+    };
+    // Speculation needs CPU-authoritative KV state for rollback, so the
+    // session stays off the GPU-resident prefill/decode paths.
+    session.set_resident_paths_disabled(speculative.is_some());
 
     Ok(PreparedGeneration {
         model_id: model.id,
@@ -4058,15 +4148,122 @@ async fn prepare_generation(
         sampling,
         stop_sequences,
         logit_diagnostic_token_ids,
-        collect_dense_diagnostics: req.camelid_dense_diagnostics.unwrap_or(false)
-            || req.camelid_dense_diagnostic_generated_index.is_some(),
+        collect_dense_diagnostics,
         dense_diagnostic_generated_index: req
             .camelid_dense_diagnostic_generated_index
             .map(|index| index as usize),
         dense_metadata,
         timings,
         cached_prompt_prefix: state.cached_prompt_prefix.clone(),
+        speculative,
     })
+}
+
+/// Build the draft-model drafter for `CAMELID_SPEC_DECODE=draft`: load the
+/// configured draft GGUF under the reserved `spec-draft` id (without making
+/// it the active model) and fail closed unless its token mapping is
+/// identical to the target's — drafted token ids must mean the same text in
+/// the target vocabulary.
+async fn build_model_drafter(
+    state: &AppState,
+    target: &LoadedModel,
+    target_tokenizer: &Tokenizer,
+) -> std::result::Result<SpeculativeDrafter, Response> {
+    let Some(path) = env::var_os(SPEC_DRAFT_MODEL_ENV).map(PathBuf::from) else {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "spec_draft_model_missing",
+            format!(
+                "{SPEC_DECODE_ENV}=draft requires {SPEC_DRAFT_MODEL_ENV} to point at a draft \
+                 model GGUF"
+            ),
+            None,
+        ));
+    };
+    let existing = {
+        let loaded = state.loaded_models.read().await;
+        loaded
+            .get(SPEC_DRAFT_MODEL_ID)
+            .filter(|model| model.path == path)
+            .cloned()
+    };
+    let draft_model = match existing {
+        Some(model) => model,
+        None => load_model_from_path_with_activation(
+            state,
+            path,
+            Some(SPEC_DRAFT_MODEL_ID.to_string()),
+            false,
+        )
+        .await
+        .map_err(|err| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "spec_draft_model_load_failed",
+                err.to_string(),
+                None,
+            )
+        })?,
+    };
+    let Some(draft_tokenizer) = draft_model.tokenizer_runtime.as_deref() else {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "spec_draft_tokenizer_unavailable",
+            format!("draft model {SPEC_DRAFT_MODEL_ID} has no usable tokenizer"),
+            None,
+        ));
+    };
+    if !tokenizers_share_token_mapping(target_tokenizer, draft_tokenizer) {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "spec_draft_tokenizer_mismatch",
+            format!(
+                "draft model token mapping differs from target {:?}; speculative drafting \
+                 requires an identical vocabulary",
+                target.id
+            ),
+            None,
+        ));
+    }
+    let Some(draft_config) = draft_model.llama_config.clone() else {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "spec_draft_model_unsupported",
+            format!("draft model {SPEC_DRAFT_MODEL_ID} has no supported runtime config"),
+            None,
+        ));
+    };
+    let Some(draft_binding) = draft_model.llama_tensors.as_ref() else {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "spec_draft_model_unsupported",
+            format!("draft model {SPEC_DRAFT_MODEL_ID} has no bound tensors"),
+            None,
+        ));
+    };
+    let draft_weights = load_weights_lru(state, &draft_model, draft_binding).await?;
+    let draft_session = LlamaInferenceSession::new(draft_config, draft_weights).map_err(|err| {
+        api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "spec_draft_session_unavailable",
+            err.to_string(),
+            None,
+        )
+    })?;
+    Ok(SpeculativeDrafter::Model(Box::new(ModelDrafter::new(
+        draft_session,
+    ))))
+}
+
+/// Identical token mapping: same tokenizer model and the same token text at
+/// every id. This is the correctness requirement for cross-model drafting.
+fn tokenizers_share_token_mapping(a: &Tokenizer, b: &Tokenizer) -> bool {
+    a.model == b.model
+        && a.tokens.len() == b.tokens.len()
+        && a.tokens
+            .iter()
+            .zip(b.tokens.iter())
+            .all(|(left, right)| left.text == right.text)
 }
 
 fn dense_diagnostic_metadata(
@@ -4968,6 +5165,11 @@ fn generate_token_ids(
     if !prepared.collect_dense_diagnostics {
         if let Some(cached) = lookup_prompt_prefix_cache(&prepared) {
             prepared.session = cached.session.clone();
+            // The cached session's resident-path pin reflects the request
+            // that stored it; re-pin for this request's mode.
+            prepared
+                .session
+                .set_resident_paths_disabled(prepared.speculative.is_some());
             input.clear();
             let first_step = sample_cached_prompt_prefix(&cached, &history)?;
             let cached_next_token = first_step.next_token_id;
@@ -5008,6 +5210,96 @@ fn generate_token_ids(
         } else {
             LlamaSampler::Sampling(sampling)
         };
+        // Lossless greedy speculation: draft tokens, verify them in ONE
+        // batched forward (one weight read for the whole batch), accept the
+        // longest matching prefix plus the target's own next token, and roll
+        // rejected KV entries back. Every emitted token is the target's own
+        // greedy argmax given its accepted prefix. Engages only after the
+        // first step (prompt evaluated, first-step diagnostics captured) and
+        // never alongside per-step logit consumers.
+        if let Some(spec) = prepared.speculative.as_mut().filter(|_| {
+            input.len() == 1
+                && matches!(sampler, LlamaSampler::Greedy)
+                && !collect_dense_for_step
+                && !collect_step_top_logits
+                && !top_logits.is_empty()
+        }) {
+            let remaining = (prepared.max_tokens as usize).saturating_sub(generated.len());
+            let context_room = prepared.session.remaining_context();
+            if remaining > 0 && context_room > 0 {
+                let draft_budget = spec
+                    .draft_tokens
+                    .min(remaining.saturating_sub(1))
+                    .min(context_room.saturating_sub(1));
+                let drafts = spec.drafter.draft(&history, draft_budget).map_err(|err| {
+                    Box::new(api_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "speculative_draft_failed",
+                        err.to_string(),
+                        None,
+                    ))
+                })?;
+                let base_position = prepared.session.kv_position();
+                let mut batch = Vec::with_capacity(1 + drafts.len());
+                batch.push(input[0]);
+                batch.extend_from_slice(&drafts);
+                let (predictions, round_timings) = prepared
+                    .session
+                    .forward_greedy_verify_chunk(&batch)
+                    .map_err(|err| {
+                        Box::new(api_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "speculative_verify_failed",
+                            err.to_string(),
+                            None,
+                        ))
+                    })?;
+                let accepted = accepted_draft_prefix(&drafts, &predictions);
+                prepared
+                    .session
+                    .rollback_to_position(base_position + 1 + accepted)
+                    .map_err(|err| {
+                        Box::new(api_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "speculative_rollback_failed",
+                            err.to_string(),
+                            None,
+                        ))
+                    })?;
+                spec.rounds += 1;
+                spec.drafted += drafts.len() as u64;
+                spec.accepted_drafts += accepted as u64;
+                forward_timings.add_assign(&round_timings);
+                for &token in &predictions[..=accepted] {
+                    generated.push(token);
+                    history.push(token);
+                    if prepared.tokenizer.special.eog.contains(&token) {
+                        finish_reason = "stop";
+                        break;
+                    }
+                    if !prepared.stop_sequences.is_empty() {
+                        let text = prepared.tokenizer.decode(&generated, true).map_err(|err| {
+                            Box::new(api_error(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "token_decode_failed",
+                                err.to_string(),
+                                None,
+                            ))
+                        })?;
+                        if contains_stop_sequence(&text, &prepared.stop_sequences) {
+                            finish_reason = "stop";
+                            break;
+                        }
+                    }
+                }
+                if finish_reason != "length" || generated.len() >= prepared.max_tokens as usize {
+                    break;
+                }
+                input.clear();
+                input.push(*history.last().expect("history grows every round"));
+                continue;
+            }
+        }
         // Greedy single-token continuations with no per-step logit consumers ride the
         // resident GPU-sampling fast lane; everything else takes the general step.
         let fast_step = if input.len() == 1
@@ -5137,6 +5429,22 @@ fn generate_token_ids(
         }
         input.clear();
         input.push(step.next_token_id);
+    }
+
+    if let Some(spec) = &prepared.speculative {
+        let acceptance_pct = if spec.drafted == 0 {
+            0.0
+        } else {
+            spec.accepted_drafts as f64 * 100.0 / spec.drafted as f64
+        };
+        tracing::info!(
+            rounds = spec.rounds,
+            drafted = spec.drafted,
+            accepted_drafts = spec.accepted_drafts,
+            acceptance_pct,
+            generated = generated.len(),
+            "speculative decode summary"
+        );
     }
 
     prepared.timings.generate = generation_started.elapsed().as_millis();
@@ -5473,6 +5781,11 @@ fn stream_first_content_accounting_json(
 }
 
 fn stream_completion(mut prepared: PreparedGeneration, chat: bool) -> Response {
+    // Speculation only runs in the non-streaming loop; streaming requests on
+    // a spec-enabled server keep the unchanged vanilla path (including the
+    // GPU-resident lanes the speculative pin would otherwise turn off).
+    prepared.speculative = None;
+    prepared.session.set_resident_paths_disabled(false);
     let model_id = prepared.model_id.clone();
     let stream_timing_diagnostics = stream_timing_diagnostics_enabled();
     let stream_poll_yield = stream_poll_yield_enabled();
@@ -8751,6 +9064,7 @@ mod tests {
             dense_metadata: dummy_dense_metadata(),
             timings: GenerationTimings::default(),
             cached_prompt_prefix: Arc::new(Mutex::new(None)),
+            speculative: None,
         }
     }
 
@@ -8823,6 +9137,131 @@ mod tests {
             },
             chat_template: None,
         }
+    }
+
+    fn tiny_spec_config() -> LlamaModelConfig {
+        LlamaModelConfig {
+            context_length: 48,
+            ..tiny_config()
+        }
+    }
+
+    fn vanilla_greedy_tokens(
+        config: &LlamaModelConfig,
+        weights: &Arc<LlamaLoadedWeights>,
+        prompt: &[u32],
+        count: usize,
+    ) -> Vec<u32> {
+        let mut session = LlamaInferenceSession::new(config.clone(), Arc::clone(weights)).unwrap();
+        let mut generated = Vec::new();
+        let mut history = prompt.to_vec();
+        let mut input = prompt.to_vec();
+        for _ in 0..count {
+            let step = session
+                .generate_next_token_with_history_diagnostics(
+                    &input,
+                    LlamaSampler::Greedy,
+                    &history,
+                    false,
+                )
+                .unwrap();
+            generated.push(step.next_token_id);
+            history.push(step.next_token_id);
+            input = vec![step.next_token_id];
+        }
+        generated
+    }
+
+    /// Lossless speculation invariant: the spec round loop (batched verify +
+    /// rollback) emits exactly the token stream vanilla greedy decode emits.
+    fn assert_speculative_matches_vanilla(mut drafter: SpeculativeDrafter) {
+        let config = tiny_spec_config();
+        let weights = Arc::new(tiny_weights());
+        let prompt = vec![0u32, 1, 2, 0];
+        let count = 12;
+        let vanilla = vanilla_greedy_tokens(&config, &weights, &prompt, count);
+
+        let mut session = LlamaInferenceSession::new(config.clone(), Arc::clone(&weights)).unwrap();
+        let mut generated = Vec::new();
+        let mut history = prompt.clone();
+        // First step mirrors the real loop: the whole prompt through the
+        // general path, speculation afterwards.
+        let first = session
+            .generate_next_token_with_history_diagnostics(
+                &prompt,
+                LlamaSampler::Greedy,
+                &history,
+                false,
+            )
+            .unwrap();
+        generated.push(first.next_token_id);
+        history.push(first.next_token_id);
+        let mut accepted_total = 0usize;
+        while generated.len() < count {
+            let pending = *history.last().unwrap();
+            let drafts = drafter.draft(&history, 3).unwrap();
+            let base = session.kv_position();
+            let mut batch = vec![pending];
+            batch.extend_from_slice(&drafts);
+            let (predictions, _timings) = session.forward_greedy_verify_chunk(&batch).unwrap();
+            let accepted = accepted_draft_prefix(&drafts, &predictions);
+            session.rollback_to_position(base + 1 + accepted).unwrap();
+            accepted_total += accepted;
+            for &token in &predictions[..=accepted] {
+                if generated.len() >= count {
+                    break;
+                }
+                generated.push(token);
+                history.push(token);
+            }
+        }
+
+        assert_eq!(generated, vanilla);
+        // The tiny model settles into a cycle, so the drafters must have
+        // actually accepted drafted tokens — otherwise this test would pass
+        // without exercising multi-token acceptance and rollback.
+        assert!(
+            accepted_total > 0,
+            "speculation accepted no drafts; the test did not exercise the accept path"
+        );
+    }
+
+    #[test]
+    fn ngram_speculation_matches_vanilla_greedy_decode() {
+        assert_speculative_matches_vanilla(SpeculativeDrafter::NGram(NGramDrafter::default()));
+    }
+
+    #[test]
+    fn model_drafter_self_draft_matches_vanilla_greedy_decode() {
+        let config = tiny_spec_config();
+        let weights = Arc::new(tiny_weights());
+        // The target drafts for itself: every draft should be accepted, and
+        // the output must still be byte-identical to vanilla decode.
+        let draft_session = LlamaInferenceSession::new(config, weights).unwrap();
+        assert_speculative_matches_vanilla(SpeculativeDrafter::Model(Box::new(ModelDrafter::new(
+            draft_session,
+        ))));
+    }
+
+    #[test]
+    fn verify_chunk_rollback_restores_decode_state() {
+        let config = tiny_spec_config();
+        let weights = Arc::new(tiny_weights());
+        let prompt = vec![0u32, 1, 2];
+
+        let mut clean = LlamaInferenceSession::new(config.clone(), Arc::clone(&weights)).unwrap();
+        clean.forward_greedy_verify_chunk(&prompt).unwrap();
+        let (expected, _timings) = clean.forward_greedy_verify_chunk(&[0]).unwrap();
+
+        let mut rolled = LlamaInferenceSession::new(config, weights).unwrap();
+        rolled.forward_greedy_verify_chunk(&prompt).unwrap();
+        let base = rolled.kv_position();
+        // Speculate down a wrong path, then roll it back.
+        rolled.forward_greedy_verify_chunk(&[0, 2, 2, 1]).unwrap();
+        rolled.rollback_to_position(base).unwrap();
+        let (after_rollback, _timings) = rolled.forward_greedy_verify_chunk(&[0]).unwrap();
+
+        assert_eq!(after_rollback, expected);
     }
 
     fn tiny_config() -> LlamaModelConfig {

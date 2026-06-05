@@ -46,6 +46,7 @@ These documents are working notes, not support ledgers. When a note and a public
 `COMPATIBILITY.md` and `STATUS.md` win.
 
 - [`ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md)
+- [`SPECULATIVE_DECODE.md`](docs/architecture/SPECULATIVE_DECODE.md) — default-off lossless greedy speculation: proven byte-exact, measured envelope, and the exact kernel blocker before it can win
 - [`FORGELOCAL_INTEGRATION.md`](docs/architecture/FORGELOCAL_INTEGRATION.md)
 - [`INFERENCE_RECON.md`](docs/recon/INFERENCE_RECON.md)
 - [`TENSOR_RECON.md`](docs/recon/TENSOR_RECON.md)

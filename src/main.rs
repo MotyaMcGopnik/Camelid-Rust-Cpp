@@ -70,6 +70,20 @@ enum Command {
         /// Log the current acceleration/runtime discovery state at startup.
         #[arg(long, default_value_t = true)]
         log_acceleration: bool,
+        /// Lossless greedy speculative decoding mode: "ngram" (prompt lookup,
+        /// no extra weights) or "draft" (a smaller same-tokenizer model
+        /// drafts; requires --spec-draft-model). Default off. A serving
+        /// optimization only — it makes no support claim for any lane.
+        #[arg(long, env = "CAMELID_SPEC_DECODE")]
+        spec_decode: Option<String>,
+        /// Draft model GGUF for --spec-decode draft (must share the target's
+        /// exact token mapping).
+        #[arg(long, env = "CAMELID_SPEC_DRAFT_MODEL")]
+        spec_draft_model: Option<PathBuf>,
+        /// Draft tokens proposed per speculation round (default: 8 for
+        /// ngram, 5 for draft).
+        #[arg(long, env = "CAMELID_SPEC_DRAFT_TOKENS")]
+        spec_draft_tokens: Option<usize>,
     },
     /// Start the distributed HTTP API server or TCP Worker.
     ServeDistributed {
@@ -359,6 +373,9 @@ async fn main() -> anyhow::Result<()> {
             metal_linear,
             metal_q8,
             log_acceleration,
+            spec_decode,
+            spec_draft_model,
+            spec_draft_tokens,
         } => {
             configure_rayon_threads(threads)?;
             apply_runtime_tuning_env(
@@ -367,6 +384,7 @@ async fn main() -> anyhow::Result<()> {
                 metal_linear,
                 metal_q8,
             );
+            apply_spec_decode_env(spec_decode, spec_draft_model, spec_draft_tokens);
             if log_acceleration {
                 log_acceleration_state();
             }
@@ -2163,6 +2181,22 @@ fn apply_runtime_tuning_env(
     }
     if metal_q8 {
         std::env::set_var("CAMELID_METAL_Q8", "1");
+    }
+}
+
+fn apply_spec_decode_env(
+    spec_decode: Option<String>,
+    spec_draft_model: Option<PathBuf>,
+    spec_draft_tokens: Option<usize>,
+) {
+    if let Some(mode) = spec_decode.filter(|mode| !mode.trim().is_empty()) {
+        std::env::set_var("CAMELID_SPEC_DECODE", mode);
+    }
+    if let Some(path) = spec_draft_model {
+        std::env::set_var("CAMELID_SPEC_DRAFT_MODEL", path);
+    }
+    if let Some(tokens) = spec_draft_tokens.filter(|tokens| *tokens > 0) {
+        std::env::set_var("CAMELID_SPEC_DRAFT_TOKENS", tokens.to_string());
     }
 }
 

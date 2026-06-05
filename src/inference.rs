@@ -23,6 +23,7 @@ mod q8_block_reader;
 mod q8_runtime;
 mod q8_telemetry;
 mod rope;
+pub mod speculative;
 
 #[cfg(test)]
 use diagnostic_config::diagnostic_zero_delta_value;
@@ -1357,6 +1358,10 @@ pub struct LlamaInferenceSession {
     /// Lazily-built GPU resident-decode session (a transient on-GPU cache; rebuilt on demand
     /// and not part of the session's logical identity, so it is skipped by Clone/PartialEq/Debug).
     resident_decode: Option<metal::ResidentDecodeState>,
+    /// When set, the session never takes the GPU-resident prefill/decode paths, keeping the
+    /// CPU KV buffers authoritative. Speculative decoding requires this: KV rollback after a
+    /// rejected draft only exists for CPU state.
+    resident_paths_disabled: bool,
 }
 
 impl LlamaInferenceSession {
@@ -1381,6 +1386,7 @@ impl LlamaInferenceSession {
                 },
             ),
             resident_decode: self.resident_decode.take(),
+            resident_paths_disabled: self.resident_paths_disabled,
         }
     }
 
@@ -1402,6 +1408,7 @@ impl Clone for LlamaInferenceSession {
             weights: self.weights.clone(),
             kv_cache: self.kv_cache.clone(),
             resident_decode: None,
+            resident_paths_disabled: self.resident_paths_disabled,
         }
     }
 }
@@ -1437,7 +1444,44 @@ impl LlamaInferenceSession {
             weights,
             kv_cache: LlamaKvCache::new(plan)?,
             resident_decode: None,
+            resident_paths_disabled: false,
         })
+    }
+
+    /// Current KV position (count of tokens whose K/V entries are committed).
+    pub fn kv_position(&self) -> usize {
+        self.kv_cache.position
+    }
+
+    /// Positions still available before the context limit.
+    pub fn remaining_context(&self) -> usize {
+        self.kv_cache
+            .plan
+            .max_sequence_length
+            .saturating_sub(self.kv_cache.position)
+    }
+
+    /// Keep this session on (or return it to) the GPU-resident prefill/decode
+    /// paths, or pin it to CPU-authoritative KV state. Speculative decoding
+    /// pins sessions to CPU because KV rollback only exists for CPU state.
+    pub fn set_resident_paths_disabled(&mut self, disabled: bool) {
+        self.resident_paths_disabled = disabled;
+    }
+
+    /// Roll the sequence back to `position`, discarding newer KV entries.
+    /// Requires CPU-authoritative KV state — the GPU-resident cache has no
+    /// rollback, so any resident session is dropped and reseeds from CPU on
+    /// next use.
+    pub fn rollback_to_position(&mut self, position: usize) -> Result<()> {
+        if !self.cpu_kv_authoritative() {
+            return Err(BackendError::RuntimeShapeMismatch(
+                "KV rollback requires CPU-authoritative KV state; the GPU-resident prefill \
+                 history cannot roll back"
+                    .to_string(),
+            ));
+        }
+        self.resident_decode = None;
+        self.kv_cache.rollback_to_position(position)
     }
 
     /// Whether the GPU-resident decode forward may run for this model+config: flag on, dense
@@ -1455,6 +1499,9 @@ impl LlamaInferenceSession {
                 }
                 return Ok(false);
             }};
+        }
+        if self.resident_paths_disabled {
+            bail!("resident paths disabled for this session (CPU-authoritative KV required)");
         }
         if !resident_decode_metal_enabled() {
             bail!("CAMELID_METAL_RESIDENT_DECODE not enabled");
@@ -1544,6 +1591,9 @@ impl LlamaInferenceSession {
     /// and the caller skips its CPU prefill loop entirely; the last prompt token then runs
     /// through the resident decode for logits.
     fn try_resident_prefill(&mut self, token_ids: &[u32]) -> Result<bool> {
+        if self.resident_paths_disabled {
+            return Ok(false);
+        }
         if std::env::var("CAMELID_METAL_RESIDENT_PREFILL")
             .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
@@ -2226,6 +2276,99 @@ impl LlamaInferenceSession {
         timings.memory = memory;
         metal::end_inference_session();
         Ok(timings)
+    }
+
+    /// Speculative-verification forward: process `token_ids` (the last
+    /// accepted token followed by drafted tokens) in ONE batched pass through
+    /// the chunked-prefill layer path, then compute logits for EVERY position
+    /// and return the greedy argmax per position. One weight read serves all
+    /// M tokens — the same amortization the prefill path gets.
+    ///
+    /// KV entries are appended for all `token_ids` (position advances by M);
+    /// the caller drops rejected suffixes with `rollback_to_position`.
+    pub fn forward_greedy_verify_chunk(
+        &mut self,
+        token_ids: &[u32],
+    ) -> Result<(Vec<u32>, LlamaForwardTimings)> {
+        if token_ids.is_empty() {
+            return Err(BackendError::RuntimeShapeMismatch(
+                "speculative verify chunk requires at least one token".to_string(),
+            ));
+        }
+        if self.weights.layer_range.is_some() {
+            return Err(BackendError::RuntimeShapeMismatch(
+                "speculative verify chunk does not support distributed layer ranges".to_string(),
+            ));
+        }
+        if token_ids.len() > self.remaining_context() {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "speculative verify chunk of {} token(s) exceeds remaining context capacity {}",
+                token_ids.len(),
+                self.remaining_context()
+            )));
+        }
+
+        let runtime_plan = ResolvedRuntimePlan::from_env()?;
+        let chunk_base_position = self.kv_cache.position;
+        let total_started = Instant::now();
+        metal::start_inference_session();
+        let embedding_started = Instant::now();
+        let mut hidden = self
+            .weights
+            .token_embedding
+            .embedding_lookup(token_ids, "token_embedding_verify_chunk")?;
+        let mut timings = LlamaForwardTimings {
+            embedding: embedding_started.elapsed().as_micros(),
+            ..LlamaForwardTimings::default()
+        };
+        let layers_started = Instant::now();
+        let rms_norm_epsilon = diagnostic_rms_norm_epsilon(self.config.rms_norm_epsilon)?;
+        for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
+            let timed = forward_prefill_layer_chunk_timed(
+                &hidden,
+                layer,
+                PrefillLayerChunkParams {
+                    config: &self.config,
+                    rope_freqs: self.weights.rope_freqs.as_ref(),
+                    rms_norm_epsilon,
+                    layer_idx,
+                    base_position: chunk_base_position,
+                    chunk_start: 0,
+                    chunk_rows: token_ids.len(),
+                },
+                &mut self.kv_cache,
+            )?;
+            hidden = timed.output;
+            timings.layers.push(timed.timings);
+        }
+        timings.layers_total = layers_started.elapsed().as_micros();
+
+        let final_norm_started = Instant::now();
+        let norm = if self.weights.output_norm.shape.dims[0] == 0 {
+            hidden
+        } else {
+            hidden.rms_norm(
+                &self.weights.output_norm,
+                rms_norm_epsilon,
+                "output_norm_verify_chunk",
+            )?
+        };
+        timings.final_norm = final_norm_started.elapsed().as_micros();
+        let logits_started = Instant::now();
+        let logits = output_projection_runtime_with_plan(
+            &norm,
+            self.weights.output_projection(),
+            "logits_verify_chunk",
+            &runtime_plan,
+            false,
+        )?;
+        timings.logits = logits_started.elapsed().as_micros();
+
+        let predictions = greedy_sample_rows(&logits)?;
+        self.kv_cache.position += token_ids.len();
+        timings.total = total_started.elapsed().as_micros();
+        metal::end_inference_session();
+        Ok((predictions, timings))
     }
 
     fn forward_prefill_layer_major_timed_fast(
@@ -3704,6 +3847,39 @@ fn greedy_sample(logits: &CpuTensor) -> Result<u32> {
     }
 
     token_index_to_u32(best_idx)
+}
+
+/// Per-row greedy argmax over `[rows, vocab]` logits, with exactly the same
+/// strict-`>` first-index tie-break as `greedy_sample`. Used by speculative
+/// verification, where every row is one verified position.
+fn greedy_sample_rows(logits: &CpuTensor) -> Result<Vec<u32>> {
+    if logits.shape.dims.len() != 2 || logits.shape.dims[0] == 0 || logits.shape.dims[1] == 0 {
+        return Err(BackendError::RuntimeShapeMismatch(format!(
+            "verify logits expected non-empty shape [rows, vocab], got {:?}",
+            logits.shape.dims
+        )));
+    }
+    let rows = logits.shape.dims[0];
+    let vocab = logits.shape.dims[1];
+    let mut out = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let slice = &logits.data[row * vocab..(row + 1) * vocab];
+        let mut best_idx = 0usize;
+        let mut best_value = f32::NEG_INFINITY;
+        for (idx, value) in slice.iter().copied().enumerate() {
+            if !value.is_finite() {
+                return Err(BackendError::RuntimeShapeMismatch(format!(
+                    "verify logits contain non-finite value at row {row} index {idx}"
+                )));
+            }
+            if value > best_value {
+                best_idx = idx;
+                best_value = value;
+            }
+        }
+        out.push(token_index_to_u32(best_idx)?);
+    }
+    Ok(out)
 }
 
 fn sample_with_config(

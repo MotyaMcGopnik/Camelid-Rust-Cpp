@@ -95,6 +95,22 @@ impl LlamaKvCache {
         self.position < self.plan.max_sequence_length
     }
 
+    /// Roll the cache back to an earlier `position`, discarding newer
+    /// entries. Storage is position-major and `position` alone bounds what
+    /// attention reads, so entries past the rollback point are dead until
+    /// overwritten by later appends — no buffer work is needed. Used by
+    /// speculative decoding to drop rejected draft tokens.
+    pub fn rollback_to_position(&mut self, position: usize) -> Result<()> {
+        if position > self.position {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "KV rollback target {position} is beyond current position {}",
+                self.position
+            )));
+        }
+        self.position = position;
+        Ok(())
+    }
+
     pub(super) fn ensure_position_capacity(
         &mut self,
         required_sequence_length: usize,
