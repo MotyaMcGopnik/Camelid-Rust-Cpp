@@ -412,8 +412,15 @@ impl Tokenizer {
         Ok(text)
     }
 
+    /// Chat prompts are tokenized with special-token parsing for every model:
+    /// llama-server tokenizes rendered chat templates with specials enabled,
+    /// so a template's control markers (e.g. SPM `</s>` between turns) must
+    /// become control token ids, not literal text. The committed TinyLlama
+    /// parity evidence records exactly this shape (`..., 12199, 2, 29871,
+    /// ...`). Raw completion text is unaffected and keeps
+    /// `parse_special: false` — special parsing does not spread to raw text.
     pub fn chat_prompt_parse_special(&self) -> bool {
-        matches!(self.model, TokenizerModel::Gpt2Bpe)
+        true
     }
 
     fn encode_bpe_text(&self, text: &str, parse_special: bool) -> Result<Vec<TokenId>> {

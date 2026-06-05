@@ -5949,8 +5949,12 @@ fn render_chat_prompt_for_tokenization_fallback(
     tokenizer: &Tokenizer,
 ) -> RenderedPrompt {
     if let Some(template) = tokenizer.chat_template.as_deref() {
-        // llama-server applies the TinyLlama marker template as regular SPM text,
-        // so chat prompts should keep normal dummy-prefix handling for marker tokens.
+        // The marker strings themselves (<|user|>, <|assistant|>, <|system|>)
+        // are not vocab entries and stay plain SPM text either way; the
+        // template's `</s>` IS a control token, and llama-server encodes it
+        // as EOS when tokenizing the rendered template — so chat prompts
+        // parse specials (chat_prompt_parse_special), with dummy-prefix
+        // handling after control tokens preserved by encode_piece.
         if is_tinyllama_marker_template(template) {
             return RenderedPrompt {
                 text: render_tinyllama_marker_prompt(messages, tokenizer),
