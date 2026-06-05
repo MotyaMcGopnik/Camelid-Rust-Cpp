@@ -2559,6 +2559,7 @@ kernel void half_mm_batched(
     constant uint& a_elem_stride [[buffer(12)]],
     constant uint& group_a [[buffer(13)]],
     constant uint& causal_mode [[buffer(14)]],
+    constant uint& q_offset [[buffer(15)]],
     threadgroup half* shmem [[threadgroup(0)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -2572,10 +2573,12 @@ kernel void half_mm_batched(
     threadgroup half* sb = shmem + 2048; // 64 x 32, swizzled, token-major
     const uint r0 = tg.x * NR0;
     const uint t0 = tg.y * NR1;
-    if (causal_mode == 1 && r0 > t0 + NR1 - 1) {
+    // q_offset maps this dispatch's query tile to absolute positions when the host
+    // processes queries in blocks (S/P panels tiled by query block at long context).
+    if (causal_mode == 1 && r0 > t0 + q_offset + NR1 - 1) {
         return; // S tile entirely above the causal diagonal: never read
     }
-    const uint k_end = (causal_mode == 2) ? min(kdim, t0 + NR1) : kdim;
+    const uint k_end = (causal_mode == 2) ? min(kdim, t0 + q_offset + NR1) : kdim;
     device const half* ab = a + (tg.z / group_a) * a_batch_stride;
     device const half* bb = b + tg.z * b_batch_stride;
     device float* cb = c + tg.z * c_batch_stride;
@@ -2597,7 +2600,7 @@ kernel void half_mm_batched(
     const uint quad_t0 = t0 + 8 * sg_tok_oct;
     const uint quad_r0 = r0 + 32 * (sg % 2);
     const bool sg_active = quad_t0 < cols
-        && !(causal_mode == 1 && quad_r0 > quad_t0 + 31);
+        && !(causal_mode == 1 && quad_r0 > quad_t0 + q_offset + 31);
 
     for (uint kk0 = 0; kk0 < k_end; kk0 += NK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2689,6 +2692,7 @@ kernel void half_mm_batched_f16o(
     constant uint& a_elem_stride [[buffer(12)]],
     constant uint& group_a [[buffer(13)]],
     constant uint& causal_mode [[buffer(14)]],
+    constant uint& q_offset [[buffer(15)]],
     threadgroup half* shmem [[threadgroup(0)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -2702,10 +2706,12 @@ kernel void half_mm_batched_f16o(
     threadgroup half* sb = shmem + 2048; // 64 x 32, swizzled, token-major
     const uint r0 = tg.x * NR0;
     const uint t0 = tg.y * NR1;
-    if (causal_mode == 1 && r0 > t0 + NR1 - 1) {
+    // q_offset maps this dispatch's query tile to absolute positions when the host
+    // processes queries in blocks (S/P panels tiled by query block at long context).
+    if (causal_mode == 1 && r0 > t0 + q_offset + NR1 - 1) {
         return; // S tile entirely above the causal diagonal: never read
     }
-    const uint k_end = (causal_mode == 2) ? min(kdim, t0 + NR1) : kdim;
+    const uint k_end = (causal_mode == 2) ? min(kdim, t0 + q_offset + NR1) : kdim;
     device const half* ab = a + (tg.z / group_a) * a_batch_stride;
     device const half* bb = b + tg.z * b_batch_stride;
     device half* cb = c + tg.z * c_batch_stride;
@@ -2727,7 +2733,7 @@ kernel void half_mm_batched_f16o(
     const uint quad_t0 = t0 + 8 * sg_tok_oct;
     const uint quad_r0 = r0 + 32 * (sg % 2);
     const bool sg_active = quad_t0 < cols
-        && !(causal_mode == 1 && quad_r0 > quad_t0 + 31);
+        && !(causal_mode == 1 && quad_r0 > quad_t0 + q_offset + 31);
 
     for (uint kk0 = 0; kk0 < k_end; kk0 += NK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2818,38 +2824,43 @@ kernel void softmax_causal_rows(
     constant uint& n_pad [[buffer(2)]],
     constant uint& n_tokens [[buffer(3)]],
     constant float& scale [[buffer(4)]],
+    constant uint& q_offset [[buffer(5)]],
+    constant uint& rows_per_block [[buffer(6)]],
     uint2 tg [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]
 ) {
-    // 8 rows per 256-thread threadgroup, one simdgroup per row. P is written only up
-    // to the 64-aligned causal boundary the PV pass reads (its k-range is clamped to
-    // ((q/64)+1)*64), except padded rows which zero their full span for safety.
+    // 8 rows per 256-thread threadgroup, one simdgroup per row. Rows are block-local
+    // (the host may tile queries into blocks of rows_per_block at long context);
+    // q_offset maps them to absolute positions for the causal mask. P is written only
+    // up to the 64-aligned causal boundary the PV pass reads (its k-range is clamped
+    // to ((q_abs/64)+1)*64), except padded rows which zero their full span for safety.
     const uint q = tg.y * 8 + sg;
-    if (q >= n_pad) return;
-    const ulong base = (ulong)tg.x * n_pad * n_pad + (ulong)q * n_pad;
+    if (q >= rows_per_block) return;
+    const uint q_abs = q + q_offset;
+    const ulong base = (ulong)tg.x * rows_per_block * n_pad + (ulong)q * n_pad;
     device const half* srow = s + base;
     device half* prow = p_out + base;
-    if (q >= n_tokens) {
+    if (q_abs >= n_tokens) {
         for (uint j = lane; j < n_pad; j += 32) {
             prow[j] = half(0.0f);
         }
         return;
     }
-    const uint write_end = min(n_pad, ((q / 64) + 1) * 64);
+    const uint write_end = min(n_pad, ((q_abs / 64) + 1) * 64);
     float m = -INFINITY;
-    for (uint j = lane; j <= q; j += 32) {
+    for (uint j = lane; j <= q_abs; j += 32) {
         m = max(m, srow[j] * scale);
     }
     m = simd_max(m);
     float l = 0.0f;
-    for (uint j = lane; j <= q; j += 32) {
+    for (uint j = lane; j <= q_abs; j += 32) {
         l += exp(srow[j] * scale - m);
     }
     l = simd_sum(l);
     const float inv = 1.0f / l;
     for (uint j = lane; j < write_end; j += 32) {
-        prow[j] = (j <= q) ? half(exp(srow[j] * scale - m) * inv) : half(0.0f);
+        prow[j] = (j <= q_abs) ? half(exp(srow[j] * scale - m) * inv) : half(0.0f);
     }
 }
 
@@ -7641,7 +7652,17 @@ impl ResidentDecodeState {
             && self.ffn_dim.is_multiple_of(128)
             && self.head_dim.is_multiple_of(8)
             && self.head_dim <= 128
-            && self.n_heads * n_pad * n_pad * 4 <= attn_mm_scratch_cap_bytes();
+            && self.n_heads * n_pad * 256 * 4 <= attn_mm_scratch_cap_bytes();
+        // Query-block width for the S/P panels: the panels are [head][qb][n_pad], so
+        // memory is linear in the block width and the budget sets how many query
+        // columns are materialized at once. Prompts that fit in one block reproduce
+        // the untiled math bit-for-bit (q_offset = 0).
+        let attn_qb = if use_attn_mm {
+            let per_col = self.n_heads * n_pad * 4; // S + P bytes per query column
+            ((attn_mm_scratch_cap_bytes() / per_col) & !63).clamp(256, n_pad)
+        } else {
+            0
+        };
         let use_h16 = use_attn_mm && half_rope * 2 == self.head_dim;
         let es = if use_h16 { 2 } else { 4 }; // element size of the activation stream
         let seq = nb(n_tokens * self.hidden * es);
@@ -7781,12 +7802,12 @@ impl ResidentDecodeState {
 
         let q_h = nb(if use_attn_mm { n_pad * q_dim * 2 } else { 2 });
         let s_big = nb(if use_attn_mm {
-            self.n_heads * n_pad * n_pad * 2
+            self.n_heads * n_pad * attn_qb * 2
         } else {
             2
         });
         let p_big = nb(if use_attn_mm {
-            self.n_heads * n_pad * n_pad * 2
+            self.n_heads * n_pad * attn_qb * 2
         } else {
             2
         });
@@ -7826,18 +7847,19 @@ impl ResidentDecodeState {
             *p.add(5) = n_tokens as u32;
             // shared strides and modes filled per-dispatch below
             *p.add(6) = (self.max_positions * self.head_dim) as u32; // kv batch stride
-            *p.add(7) = (n_pad * n_pad) as u32; // S/P batch stride
+            *p.add(7) = (n_pad * attn_qb) as u32; // S/P batch stride (per query block)
             *p.add(8) = self.head_dim as u32; // q batch stride / kv row stride
             *p.add(9) = q_dim as u32; // q row stride (also ctx row stride)
             *p.add(10) = 1u32; // group=1 placeholder (real group below)
             *p.add(11) = gqa_group as u32;
         }
-        let softmax_scalar = nb(12);
+        let softmax_scalar = nb(16);
         unsafe {
             let p = softmax_scalar.contents() as *mut u32;
             *p = n_pad as u32;
             *p.add(1) = n_tokens as u32;
             *(p.add(2) as *mut f32) = scale;
+            *p.add(3) = attn_qb as u32; // rows per query block
         }
         let normf_h = nb(if use_mm { n_pad * self.hidden * 2 } else { 2 });
         let ctx_h = nb(if use_mm { n_pad * q_dim * 2 } else { 2 });
@@ -8116,10 +8138,13 @@ impl ResidentDecodeState {
                     convert(&e, &q_buf, &q_h, &n_elems, 8, n_tokens * q_dim);
                 }
                 // S = Q K^T (per query head; K shared per KV head)
+                #[allow(clippy::too_many_arguments)]
                 let smm = |e: &metal::ComputeCommandEncoderRef,
                            a: &Buffer,
                            b_buf2: &Buffer,
+                           b_off: u64,
                            c_buf2: &Buffer,
+                           c_off: u64,
                            kdim_off: u64,
                            a_bs: u32,
                            b_bs: u32,
@@ -8130,17 +8155,18 @@ impl ResidentDecodeState {
                            a_es: u32,
                            grp: u32,
                            mode: u32,
+                           q_off: u32,
                            rows: usize,
                            cols: usize| {
                     e.set_compute_pipeline_state(&k.half_mm_batched_f16o_pipeline);
                     e.set_buffer(0, Some(a), 0);
-                    e.set_buffer(1, Some(b_buf2), 0);
-                    e.set_buffer(2, Some(c_buf2), 0);
+                    e.set_buffer(1, Some(b_buf2), b_off);
+                    e.set_buffer(2, Some(c_buf2), c_off);
                     e.set_buffer(3, Some(&attn_mm_scalar), kdim_off);
                     e.set_buffer(4, Some(&attn_mm_scalar), kdim_off + 4);
-                    e.set_buffer(5, Some(&attn_mm_scalar), kdim_off + 8);
-                    // dynamic scalars in a transient buffer
-                    let dyn_buf = nb(36);
+                    // dynamic scalars in a transient buffer (cols and the absolute
+                    // query offset vary per query block)
+                    let dyn_buf = nb(44);
                     unsafe {
                         let p = dyn_buf.contents() as *mut u32;
                         *p = a_bs;
@@ -8152,10 +8178,14 @@ impl ResidentDecodeState {
                         *p.add(6) = a_es;
                         *p.add(7) = grp;
                         *p.add(8) = mode;
+                        *p.add(9) = cols as u32;
+                        *p.add(10) = q_off;
                     }
+                    e.set_buffer(5, Some(&dyn_buf), 36);
                     for j in 0..9u64 {
                         e.set_buffer(6 + j, Some(&dyn_buf), j * 4);
                     }
+                    e.set_buffer(15, Some(&dyn_buf), 40);
                     e.set_threadgroup_memory_length(0, 8192);
                     e.dispatch_thread_groups(
                         metal::MTLSize {
@@ -8170,44 +8200,8 @@ impl ResidentDecodeState {
                         },
                     );
                 };
-                smm(
-                    &e,
-                    &self.cache_k16[i],
-                    &q_h,
-                    &s_big,
-                    0,
-                    (self.max_positions * self.head_dim) as u32,
-                    self.head_dim as u32,
-                    (n_pad * n_pad) as u32,
-                    self.head_dim as u32,
-                    q_dim as u32,
-                    n_pad as u32,
-                    1,
-                    gqa_group as u32,
-                    1,
-                    n_pad,
-                    n_tokens,
-                );
-                // causal softmax rows -> P
-                e.set_compute_pipeline_state(&k.softmax_causal_rows_pipeline);
-                e.set_buffer(0, Some(&s_big), 0);
-                e.set_buffer(1, Some(&p_big), 0);
-                e.set_buffer(2, Some(&softmax_scalar), 0);
-                e.set_buffer(3, Some(&softmax_scalar), 4);
-                e.set_buffer(4, Some(&softmax_scalar), 8);
-                e.dispatch_thread_groups(
-                    metal::MTLSize {
-                        width: self.n_heads as u64,
-                        height: (n_pad as u64).div_ceil(8),
-                        depth: 1,
-                    },
-                    metal::MTLSize {
-                        width: 256,
-                        height: 1,
-                        depth: 1,
-                    },
-                );
-                // Transpose this layer's V slice so the PV A-staging is contiguous.
+                // Transpose this layer's V slice ONCE so every query block's PV
+                // A-staging reads contiguously.
                 e.set_compute_pipeline_state(&k.transpose_v16_pipeline);
                 e.set_buffer(0, Some(&self.cache_v16[i]), 0);
                 e.set_buffer(1, Some(&vt_scratch), 0);
@@ -8226,25 +8220,85 @@ impl ResidentDecodeState {
                         depth: 1,
                     },
                 );
-                // O = P V into ctx_h [token][q_dim] half (head offset via c batch stride)
-                smm(
-                    &e,
-                    &vt_scratch,
-                    &p_big,
-                    &ctx_h,
-                    12,
-                    (self.head_dim * n_pad) as u32,
-                    (n_pad * n_pad) as u32,
-                    self.head_dim as u32,
-                    n_pad as u32,
-                    n_pad as u32,
-                    q_dim as u32,
-                    1,
-                    gqa_group as u32,
-                    2,
-                    self.head_dim,
-                    n_tokens,
-                );
+                // Query-block loop: S and P panels hold attn_qb query columns at a time
+                // (memory linear in the block width); q_offset keeps the causal mask and
+                // PV clamp on absolute positions. One block reproduces the untiled math.
+                let mut qb = 0usize;
+                while qb < n_tokens {
+                    let cols_b = (n_tokens - qb).min(attn_qb);
+                    let qh_off = (qb * q_dim * 2) as u64;
+                    // S = Q K^T (per query head; K shared per KV head)
+                    smm(
+                        &e,
+                        &self.cache_k16[i],
+                        &q_h,
+                        qh_off,
+                        &s_big,
+                        0,
+                        0,
+                        (self.max_positions * self.head_dim) as u32,
+                        self.head_dim as u32,
+                        (n_pad * attn_qb) as u32,
+                        self.head_dim as u32,
+                        q_dim as u32,
+                        n_pad as u32,
+                        1,
+                        gqa_group as u32,
+                        1,
+                        qb as u32,
+                        n_pad,
+                        cols_b,
+                    );
+                    // causal softmax rows -> P
+                    let qoff_buf = nb(4);
+                    unsafe {
+                        *(qoff_buf.contents() as *mut u32) = qb as u32;
+                    }
+                    e.set_compute_pipeline_state(&k.softmax_causal_rows_pipeline);
+                    e.set_buffer(0, Some(&s_big), 0);
+                    e.set_buffer(1, Some(&p_big), 0);
+                    e.set_buffer(2, Some(&softmax_scalar), 0);
+                    e.set_buffer(3, Some(&softmax_scalar), 4);
+                    e.set_buffer(4, Some(&softmax_scalar), 8);
+                    e.set_buffer(5, Some(&qoff_buf), 0);
+                    e.set_buffer(6, Some(&softmax_scalar), 12);
+                    e.dispatch_thread_groups(
+                        metal::MTLSize {
+                            width: self.n_heads as u64,
+                            height: (attn_qb as u64).div_ceil(8),
+                            depth: 1,
+                        },
+                        metal::MTLSize {
+                            width: 256,
+                            height: 1,
+                            depth: 1,
+                        },
+                    );
+                    // O = P V into ctx_h [token][q_dim] half (head offset via c batch
+                    // stride; this block's queries land at qh_off)
+                    smm(
+                        &e,
+                        &vt_scratch,
+                        &p_big,
+                        0,
+                        &ctx_h,
+                        qh_off,
+                        12,
+                        (self.head_dim * n_pad) as u32,
+                        (n_pad * attn_qb) as u32,
+                        self.head_dim as u32,
+                        n_pad as u32,
+                        n_pad as u32,
+                        q_dim as u32,
+                        1,
+                        gqa_group as u32,
+                        2,
+                        qb as u32,
+                        self.head_dim,
+                        cols_b,
+                    );
+                    qb += attn_qb;
+                }
             } else if use_flash_attn {
                 // Flash-tiled attention: K/V tiles stage once per 32-query tile and the
                 // score/value matmuls ride the simdgroup matrix units.

@@ -81,19 +81,21 @@ head count) llama.cpp leads decisively.
 | Prompt depth | Camelid prefill (tok/s) | llama.cpp prefill (tok/s) |
 | --- | ---: | ---: |
 | 601 tokens | 587.3 (table above) | 543.7 |
-| ~2k tokens | ~554 | 521.7 (pp2048) |
-| ~4k tokens | ~512 | - (not probed) |
-| ~8k tokens | ~102 | 380.8 (pp8192) |
+| ~2k tokens | ~558 | 521.7 (pp2048) |
+| ~4k tokens | ~516 | - (not probed) |
+| ~8k tokens | ~445 | 380.8 (pp8192) |
+| ~16k tokens | ~285 | - (not probed) |
 
 Reading boundary:
 
-- The attention-as-matmul prefill now reaches ~4.7k-token prompts at 24 heads (its
-  scratch budget defaults to an eighth of physical RAM, capped at 2 GiB;
-  CAMELID_METAL_ATTN_MM_CAP_MB overrides). Camelid 2k/4k probes read above
-  llama.cpp's pp2048 in single warm runs — recorded here as probes, NOT a
-  protocol-grade claim. Past the admitted depth (8k here) prefill falls to the v3
-  attention path and reads ~4x BELOW llama.cpp; deep-prompt prefill remains an open
-  lane (query-block S tiling is the planned fix).
+- The attention-as-matmul prefill tiles its S/P panels by query blocks, so its
+  memory is linear in prompt depth and the path now reaches every depth the
+  resident prefill admits (16k checked; scratch budget an eighth of physical RAM
+  capped at 2 GiB, CAMELID_METAL_ATTN_MM_CAP_MB overrides; prompts that fit one
+  block reproduce the untiled math bit-for-bit). Camelid 2k/4k/8k probes read
+  above llama.cpp's pp2048/pp8192 in single warm runs — recorded here as probes,
+  NOT a protocol-grade claim. Anchored-recall continuations stay intact through
+  16k.
 - Decode-at-depth is a measured comparator lane. The latest session (bundle
   `...-decode-at-depth-...-head-ec73ff2/`, after the split-K kv16 mirrors)
   reads Camelid 25.22 / 18.72 tok/s at ~1.5k / ~8k vs llama.cpp 25.69 / 18.92
