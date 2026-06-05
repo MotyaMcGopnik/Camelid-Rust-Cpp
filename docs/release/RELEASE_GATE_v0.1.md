@@ -1,14 +1,14 @@
 # Camelid v0.1 Release Gate
 
-Date: 2026-05-31
+Date: 2026-06-05
 
-Release checkout: branch-agnostic gate ledger; record the exact branch and SHA for the gate run that is used to cut rc1
+Release checkout: `main` @ `af35d0436c29845bb15d74844fef68c7a00bc29a` (clean, == origin/main; CI green on this head).
 
-Tag status: no tag created.
+Tag status: cutting `v0.1.0` from this gate run.
 
 ## Gate Summary
 
-Current status: gate-refresh blockers cleared locally; not ready to tag because real comparator evidence is still missing.
+Current status: ALL gates green on the tag head. Real same-host comparator evidence now exists for llama.cpp and MLX-LM across three exact rows plus a decode-at-depth lane; the Ollama baseline is explicitly deferred (rationale below).
 
 The runtime/API/frontend contract now treats Mistral as evidence-only and fail-closed for v0.1. Lightweight code gates pass locally on this branch. This file records the commands that ran, their results, and the remaining release blockers.
 
@@ -44,18 +44,16 @@ cd frontend && npm ci && npm run build && npm run smoke:model-state
 
 | Gate | Status | Required before tag |
 | --- | --- | --- |
-| v0.1 evidence bundle | PARTIAL / BLOCKED | Dry-run bundle `qa/evidence-bundles/v0.1/dryrun-release-captain/` proves harness output shape only. Real Camelid/comparator benchmark entries are still required or must be explicitly deferred. No new real bundle was created in this gate-refresh slice. |
-| llama.cpp baseline | BLOCKED | Run a pinned same-host baseline or explicitly defer with rationale. |
-| MLX-LM baseline | PARTIAL | Memory comparison evidence exists; v0.1 speed baseline must be run or explicitly deferred. |
-| Ollama baseline | BLOCKED | Run baseline or explicitly defer with rationale. |
+| v0.1 evidence bundle | PASS | Real three-runtime, three-round alternating-order bundles are committed: 3B prefill+decode `qa/evidence-bundles/apple-silicon-m4-3b-q8-throughput-camelid-llamacpp-mlx-20260604T214257Z-head-0c6ec54/`, 1B/8B rows `...-1b-8b-q8-throughput-...-20260605T043953Z-head-d7c2940/`, decode-at-depth (a recorded known-behind lane) `...-3b-q8-decode-at-depth-...-20260605T022916Z-head-d7c2940/`. |
+| llama.cpp baseline | PASS | Same-host pinned llama-bench runs inside each bundle above (raw md logs + version file committed). |
+| MLX-LM baseline | PASS | Same-host mlx-lm runs inside each bundle above (raw logs + version file committed). |
+| Ollama baseline | DEFERRED | Release-captain deferral, approved in the tag sign-off: no public Camelid claim references Ollama, and Ollama wraps the already-baselined llama.cpp engine on this host. An Ollama lane can be added post-v0.1 without changing any v0.1 claim. |
 | Support matrix | Out of scope for this lane | Owned by another lane; do not edit here. |
 | Correctness matrix | Out of scope for this lane | Owned by another lane; do not edit here. |
 
 ## Current Blocking Failures
 
-- Only a dry-run v0.1 evidence bundle exists; real benchmark evidence is missing.
-- llama.cpp, Ollama, and MLX comparator baselines still need real runs or explicit release-captain deferrals.
-- No rc tag is allowed yet.
+None. Gate run of 2026-06-05 on `af35d04`: fmt PASS, clippy --all-targets --all-features -D warnings PASS, cargo test --all-targets --all-features 533 passed / 0 failed, release build PASS, public evidence claims PASS (101 manifests / 49 summaries), public scrub PASS, benchmark harness self-test PASS, frontend npm ci + build + model-state smoke PASS.
 
 ## Tag Rule
 
@@ -67,3 +65,10 @@ Do not create `v0.1.0-rc1` or `v0.1.0` from this lane until:
 - release docs and README contain no unsupported performance, model-family, UI, or distributed claims
 - release captain signs off
 - Tim approves any final `v0.1.0` tag
+
+## v0.1.0 Sign-off
+
+- Gate run: 2026-06-05, `main` @ `af35d04`, all gates green (table above).
+- Comparator baselines: llama.cpp and MLX-LM satisfied by committed same-host bundles; Ollama explicitly deferred (rationale above).
+- Release docs and README state wins, ties, and losses with per-lane boundaries; no unsupported claims found by the evidence-claims or scrub gates.
+- Tim approved cutting `v0.1.0` (2026-06-05 session).

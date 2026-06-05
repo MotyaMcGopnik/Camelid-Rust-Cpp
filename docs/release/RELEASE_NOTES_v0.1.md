@@ -1,8 +1,8 @@
 # Camelid v0.1 Release Notes
 
-Date: 2026-05-31
+Date: 2026-06-05
 
-Release checkout: branch-agnostic working notes; record the exact branch and SHA when cutting rc1
+Release checkout: `main` @ `af35d0436c29845bb15d74844fef68c7a00bc29a` (tag `v0.1.0`)
 
 ## Release Posture
 
@@ -10,7 +10,7 @@ Camelid v0.1 is an evidence-first release candidate. It is meant to show exactly
 
 The release is bounded by exact model rows, committed validation artifacts, and fail-closed unsupported states. Neighboring model sizes, quantizations, template variants, larger contexts, and alternate runtimes do not inherit support.
 
-No tag should be cut from this branch until the release gate in [`RELEASE_GATE_v0.1.md`](RELEASE_GATE_v0.1.md) is green and the release captain signs off.
+The release gate in [`RELEASE_GATE_v0.1.md`](RELEASE_GATE_v0.1.md) is green for this tag, with the sign-off recorded there.
 
 ## What Is Included
 
@@ -18,7 +18,7 @@ No tag should be cut from this branch until the release gate in [`RELEASE_GATE_v
 - React/Vite frontend that reflects the backend compatibility contract.
 - Exact-row v0.1 support ledger in [`SUPPORT_MATRIX_v0.1.md`](../../SUPPORT_MATRIX_v0.1.md), with broader background in [`COMPATIBILITY.md`](../../COMPATIBILITY.md).
 - Current support and blocker snapshot in [`STATUS.md`](../../STATUS.md).
-- Committed benchmark snapshot in [`BENCHMARKS.md`](../benchmarks/BENCHMARKS.md).
+- Committed benchmark snapshots in [`BENCHMARKS.md`](../benchmarks/BENCHMARKS.md), including same-host three-round comparator protocols against llama.cpp (Metal) and MLX-LM on the 1B/3B/8B Q8_0 rows, a decode-at-depth lane recorded as behind both comparators, and an explicit context-depth boundary on the prefill claims.
 - Public evidence-bundle checks for support-sensitive JSON artifacts.
 - Public scrub guard for private paths, host details, and legacy branding.
 

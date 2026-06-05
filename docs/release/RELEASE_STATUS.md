@@ -1,12 +1,12 @@
 # Camelid v0.1 Release Status
 
-Last updated: 2026-05-31
+Last updated: 2026-06-05
 
-Release checkout: branch-agnostic status ledger; record the exact branch and SHA when refreshing rc1 readiness
+Release checkout: `main` @ `af35d0436c29845bb15d74844fef68c7a00bc29a`
 
-Release target: `v0.1.0-rc1`
+Release target: `v0.1.0` — CUT from this head (gate sign-off in `RELEASE_GATE_v0.1.md`)
 
-Release posture: evidence release candidate in progress. Lightweight gates now pass locally, but no tag is allowed until real comparator evidence exists and the release captain signs off.
+Release posture: released. All lightweight gates green on the tag head; real same-host comparator evidence committed for llama.cpp and MLX-LM on the 1B/3B/8B Q8_0 rows plus a decode-at-depth lane; Ollama baseline explicitly deferred with rationale.
 
 ## Latest Release Captain Update
 
