@@ -67,10 +67,13 @@ Reading boundary:
 - The same-session win in the table above is a short-prompt claim only. At 2k and 8k
   Camelid prefill reads 2-4x BELOW llama.cpp on this host; long-context throughput is
   its own unproven lane, not implied by the 601-token row.
-- Decode degrades with KV depth, much less steeply since the split-K decode
-  attention landed: ~25 tok/s at 1.5k positions and ~16 tok/s at 8k (vs ~16 and
-  ~6 with the per-head v2 kernel). Single warm probes; decode-at-depth remains
-  its own unproven comparator lane.
+- Decode-at-depth is now a measured comparator lane (bundle
+  `...-decode-at-depth-...-20260605T022916Z-head-d7c2940/`): three same-session
+  rounds of 64 greedy tokens after ~1.5k and ~8k prompts read Camelid 25.05 /
+  16.94 tok/s vs llama.cpp 26.43 / 19.14 and MLX-LM 26.93 / 22.23 — Camelid is
+  BEHIND both at depth (within ~5-7% at 1.5k, 12-24% at 8k). Before the split-K
+  decode attention the same probes read ~16 and ~6. The residual 8k gap tracks
+  KV element width (f32 cache streaming vs the comparators' half-width caches).
 - The sweep also caught a correctness bug on the >cap path (out-of-bounds GPU writes
   producing non-finite logits on every prompt above ~1.7k tokens) and a precision
   cliff in the flash prefill kernel, both fixed/bounded at head 358db2a; the depth
