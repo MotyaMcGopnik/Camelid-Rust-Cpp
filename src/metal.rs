@@ -2062,6 +2062,7 @@ kernel void kv_scatter_batch_f32(
     constant uint& total [[buffer(7)]],
     device half* cache_k16 [[buffer(8)]],
     device half* cache_v16 [[buffer(9)]],
+    constant uint& write_kv16 [[buffer(10)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= total) return;
@@ -2073,8 +2074,14 @@ kernel void kv_scatter_batch_f32(
     uint dst = (h * max_positions + base_position + t) * head_dim + d;
     cache_k[dst] = src_k[src];
     cache_v[dst] = src_v[src];
-    cache_k16[dst] = half(src_k[src]);
-    cache_v16[dst] = half(src_v[src]);
+    // The half mirrors only exist on the attention-as-matmul path; outside it the host
+    // binds 2-byte placeholders, and unguarded writes here sprayed out-of-bounds GPU
+    // stores that corrupted neighboring buffers (non-finite logits on every fallback
+    // prefill path).
+    if (write_kv16 != 0) {
+        cache_k16[dst] = half(src_k[src]);
+        cache_v16[dst] = half(src_v[src]);
+    }
 }
 
 
@@ -7280,6 +7287,11 @@ impl ResidentDecodeState {
         let kv16_len = self.n_kv_heads * self.max_positions * self.head_dim * 2;
         let cache_k16 = nb(if use_attn_mm { kv16_len } else { 2 });
         let cache_v16 = nb(if use_attn_mm { kv16_len } else { 2 });
+        // Tells kv_scatter_batch whether the half KV mirrors above are real buffers.
+        let kv16_flag = nb(4);
+        unsafe {
+            *(kv16_flag.contents() as *mut u32) = u32::from(use_attn_mm);
+        }
         if use_attn_mm {
             // Zero-fill: the PV pass's k-range covers padded positions the scatter
             // never writes; uninitialized halfs there can be NaN/Inf and 0 x NaN
@@ -7594,6 +7606,7 @@ impl ResidentDecodeState {
                 }
                 e.set_buffer(8, Some(&cache_k16), 0);
                 e.set_buffer(9, Some(&cache_v16), 0);
+                e.set_buffer(10, Some(&kv16_flag), 0);
                 dispatch_rows(&e, &k.kv_scatter_batch_pipeline, kv_dim, n_tokens);
             }
             stage!("3:rope+scatter");
@@ -7602,7 +7615,16 @@ impl ResidentDecodeState {
                 // feeds the discarded hidden stream.
                 continue;
             }
-            let use_flash_attn = use_mm && self.head_dim.is_multiple_of(8) && self.head_dim <= 128;
+            // The flash-tiled prefill attention stages K/V and the P weights as half;
+            // past ~1.6k positions on low-entropy prompts that quantization measurably
+            // degrades attention (anchored-recall probes fail while the v3 kernel and the
+            // CPU path agree), so v3 is the default beyond the attention-as-matmul cap and
+            // flash stays opt-in until it carries f32 P/state.
+            let use_flash_attn = std::env::var_os("CAMELID_METAL_FLASH_PREFILL")
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                && use_mm
+                && self.head_dim.is_multiple_of(8)
+                && self.head_dim <= 128;
             if use_attn_mm {
                 // Attention as two batched half GEMMs + a causal row softmax: the
                 // matmuls ride the same staged simdgroup-tile structure as the

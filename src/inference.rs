@@ -1548,7 +1548,7 @@ impl LlamaInferenceSession {
             .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
             || token_ids.len() < 2
-            || token_ids.len() > 4096
+            || token_ids.len() > 16384
             || self.kv_cache.position != 0
             || self.weights.layer_range.is_some()
             || !self.resident_decode_eligible(false)?
