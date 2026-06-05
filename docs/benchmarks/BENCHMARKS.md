@@ -49,6 +49,35 @@ Reading boundary:
 - This is one exact row on one host. Nothing here transfers to other models, quantizations, context shapes, or hosts.
 
 
+### Apple Silicon context-depth boundary (same host, Camelid vs llama.cpp)
+
+A 2026-06-04 context sweep — the first measurement past the published 601-token row —
+bounded how far the row above extends. It does not: throughput falls steeply with
+prompt depth, and above roughly 1.7k tokens (the attention-as-matmul cap on this
+head count) llama.cpp leads decisively.
+
+| Prompt depth | Camelid prefill (tok/s) | llama.cpp prefill (tok/s) |
+| --- | ---: | ---: |
+| 601 tokens | 587.3 (table above) | 543.7 |
+| ~1.9k tokens | ~253 | 521.7 (pp2048) |
+| ~8k tokens | ~100 | 380.8 (pp8192) |
+
+Reading boundary:
+
+- The same-session win in the table above is a short-prompt claim only. At 2k and 8k
+  Camelid prefill reads 2-4x BELOW llama.cpp on this host; long-context throughput is
+  its own unproven lane, not implied by the 601-token row.
+- Short-context decode similarly degrades with KV depth (e.g. ~16 tok/s at 1.5k
+  positions vs 29.7 near-empty); decode-at-depth is tracked separately and no claim
+  is made for it.
+- The sweep also caught a correctness bug on the >cap path (out-of-bounds GPU writes
+  producing non-finite logits on every prompt above ~1.7k tokens) and a precision
+  cliff in the flash prefill kernel, both fixed/bounded at head 358db2a; the depth
+  numbers here are from the fixed paths, which match the CPU reference on anchored
+  recall probes through 8k tokens.
+- Camelid figures are single warm runs (bounded probes, not a three-round protocol);
+  llama.cpp figures are llama-bench means of 2-3 runs in the same session.
+
 ### Ubuntu bounded unique-chat envelope
 
 These results come from `qa/evidence-bundles/llama32-1b-3b-unique-chat-perf-rss-20260505T061644Z-head-e9f28572e090/manifest.json`.

@@ -24,7 +24,7 @@ Reading boundary, in this repository's house style:
 
 - Both lanes on this row and host read **above both comparators in every round of this session** (prefill: camelid 587.3 / 587.3 / 587.4 vs MLX-LM 579.3 / 577.9 / 577.9 and llama.cpp 543.7; decode: camelid 29.74 / 29.85 / 29.74 vs MLX-LM 29.54 / 29.13 / 29.01 and llama.cpp 29.08 / 29.14 / 29.22). Session-median margins are +1.6% (prefill) and +2.1% (decode) over MLX-LM — every camelid round exceeds every comparator round, but the margins are narrow. This table claims a same-session win on this exact row, not a durable or general one.
 - All three runtimes read faster on this host in this session than in the prior snapshot, so cross-session numbers do not compare; the claim rests on the same-session rounds only.
-- One exact row, one host. Nothing transfers to other models, quantizations, context shapes, or machines.
+- One exact row, one host, short prompts. A context sweep shows the prefill win does NOT extend past ~1.7k-token prompts (llama.cpp leads 2-4x at 2k/8k on this host) and decode slows with KV depth; see the context-depth boundary in [`BENCHMARKS.md`](docs/benchmarks/BENCHMARKS.md). Nothing transfers to other models, quantizations, or machines.
 
 Full method, raw logs, and per-round detail: [`BENCHMARKS.md`](docs/benchmarks/BENCHMARKS.md) and the committed evidence bundle `qa/evidence-bundles/apple-silicon-m4-3b-q8-throughput-camelid-llamacpp-mlx-20260604T214257Z-head-0c6ec54/`.
 
