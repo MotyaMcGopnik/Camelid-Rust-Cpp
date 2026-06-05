@@ -5421,6 +5421,7 @@ fn attn_mm_scratch_cap_bytes() -> usize {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn mm_prefill_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
