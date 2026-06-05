@@ -296,6 +296,49 @@ enum Command {
         #[arg(long, default_value_t = false)]
         evict_page_cache: bool,
     },
+    /// Verify a parity receipt: self-digest, lane identity, an in-process
+    /// Camelid re-run, and a llama.cpp reference re-run. A verified receipt
+    /// proves one request matched the reference for one exact GGUF; it does
+    /// not change any support claim.
+    VerifyReceipt {
+        /// Path to the receipt JSON file.
+        receipt: PathBuf,
+        /// The exact GGUF file the receipt names (its SHA-256 must match).
+        #[arg(long)]
+        gguf: PathBuf,
+        /// llama-server binary for the reference re-run (path or name in PATH).
+        #[arg(long, default_value = "llama-server")]
+        llama_server: String,
+        /// Run only the self half (digest, lane identity, Camelid re-run);
+        /// honest for verifiers without llama.cpp, but full parity is NOT
+        /// asserted.
+        #[arg(long, conflicts_with = "reference_only")]
+        self_only: bool,
+        /// Run only the reference half (digest, lane identity, llama.cpp
+        /// re-run); skips the in-process Camelid re-run.
+        #[arg(long)]
+        reference_only: bool,
+        /// Context size passed to llama-server (-c).
+        #[arg(long, default_value_t = 2048)]
+        llama_ctx: u32,
+        /// Port for the temporary llama-server instance.
+        #[arg(long, default_value_t = 8189)]
+        llama_port: u16,
+        /// Override Rayon worker threads for the Camelid re-run.
+        #[arg(long)]
+        threads: Option<usize>,
+    },
+    /// Recompute and stamp `receipt_id` on a receipt body. Emitters (e.g. the
+    /// chat-parity harness) delegate sealing here so canonical serialization
+    /// and digesting live in exactly one implementation.
+    SealReceipt {
+        /// Receipt JSON to seal (the existing receipt_id value is ignored).
+        #[arg(long, value_name = "PATH")]
+        input: PathBuf,
+        /// Output path; defaults to sealing in place.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -567,6 +610,56 @@ async fn main() -> anyhow::Result<()> {
                 sync_stream,
                 evict_page_cache,
             )?;
+        }
+        Command::VerifyReceipt {
+            receipt,
+            gguf,
+            llama_server,
+            self_only,
+            reference_only,
+            llama_ctx,
+            llama_port,
+            threads,
+        } => {
+            configure_rayon_threads(threads)?;
+            let mode = if self_only {
+                camelid::receipt::verify::VerifyMode::SelfOnly
+            } else if reference_only {
+                camelid::receipt::verify::VerifyMode::ReferenceOnly
+            } else {
+                camelid::receipt::verify::VerifyMode::Full
+            };
+            let outcome = camelid::receipt::verify::run(camelid::receipt::verify::VerifyOptions {
+                receipt_path: receipt,
+                gguf,
+                llama_server,
+                mode,
+                llama_ctx,
+                llama_port,
+                threads,
+            })
+            .await;
+            std::process::exit(outcome.exit_code());
+        }
+        Command::SealReceipt { input, output } => {
+            let raw = std::fs::read_to_string(&input)?;
+            let mut receipt: camelid::receipt::ParityReceipt = serde_json::from_str(&raw)?;
+            anyhow::ensure!(
+                receipt.schema == camelid::receipt::RECEIPT_SCHEMA_V1,
+                "unknown receipt schema {:?} (expected {:?})",
+                receipt.schema,
+                camelid::receipt::RECEIPT_SCHEMA_V1
+            );
+            receipt.seal()?;
+            let out_path = output.unwrap_or(input);
+            let mut serialized = serde_json::to_string_pretty(&receipt)?;
+            serialized.push('\n');
+            std::fs::write(&out_path, serialized)?;
+            println!(
+                "sealed receipt_id={} -> {}",
+                receipt.receipt_id,
+                out_path.display()
+            );
         }
     }
     Ok(())

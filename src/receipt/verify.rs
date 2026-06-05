@@ -1,0 +1,698 @@
+//! Standalone receipt verifier behind `camelid verify-receipt`.
+//!
+//! Anyone with the receipt, the exact GGUF, and (optionally) a llama.cpp
+//! `llama-server` binary can independently prove a receipt honest. The
+//! verifier asserts exactly what a receipt claims — one request, one lane —
+//! and nothing more: a verified receipt is not a support promotion, and a
+//! non-reproducible receipt is never reported as verified.
+
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use super::{sha256_file_hex, ParityReceipt, ReceiptResult, NO_DIVERGENCE, RECEIPT_SCHEMA_V1};
+
+/// First index where the two token sequences differ (length mismatch counts
+/// as divergence at the shorter length), or [`NO_DIVERGENCE`] when identical.
+/// Mirrors `firstDifference()` in `scripts/chat-parity-tinyllama.mjs` so the
+/// Rust verifier and the parity harness agree on what "match" means.
+pub fn first_divergent_index(left: &[u32], right: &[u32]) -> i64 {
+    let max = left.len().max(right.len());
+    for index in 0..max {
+        if left.get(index) != right.get(index) {
+            return index as i64;
+        }
+    }
+    NO_DIVERGENCE
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyMode {
+    /// All steps: self-digest, reproducibility, lane identity, Camelid
+    /// re-run, reference re-run.
+    Full,
+    /// Skip the llama.cpp reference re-run (e.g. no llama.cpp installed).
+    SelfOnly,
+    /// Skip the in-process Camelid re-run.
+    ReferenceOnly,
+}
+
+pub struct VerifyOptions {
+    pub receipt_path: PathBuf,
+    pub gguf: PathBuf,
+    pub llama_server: String,
+    pub mode: VerifyMode,
+    pub llama_ctx: u32,
+    pub llama_port: u16,
+    pub threads: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyOutcome {
+    /// Steps 1, 3, 4, 5 all passed for a reproducible receipt.
+    Verified,
+    /// Every attempted step passed, but a half was skipped via
+    /// `--self-only` / `--reference-only`; full parity is NOT asserted.
+    PartiallyVerified,
+    /// The receipt is stamped `reproducible: false`; parity cannot be
+    /// asserted. Only the self-digest and lane identity were checked.
+    NotReproducible,
+    /// The receipt's own parity block records a divergence at emit time; it
+    /// is a divergence record, not a parity claim, and is never reported as
+    /// `RECEIPT VERIFIED`.
+    DivergenceRecord,
+    /// A verification step failed.
+    NotVerified,
+}
+
+impl VerifyOutcome {
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::Verified | Self::PartiallyVerified => 0,
+            Self::NotVerified => 1,
+            Self::NotReproducible => 2,
+            Self::DivergenceRecord => 3,
+        }
+    }
+}
+
+/// Run the verification steps in order, printing one PASS/FAIL line each,
+/// then a single final verdict line.
+pub async fn run(options: VerifyOptions) -> VerifyOutcome {
+    // Step 0 (implicit): the receipt must parse and carry the known schema.
+    let raw = match std::fs::read_to_string(&options.receipt_path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            println!(
+                "FAIL self-digest: could not read {}: {err}",
+                options.receipt_path.display()
+            );
+            return not_verified("self-digest");
+        }
+    };
+    let receipt: ParityReceipt = match serde_json::from_str(&raw) {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            println!("FAIL self-digest: receipt does not parse: {err}");
+            return not_verified("self-digest");
+        }
+    };
+    if receipt.schema != RECEIPT_SCHEMA_V1 {
+        println!(
+            "FAIL self-digest: unknown schema {:?} (this verifier understands {RECEIPT_SCHEMA_V1:?})",
+            receipt.schema
+        );
+        return not_verified("self-digest");
+    }
+
+    // Step 1: self-digest (cheap tamper check).
+    match receipt.verify_self_digest() {
+        Ok(()) => println!(
+            "PASS self-digest: receipt_id matches the canonical body ({})",
+            receipt.receipt_id
+        ),
+        Err(err) => {
+            println!("FAIL self-digest: {err}; the receipt is tampered or malformed");
+            return not_verified("self-digest");
+        }
+    }
+
+    // Step 3 runs for every receipt, including non-reproducible ones.
+    let lane_identity_ok = check_lane_identity(&receipt, &options);
+
+    // Step 2: reproducibility gate.
+    if !receipt.reproducible {
+        println!(
+            "NOTE reproducibility: this receipt is stamped reproducible:false (sampled run); \
+             parity cannot be asserted for a non-deterministic generation. Only the \
+             self-digest and lane identity were checked."
+        );
+        println!("RECEIPT NOT VERIFIABLE (non-reproducible receipt)");
+        return VerifyOutcome::NotReproducible;
+    }
+    println!("PASS reproducibility: receipt records a deterministic (greedy) run");
+
+    if !lane_identity_ok {
+        return not_verified("lane-identity");
+    }
+
+    // Divergence-record gate: a receipt whose own parity block records a
+    // mismatch at emit time is a divergence record, not a parity claim.
+    // Verifying it must never print RECEIPT VERIFIED — that would assert
+    // more than the receipt itself claims.
+    let records_divergence = [
+        receipt.parity.prompt_tokens_match,
+        receipt.parity.generated_tokens_match,
+        receipt.parity.generated_text_match,
+    ]
+    .contains(&Some(false));
+    if records_divergence {
+        println!(
+            "NOTE divergence-record: this receipt's parity block records a mismatch against \
+             the reference at emit time (it documents non-parity). The digest and lane \
+             identity above are checked; parity is not asserted."
+        );
+        println!("RECEIPT IS A DIVERGENCE RECORD (not a parity claim; not verified as parity)");
+        return VerifyOutcome::DivergenceRecord;
+    }
+
+    // Start the reference server BEFORE the in-process Camelid replay loads
+    // the model: spawning a child from a process that already holds gigabytes
+    // of resident weights has been observed to fail on macOS, and the server
+    // can warm up while the replay runs.
+    let reference_server = if options.mode != VerifyMode::SelfOnly {
+        Some(start_reference_server(
+            &options,
+            receipt.reference.version.as_deref(),
+        ))
+    } else {
+        None
+    };
+
+    // Step 4: Camelid re-run (proves Camelid is internally deterministic for
+    // this lane and that the receipt's recorded output is real).
+    if options.mode != VerifyMode::ReferenceOnly {
+        match crate::api::replay_receipt_request(&options.gguf, options.threads, &receipt.request)
+            .await
+        {
+            Ok(replay) => {
+                if let Err(detail) = compare_results(&receipt.result, &replay.result) {
+                    println!("FAIL camelid-rerun: {detail}");
+                    return not_verified("camelid-rerun");
+                }
+                println!(
+                    "PASS camelid-rerun: prompt tokens ({}), generated tokens ({}), and text \
+                     match the receipt",
+                    replay.result.prompt_token_ids.len(),
+                    replay.result.generated_token_ids.len()
+                );
+            }
+            Err(err) => {
+                println!("FAIL camelid-rerun: {err}");
+                return not_verified("camelid-rerun");
+            }
+        }
+    } else {
+        println!("SKIP camelid-rerun: --reference-only");
+    }
+
+    // Step 5: reference re-run against llama.cpp.
+    if let Some(server) = reference_server {
+        let outcome = server.and_then(|server| reference_rerun(&receipt, &options, &server));
+        match outcome {
+            Ok(()) => {}
+            Err(detail) => {
+                println!("FAIL reference-rerun: {detail}");
+                return not_verified("reference-rerun");
+            }
+        }
+    } else {
+        println!("SKIP reference-rerun: --self-only");
+    }
+
+    // Step 6: verdict.
+    match options.mode {
+        VerifyMode::Full => {
+            println!("RECEIPT VERIFIED");
+            VerifyOutcome::Verified
+        }
+        VerifyMode::SelfOnly => {
+            println!(
+                "RECEIPT PARTIALLY VERIFIED (self checks only: digest, lane identity, and \
+                 Camelid's own determinism; the llama.cpp reference re-run was skipped, so \
+                 full parity is NOT asserted)"
+            );
+            VerifyOutcome::PartiallyVerified
+        }
+        VerifyMode::ReferenceOnly => {
+            println!(
+                "RECEIPT PARTIALLY VERIFIED (reference checks only: digest, lane identity, and \
+                 the llama.cpp re-run; the Camelid re-run was skipped)"
+            );
+            VerifyOutcome::PartiallyVerified
+        }
+    }
+}
+
+fn not_verified(step: &str) -> VerifyOutcome {
+    println!("RECEIPT NOT VERIFIED (failed step: {step})");
+    VerifyOutcome::NotVerified
+}
+
+/// Step 3: the supplied GGUF must be the exact file the receipt names.
+fn check_lane_identity(receipt: &ParityReceipt, options: &VerifyOptions) -> bool {
+    match sha256_file_hex(&options.gguf) {
+        Ok(actual) if actual == receipt.lane.gguf_sha256 => {
+            println!("PASS lane-identity: --gguf sha256 matches lane.gguf_sha256 ({actual})");
+            true
+        }
+        Ok(actual) => {
+            println!(
+                "FAIL lane-identity: --gguf sha256 is {actual} but the receipt names \
+                 {}; this receipt is not about this file",
+                receipt.lane.gguf_sha256
+            );
+            false
+        }
+        Err(err) => {
+            println!("FAIL lane-identity: could not hash --gguf: {err}");
+            false
+        }
+    }
+}
+
+fn compare_results(expected: &ReceiptResult, actual: &ReceiptResult) -> Result<(), String> {
+    let prompt_divergence =
+        first_divergent_index(&expected.prompt_token_ids, &actual.prompt_token_ids);
+    if prompt_divergence != NO_DIVERGENCE {
+        return Err(format!(
+            "prompt token ids diverge at index {prompt_divergence} (receipt has {} tokens, \
+             re-run produced {})",
+            expected.prompt_token_ids.len(),
+            actual.prompt_token_ids.len()
+        ));
+    }
+    let generated_divergence =
+        first_divergent_index(&expected.generated_token_ids, &actual.generated_token_ids);
+    if generated_divergence != NO_DIVERGENCE {
+        return Err(format!(
+            "generated token ids diverge at index {generated_divergence} (receipt has {} \
+             tokens, re-run produced {})",
+            expected.generated_token_ids.len(),
+            actual.generated_token_ids.len()
+        ));
+    }
+    if expected.generated_text != actual.generated_text {
+        return Err(format!(
+            "generated text differs: receipt {:?} vs re-run {:?}",
+            expected.generated_text, actual.generated_text
+        ));
+    }
+    Ok(())
+}
+
+/// A running reference `llama-server` instance for step 5.
+struct ReferenceServer {
+    host: &'static str,
+    port: u16,
+    _child: ChildGuard,
+}
+
+/// Spawn `llama-server` on the receipt's GGUF and wait until it is healthy.
+/// Called before the in-process Camelid replay loads any weights.
+fn start_reference_server(
+    options: &VerifyOptions,
+    recorded_version: Option<&str>,
+) -> Result<ReferenceServer, String> {
+    if let Some(version) = llama_server_version(&options.llama_server) {
+        match recorded_version {
+            Some(recorded) if recorded != version => println!(
+                "INFO reference-rerun: local llama-server reports {version:?}; the receipt \
+                 was made against {recorded:?} (informational; parity is still re-checked \
+                 byte-for-byte below)"
+            ),
+            _ => println!("INFO reference-rerun: llama-server version {version:?}"),
+        }
+    }
+
+    let host = "127.0.0.1";
+    if TcpStream::connect((host, options.llama_port)).is_ok() {
+        return Err(format!(
+            "port {} is already in use; pass a free --llama-port",
+            options.llama_port
+        ));
+    }
+    let child = Command::new(&options.llama_server)
+        .args([
+            "--host",
+            host,
+            "--port",
+            &options.llama_port.to_string(),
+            "-m",
+            &options.gguf.display().to_string(),
+            "-ngl",
+            "0",
+            "-c",
+            &options.llama_ctx.to_string(),
+            "--no-warmup",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| {
+            format!(
+                "could not start llama-server binary {:?}: {err}; pass --llama-server or use \
+                 --self-only",
+                options.llama_server
+            )
+        })?;
+    let mut child = ChildGuard(child);
+
+    wait_for_health(host, options.llama_port, &mut child)?;
+    Ok(ReferenceServer {
+        host,
+        port: options.llama_port,
+        _child: child,
+    })
+}
+
+/// Step 5: feed the receipt's exact prompt token ids to the reference
+/// `llama-server` (`/completion` accepts token arrays) and compare the
+/// continuation. Feeding token ids pins the comparison to the exact prompt
+/// the receipt claims — cross-engine chat-template rendering legitimately
+/// differs (system preambles, dates), and template/tokenizer equivalence is
+/// attested at emit time by the parity harness, not re-derived here.
+fn reference_rerun(
+    receipt: &ParityReceipt,
+    _options: &VerifyOptions,
+    server: &ReferenceServer,
+) -> Result<(), String> {
+    let request = &receipt.request;
+    let mut payload = json!({
+        "prompt": receipt.result.prompt_token_ids,
+        "n_predict": request.max_tokens,
+        "stream": false,
+        "temperature": request.temperature,
+        "cache_prompt": false,
+        "return_tokens": true,
+    });
+    if let Some(top_p) = request.top_p {
+        payload["top_p"] = json!(top_p);
+    }
+    if let Some(top_k) = request.top_k {
+        payload["top_k"] = json!(top_k);
+    }
+    if let Some(seed) = request.seed {
+        payload["seed"] = json!(seed);
+    }
+    if !request.stop.is_empty() {
+        payload["stop"] = json!(request.stop);
+    }
+    println!(
+        "INFO reference-rerun: prompt fed as the receipt's exact {} token ids",
+        receipt.result.prompt_token_ids.len()
+    );
+    let (status, response) = http_json(
+        server.host,
+        server.port,
+        "POST",
+        "/completion",
+        Some(&payload),
+        Duration::from_secs(900),
+    )?;
+    if status != 200 {
+        return Err(format!(
+            "llama-server /completion failed ({status}): {response}"
+        ));
+    }
+    let llama_text = response["content"].as_str().unwrap_or_default().to_string();
+    // Newer builds return the generated token ids directly; older builds get
+    // the text re-tokenized as a fallback.
+    let llama_generated: Vec<u32> = match response["tokens"].as_array() {
+        Some(tokens) if !tokens.is_empty() => tokens
+            .iter()
+            .filter_map(|token| token.as_u64().map(|id| id as u32))
+            .collect(),
+        _ if llama_text.is_empty() => Vec::new(),
+        _ => tokenize(server.host, server.port, &llama_text, false)?,
+    };
+
+    let receipt_ids = &receipt.result.generated_token_ids;
+    let divergence = first_divergent_index(receipt_ids, &llama_generated);
+    // llama.cpp reports the stop token inconsistently across builds: accept a
+    // single missing trailing stop token when the run finished on a stop and
+    // every preceding token matches — and say so explicitly.
+    let trailing_stop_only = divergence != NO_DIVERGENCE
+        && receipt.result.finish_reason == "stop"
+        && receipt_ids.len() == llama_generated.len() + 1
+        && divergence == llama_generated.len() as i64;
+    if divergence != NO_DIVERGENCE && !trailing_stop_only {
+        return Err(format!(
+            "generated token ids diverge from llama.cpp at index {divergence} (receipt has \
+             {} tokens, llama.cpp produced {})",
+            receipt_ids.len(),
+            llama_generated.len()
+        ));
+    }
+    if receipt.result.generated_text != llama_text {
+        return Err(format!(
+            "generated text differs from llama.cpp: receipt {:?} vs llama.cpp {:?}",
+            receipt.result.generated_text, llama_text
+        ));
+    }
+    if trailing_stop_only {
+        println!(
+            "PASS reference-rerun: generated tokens ({}) and text match llama.cpp; the \
+             receipt additionally records the trailing stop token {} that llama.cpp does \
+             not report (first_divergent_token_index={NO_DIVERGENCE})",
+            llama_generated.len(),
+            receipt_ids.last().copied().unwrap_or_default()
+        );
+    } else {
+        println!(
+            "PASS reference-rerun: generated tokens ({}) and text match llama.cpp \
+             (first_divergent_token_index={NO_DIVERGENCE})",
+            llama_generated.len()
+        );
+    }
+    Ok(())
+}
+
+fn tokenize(host: &str, port: u16, content: &str, add_special: bool) -> Result<Vec<u32>, String> {
+    let (status, response) = http_json(
+        host,
+        port,
+        "POST",
+        "/tokenize",
+        Some(&json!({ "content": content, "add_special": add_special })),
+        Duration::from_secs(60),
+    )?;
+    if status != 200 {
+        return Err(format!(
+            "llama-server /tokenize failed ({status}): {response}"
+        ));
+    }
+    Ok(response["tokens"]
+        .as_array()
+        .map(|tokens| {
+            tokens
+                .iter()
+                .filter_map(|token| token.as_u64().map(|id| id as u32))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+fn wait_for_health(host: &str, port: u16, child: &mut ChildGuard) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut last_error = String::from("no response");
+    while Instant::now() < deadline {
+        if let Ok(Some(status)) = child.0.try_wait() {
+            return Err(format!("llama-server exited during startup ({status})"));
+        }
+        match http_json(host, port, "GET", "/health", None, Duration::from_secs(5)) {
+            Ok((200, _)) => return Ok(()),
+            Ok((status, body)) => last_error = format!("{status}: {body}"),
+            Err(err) => last_error = err,
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "llama-server did not become healthy on {host}:{port} within 300s (last: {last_error})"
+    ))
+}
+
+fn llama_server_version(binary: &str) -> Option<String> {
+    let output = Command::new(binary)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let text = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    } else {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Minimal blocking HTTP/1.1 JSON client for talking to a local
+/// `llama-server` (the repo deliberately carries no HTTP client dependency;
+/// wire code is hand-rolled here as in `distributed.rs`). Sends
+/// `Connection: close` and handles both Content-Length and chunked bodies.
+fn http_json(
+    host: &str,
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout: Duration,
+) -> Result<(u16, Value), String> {
+    let address = format!("{host}:{port}");
+    let stream = TcpStream::connect(&address)
+        .map_err(|err| format!("could not connect to {address}: {err}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|err| err.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| err.to_string())?;
+    let mut stream = stream;
+
+    let body_bytes = body
+        .map(|value| serde_json::to_vec(value).map_err(|err| err.to_string()))
+        .transpose()?
+        .unwrap_or_default();
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nConnection: close\r\n"
+    );
+    if !body_bytes.is_empty() {
+        request.push_str("Content-Type: application/json\r\n");
+        request.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
+    }
+    request.push_str("\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|()| stream.write_all(&body_bytes))
+        .map_err(|err| format!("request write to {address} failed: {err}"))?;
+
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .map_err(|err| format!("response read from {address} failed: {err}"))?;
+    parse_http_response(&raw)
+}
+
+/// Parse a full HTTP/1.1 response (status, headers, body) read to EOF.
+fn parse_http_response(raw: &[u8]) -> Result<(u16, Value), String> {
+    let header_end = find_subsequence(raw, b"\r\n\r\n")
+        .ok_or_else(|| "malformed HTTP response: missing header terminator".to_string())?;
+    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or_default();
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| format!("malformed HTTP status line: {status_line:?}"))?;
+
+    let mut chunked = false;
+    let mut content_length: Option<usize> = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if name == "transfer-encoding" && value.to_ascii_lowercase().contains("chunked") {
+            chunked = true;
+        } else if name == "content-length" {
+            content_length = value.parse().ok();
+        }
+    }
+
+    let body_raw = &raw[header_end + 4..];
+    let body = if chunked {
+        decode_chunked(body_raw)?
+    } else if let Some(length) = content_length {
+        body_raw.get(..length).unwrap_or(body_raw).to_vec()
+    } else {
+        body_raw.to_vec()
+    };
+    if body.is_empty() {
+        return Ok((status, Value::Null));
+    }
+    let value = serde_json::from_slice(&body)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).trim().to_string()));
+    Ok((status, value))
+}
+
+fn decode_chunked(mut raw: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    loop {
+        let line_end = find_subsequence(raw, b"\r\n")
+            .ok_or_else(|| "malformed chunked body: missing size line".to_string())?;
+        let size_line = String::from_utf8_lossy(&raw[..line_end]);
+        let size_text = size_line.split(';').next().unwrap_or_default().trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|_| format!("malformed chunk size: {size_text:?}"))?;
+        raw = &raw[line_end + 2..];
+        if size == 0 {
+            return Ok(out);
+        }
+        let chunk = raw
+            .get(..size)
+            .ok_or_else(|| "malformed chunked body: truncated chunk".to_string())?;
+        out.extend_from_slice(chunk);
+        raw = raw.get(size + 2..).unwrap_or(&[]);
+    }
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_divergent_index_matches_harness_semantics() {
+        assert_eq!(first_divergent_index(&[1, 2, 3], &[1, 2, 3]), NO_DIVERGENCE);
+        assert_eq!(first_divergent_index(&[], &[]), NO_DIVERGENCE);
+        assert_eq!(first_divergent_index(&[1, 2, 3], &[1, 9, 3]), 1);
+        // Length mismatch diverges at the shorter length, like firstDifference().
+        assert_eq!(first_divergent_index(&[1, 2], &[1, 2, 3]), 2);
+        assert_eq!(first_divergent_index(&[1, 2, 3], &[1, 2]), 2);
+    }
+
+    #[test]
+    fn parses_content_length_response() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"ok\":true}\r\n";
+        let (status, value) = parse_http_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn parses_chunked_response() {
+        let raw =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{\"a\":\r\n5\r\ntrue}\r\n0\r\n\r\n";
+        let (status, value) = parse_http_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value["a"], true);
+    }
+
+    #[test]
+    fn parses_error_status_with_plain_body() {
+        let raw = b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found";
+        let (status, value) = parse_http_response(raw).unwrap();
+        assert_eq!(status, 404);
+        assert_eq!(value, Value::String("not found".to_string()));
+    }
+
+    #[test]
+    fn rejects_malformed_chunked_body() {
+        assert!(decode_chunked(b"zz\r\n").is_err());
+        assert!(decode_chunked(b"5\r\nab").is_err());
+    }
+}

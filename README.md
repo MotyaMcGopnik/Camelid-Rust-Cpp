@@ -91,11 +91,22 @@ Reading boundary: this is a same-session result on one exact model row and one m
 
 Correctness evidence (token-parity gates, per-row validation artifacts) is indexed in [`COMPATIBILITY.md`](COMPATIBILITY.md) and [`CORRECTNESS_v0.1.md`](docs/release/CORRECTNESS_v0.1.md).
 
+### Parity receipts
+
+A parity receipt is a verifiable record of one request: the exact GGUF (by SHA-256), the exact input, and the exact tokens produced — checkable on your own machine:
+
+```bash
+camelid verify-receipt receipt.json --gguf path/to/exact-model.Q8_0.gguf
+```
+
+The verifier recomputes the receipt's digest, confirms your GGUF is the named file, replays the request through Camelid, and re-runs it against llama.cpp. Receipts only exist for deterministic (greedy) runs; sampled runs are stamped `reproducible: false` and are not verifiable. **A receipt verifies a single request; it does not change the release ledger or promote any lane.** Details: [`RECEIPTS.md`](RECEIPTS.md).
+
 ## Documentation
 
 - [`SUPPORT_MATRIX_v0.1.md`](SUPPORT_MATRIX_v0.1.md) — which exact model rows are supported, and with what evidence
 - [`COMPATIBILITY.md`](COMPATIBILITY.md) — the durable support contract
 - [`BENCHMARKS.md`](docs/benchmarks/BENCHMARKS.md) — benchmark snapshots and claim rules
+- [`RECEIPTS.md`](RECEIPTS.md) — verifiable single-request parity receipts (not a support ledger)
 - [`STATUS.md`](STATUS.md) — current evidence snapshot and blockers
 - [`ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) — implementation architecture
 - [`RELEASE_NOTES_v0.1.md`](docs/release/RELEASE_NOTES_v0.1.md) — v0.1 release notes

@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
+    embed_build_provenance();
     println!("cargo:rerun-if-changed=src/x86_amx_q8.c");
     println!("cargo:rerun-if-env-changed=CAMELID_BUILD_X86_AMX_SHIM");
     println!("cargo:rustc-check-cfg=cfg(camelid_x86_amx_shim)");
@@ -70,6 +71,32 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=camelid_x86_amx_q8");
     println!("cargo:rustc-cfg=camelid_x86_amx_shim");
+}
+
+// Embed git provenance so a running binary reports its own version/commit
+// (used by parity receipts) without shelling out at request time. Builds
+// without a git checkout simply omit the env vars; the receipt module falls
+// back to the crate version.
+fn embed_build_provenance() {
+    // Re-run when HEAD or the index moves so the embedded commit stays current.
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
+    if let Some(commit) = git_stdout(&["rev-parse", "HEAD"]) {
+        println!("cargo:rustc-env=CAMELID_GIT_COMMIT={commit}");
+    }
+    if let Some(describe) = git_stdout(&["describe", "--tags", "--dirty"]) {
+        println!("cargo:rustc-env=CAMELID_GIT_DESCRIBE={describe}");
+    }
+}
+
+fn git_stdout(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?;
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 fn env_flag_enabled(key: &str) -> bool {

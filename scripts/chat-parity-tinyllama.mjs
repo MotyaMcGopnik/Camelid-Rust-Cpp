@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
 
 const args = new Map()
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -23,6 +27,15 @@ const llamaServerBin = args.get('llama-server') || process.env.TINYLLAMA_LLAMA_S
 const startLlamaServer = args.has('start-llama-server') || process.env.TINYLLAMA_START_LLAMA_SERVER === '1'
 const diagnosticsOut = args.get('diagnostics-out') || process.env.TINYLLAMA_CHAT_DIAGNOSTICS_OUT
 const requireGeneratedMatch = args.has('require-generated-match') || process.env.TINYLLAMA_CHAT_REQUIRE_GENERATED_MATCH === '1'
+// Receipt emission is an explicit opt-in (--emit-receipt <out.json>), never
+// silently attached. Sealing (canonical serialization + receipt_id digest) is
+// delegated to `camelid seal-receipt` so it lives in exactly one place.
+const emitReceipt = args.get('emit-receipt') || process.env.TINYLLAMA_EMIT_RECEIPT
+const camelidBin = args.get('camelid-bin') || process.env.CAMELID_BIN || 'camelid'
+// Dense diagnostics stay on by default; --no-dense-diagnostics keeps the
+// token/text parity comparison (and receipt emission) usable on lanes where
+// the dense diagnostic path is unavailable.
+const denseDiagnostics = !(args.has('no-dense-diagnostics') || process.env.TINYLLAMA_CHAT_NO_DENSE_DIAGNOSTICS === '1')
 
 if (!Number.isInteger(maxTokens) || maxTokens < 1) {
   throw new Error(`--max-tokens must be a positive integer, got ${args.get('max-tokens')}`)
@@ -59,7 +72,7 @@ try {
     throw err
   }
 
-  await fetchJson(`${backendBase}/api/models/load`, {
+  const loadResponse = await fetchJson(`${backendBase}/api/models/load`, {
     method: 'POST',
     body: JSON.stringify({ path: modelPath, id: modelId }),
   })
@@ -111,7 +124,7 @@ try {
     body: JSON.stringify({
       ...chatPayload,
       camelid_logit_token_ids: diagnosticTokenIds,
-      camelid_dense_diagnostics: true,
+      ...(denseDiagnostics ? { camelid_dense_diagnostics: true } : {}),
     }),
   })
 
@@ -126,6 +139,8 @@ try {
   const backendText = backendChat.choices?.[0]?.message?.content ?? ''
   const textMatch = backendText === llamaText
   const generatedTextDiffIndex = firstStringDifference(backendText, llamaText)
+  const generatedTokensMatch = JSON.stringify(backendGeneratedTokens) === JSON.stringify(llamaGeneratedTokens)
+  const firstDivergentTokenIndex = firstDifference(backendGeneratedTokens, llamaGeneratedTokens)
 
   console.log(`backend=${backendBase}`)
   console.log(`llama_server=${llamaBase}`)
@@ -178,6 +193,58 @@ try {
     console.log(`diagnostics_out=${diagnosticsPath}`)
   }
 
+  if (emitReceipt) {
+    const receiptPath = resolve(emitReceipt)
+    await mkdir(dirname(receiptPath), { recursive: true })
+    if (!loadResponse?.lane?.gguf_sha256) {
+      throw new Error('--emit-receipt requires a backend that reports lane identity from /api/models/load (rebuild camelid)')
+    }
+    // A live llama.cpp reference ran in this harness, so the parity block is
+    // filled with compared_against_reference:true. This receipt records ONE
+    // request; it is not a support promotion for the lane.
+    const unsealed = {
+      schema: 'camelid.parity-receipt/v1',
+      receipt_id: '',
+      created_utc: new Date().toISOString(),
+      lane: loadResponse.lane,
+      reference: {
+        tool: 'llama.cpp',
+        binary: llamaServerBin,
+        version: await llamaServerVersion(),
+        commit: null,
+      },
+      request: {
+        endpoint: '/v1/chat/completions',
+        messages_or_prompt: messages,
+        max_tokens: maxTokens,
+        temperature: 0,
+        top_p: null,
+        top_k: null,
+        seed: null,
+        stop: [],
+      },
+      reproducible: true,
+      result: {
+        prompt_token_ids: backendPromptTokens,
+        generated_token_ids: backendGeneratedTokens,
+        generated_text: backendText,
+        completion_tokens: backendChat.usage?.completion_tokens ?? backendGeneratedTokens.length,
+        finish_reason: backendChat.choices?.[0]?.finish_reason ?? 'length',
+      },
+      parity: {
+        compared_against_reference: true,
+        prompt_tokens_match: promptMatch,
+        generated_tokens_match: generatedTokensMatch,
+        generated_text_match: textMatch,
+        first_divergent_token_index: firstDivergentTokenIndex,
+      },
+    }
+    const unsealedPath = join(tmpdir(), `camelid-receipt-unsealed-${process.pid}.json`)
+    await writeFile(unsealedPath, `${JSON.stringify(unsealed, null, 2)}\n`)
+    await execFileAsync(camelidBin, ['seal-receipt', '--input', unsealedPath, '--output', receiptPath])
+    console.log(`receipt_out=${receiptPath}`)
+  }
+
   if (!promptMatch) {
     console.log(`first_prompt_diff_index=${firstDifference(backendPromptTokens, baselinePromptTokens)}`)
     if (!allowPromptMismatch) process.exitCode = 1
@@ -187,6 +254,17 @@ try {
   }
 } finally {
   if (child) child.kill('SIGTERM')
+}
+
+async function llamaServerVersion() {
+  // Best-effort: llama-server /props exposes build info on recent builds.
+  try {
+    const props = await fetchJson(`${llamaBase}/props`)
+    const version = props?.build_info ?? props?.version
+    return typeof version === 'string' && version ? version : null
+  } catch {
+    return null
+  }
 }
 
 async function fetchJson(url, options = {}) {

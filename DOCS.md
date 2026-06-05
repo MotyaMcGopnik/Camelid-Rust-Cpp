@@ -20,6 +20,7 @@ Read these first:
 - [`BENCHMARKS.md`](docs/benchmarks/BENCHMARKS.md) — public performance snapshot and benchmark-claim rules
 - [`docs/WAR_ROOM_EVIDENCE_INDEX.md`](docs/WAR_ROOM_EVIDENCE_INDEX.md) — war-room claim-source order, evidence index, and public wording policy
 - [`PARITY.md`](docs/benchmarks/PARITY.md) — exact-row parity proof map and audit trail
+- [`RECEIPTS.md`](RECEIPTS.md) — verifiable single-request parity receipts; a receipt never changes the support ledger
 - [`ROADMAP.md`](ROADMAP.md) — phase-level plan of record
 
 ## Contributor and project policy

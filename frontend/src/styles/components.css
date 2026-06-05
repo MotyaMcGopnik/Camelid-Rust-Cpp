@@ -9414,3 +9414,107 @@ select:focus {
 }
 
 
+/* Parity receipt card — one request, one lane. Copy in this card must never
+   imply lane support; it mirrors the release-ledger boundary language. */
+.parity-receipt-card {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--color-chip) 24%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-soft) 40%, transparent);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.78rem;
+}
+
+.parity-receipt-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.parity-receipt-title {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.parity-receipt-badge {
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.parity-receipt-badge.is-reproducible {
+  background: color-mix(in srgb, var(--color-ready) 14%, transparent);
+  color: var(--color-ready);
+}
+
+.parity-receipt-badge.is-sampled {
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  color: var(--color-warning);
+}
+
+.parity-receipt-lane {
+  font-family: monospace;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.parity-receipt-status {
+  font-weight: 650;
+}
+
+.parity-receipt-status.is-match {
+  color: var(--color-ready);
+}
+
+.parity-receipt-status.is-diverged {
+  color: var(--color-error);
+}
+
+.parity-receipt-status.is-claim,
+.parity-receipt-status.is-sampled {
+  color: var(--color-warning);
+}
+
+.parity-receipt-matches {
+  margin: 0;
+  padding-left: 0;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  list-style: none;
+}
+
+.parity-receipt-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  color: var(--color-text-muted);
+}
+
+.parity-receipt-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.parity-receipt-note {
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.receipt-mode-toggle.is-on {
+  color: var(--color-ready);
+  border-color: color-mix(in srgb, var(--color-ready) 44%, transparent);
+  background: color-mix(in srgb, var(--color-ready) 10%, transparent);
+}

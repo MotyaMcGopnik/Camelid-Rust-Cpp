@@ -39,6 +39,10 @@ use crate::{
         LlamaOutputProjectionDiagnostic, LlamaQ8ScheduleTelemetry, LlamaSampler, SamplingConfig,
     },
     model::{DenseLlamaDims, LlamaFfnTensors, LlamaModelConfig, LlamaTensorBinding},
+    receipt::{
+        self, LaneIdentity, ParityBlock, ParityReceipt, ReceiptResult, ReferenceIdentity,
+        RECEIPT_SCHEMA_V1,
+    },
     tensor::{parse_byte_count_env, CpuTensor, Q8_0Block, TensorStore},
     tokenizer::Tokenizer,
     BackendError,
@@ -121,6 +125,10 @@ pub struct LoadedModel {
     pub tokenizer: TokenizerLoadState,
     #[serde(skip)]
     pub tokenizer_runtime: Option<Arc<Tokenizer>>,
+    /// Receipt lane identity (exact GGUF hash, quantization, provenance),
+    /// hashed once at load time. Identifies the lane for parity receipts; it
+    /// makes no support claim about the lane.
+    pub lane: LaneIdentity,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -330,6 +338,10 @@ pub struct ChatCompletionRequest {
     pub camelid_logit_token_ids: Option<Vec<u32>>,
     pub camelid_dense_diagnostics: Option<bool>,
     pub camelid_dense_diagnostic_generated_index: Option<u32>,
+    /// Opt-in: attach a parity receipt to the (non-streaming) response. The
+    /// receipt is a claim of output for the verifier to check — no reference
+    /// runs here, so its parity block is emitted as not-compared.
+    pub camelid_receipt: Option<bool>,
     #[serde(flatten)]
     pub unsupported_fields: HashMap<String, serde_json::Value>,
 }
@@ -705,6 +717,9 @@ pub struct ChatCompletionResponse {
     pub choices: Vec<ChatCompletionChoice>,
     pub usage: CompletionUsage,
     pub camelid: GenerationDiagnostics,
+    /// Present only when the request opted in via `camelid_receipt: true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camelid_receipt: Option<ParityReceipt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2268,6 +2283,16 @@ async fn load_model_from_path(
     let tokenizer_result = Tokenizer::from_gguf(&gguf);
     let tokenizer = tokenizer_state_from_result(tokenizer_result.as_ref());
     let tokenizer_runtime = tokenizer_result.ok().map(Arc::new);
+    // Hash the exact GGUF bytes once at load time so receipts can name the
+    // lane without re-hashing per request.
+    let gguf_sha256 = receipt::sha256_file_hex(&path).map_err(|err| match err {
+        receipt::ReceiptError::Io { path, source } => BackendError::Io { path, source },
+        other => BackendError::InvalidModelMetadata(other.to_string()),
+    })?;
+    let tokenizer_kind = tokenizer_runtime
+        .as_ref()
+        .map(|tokenizer| tokenizer.model.as_summary_model());
+    let lane = LaneIdentity::capture(&id, &path, &gguf, tokenizer_kind, gguf_sha256);
     let loaded = LoadedModel {
         id: id.clone(),
         path,
@@ -2277,6 +2302,7 @@ async fn load_model_from_path(
         unsupported_runtime,
         tokenizer,
         tokenizer_runtime,
+        lane,
     };
 
     state
@@ -3217,6 +3243,24 @@ async fn chat_completions(
         Ok(payload) => payload,
         Err(err) => return malformed_json_error(err),
     };
+    // Capture the receipt stamp before the request is consumed. Receipts are
+    // strictly opt-in and never silently attached.
+    let receipt_stamp = if req.camelid_receipt.unwrap_or(false) {
+        if req.stream.unwrap_or(false) {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "camelid_receipt is not supported with stream:true; receipts record one complete non-streaming generation".to_string(),
+                Some("camelid_receipt"),
+            );
+        }
+        match receipt_request_stamp(&req) {
+            Ok(stamp) => Some(stamp),
+            Err(response) => return *response,
+        }
+    } else {
+        None
+    };
     let req = GenerationSessionRequest {
         model: req.model,
         prompt: None,
@@ -3254,42 +3298,251 @@ async fn chat_completions(
 
     let model_id = prepared.model_id.clone();
     let prompt_token_count = prepared.token_ids.len();
+    let effective_max_tokens = prepared.max_tokens;
     match generate_decoded_tokens_blocking(prepared).await {
-        Ok(generated) => (
-            StatusCode::OK,
-            Json(ChatCompletionResponse {
-                id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-                object: "chat.completion",
-                created: 0,
-                model: model_id,
-                choices: vec![ChatCompletionChoice {
-                    index: 0,
-                    message: ChatCompletionMessage {
-                        role: "assistant",
-                        content: generated.text,
+        Ok(generated) => {
+            let camelid_receipt = match receipt_stamp {
+                Some(stamp) => {
+                    build_server_receipt(&state, &model_id, stamp, effective_max_tokens, &generated)
+                        .await
+                }
+                None => None,
+            };
+            (
+                StatusCode::OK,
+                Json(ChatCompletionResponse {
+                    id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                    object: "chat.completion",
+                    created: 0,
+                    model: model_id,
+                    choices: vec![ChatCompletionChoice {
+                        index: 0,
+                        message: ChatCompletionMessage {
+                            role: "assistant",
+                            content: generated.text,
+                        },
+                        finish_reason: generated.finish_reason,
+                    }],
+                    usage: CompletionUsage {
+                        prompt_tokens: prompt_token_count,
+                        completion_tokens: generated.completion_tokens,
+                        total_tokens: prompt_token_count + generated.completion_tokens,
                     },
-                    finish_reason: generated.finish_reason,
-                }],
-                usage: CompletionUsage {
-                    prompt_tokens: prompt_token_count,
-                    completion_tokens: generated.completion_tokens,
-                    total_tokens: prompt_token_count + generated.completion_tokens,
-                },
-                camelid: GenerationDiagnostics {
-                    prompt_token_ids: generated.prompt_token_ids,
-                    generated_token_ids: generated.generated_token_ids,
-                    dense_metadata: generated.dense_metadata,
-                    top_logits: generated.top_logits,
-                    step_top_logits: generated.step_top_logits,
-                    output_projection: generated.output_projection,
-                    dense: generated.dense,
-                    dense_diagnostic_generated_index: generated.dense_diagnostic_generated_index,
-                    timings_ms: generated.timings,
-                },
-            }),
-        )
-            .into_response(),
+                    camelid: GenerationDiagnostics {
+                        prompt_token_ids: generated.prompt_token_ids,
+                        generated_token_ids: generated.generated_token_ids,
+                        dense_metadata: generated.dense_metadata,
+                        top_logits: generated.top_logits,
+                        step_top_logits: generated.step_top_logits,
+                        output_projection: generated.output_projection,
+                        dense: generated.dense,
+                        dense_diagnostic_generated_index: generated
+                            .dense_diagnostic_generated_index,
+                        timings_ms: generated.timings,
+                    },
+                    camelid_receipt,
+                }),
+            )
+                .into_response()
+        }
         Err(response) => *response,
+    }
+}
+
+/// What a server-emitted receipt records about the incoming request, captured
+/// before the request is consumed by the generation path. Effective values
+/// are recorded (e.g. the greedy default temperature 0.0 when omitted) so the
+/// verifier can replay the exact request.
+struct ReceiptRequestStamp {
+    messages_or_prompt: serde_json::Value,
+    temperature: f64,
+    top_p: Option<f64>,
+    top_k: Option<u32>,
+    seed: Option<u64>,
+    stop: Vec<String>,
+    reproducible: bool,
+}
+
+fn receipt_request_stamp(
+    req: &ChatCompletionRequest,
+) -> std::result::Result<ReceiptRequestStamp, Box<Response>> {
+    let messages_or_prompt = match serde_json::to_value(&req.messages) {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(Box::new(api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                format!("camelid_receipt could not record the request messages: {err}"),
+                Some("messages"),
+            )))
+        }
+    };
+    let temperature = f64::from(req.temperature.unwrap_or(0.0));
+    // Reproducible means byte-for-byte replayable: strict greedy decoding
+    // with no top-p/top-k sampling in play. Anything else is stamped
+    // `reproducible: false` and is never presented as verifiable.
+    let reproducible = temperature == 0.0 && req.top_p.is_none() && req.top_k.is_none();
+    Ok(ReceiptRequestStamp {
+        messages_or_prompt,
+        temperature,
+        top_p: req.top_p.map(f64::from),
+        top_k: req.top_k,
+        seed: req.seed,
+        stop: stop_spec_to_vec(req.stop.as_ref()),
+        reproducible,
+    })
+}
+
+fn stop_spec_to_vec(stop: Option<&StopSpec>) -> Vec<String> {
+    match stop {
+        None => Vec::new(),
+        Some(StopSpec::One(value)) => vec![value.clone()],
+        Some(StopSpec::Many(values)) => values.clone(),
+    }
+}
+
+/// Build the opt-in server-side receipt for one completed generation. No
+/// reference engine runs here, so the parity block is emitted not-compared:
+/// the receipt is a claim of output that `camelid verify-receipt` checks
+/// independently. It is not a support promotion for the lane.
+async fn build_server_receipt(
+    state: &AppState,
+    model_id: &str,
+    stamp: ReceiptRequestStamp,
+    effective_max_tokens: u32,
+    generated: &GeneratedText,
+) -> Option<ParityReceipt> {
+    let lane = {
+        let models = state.loaded_models.read().await;
+        models.get(model_id)?.lane.clone()
+    };
+    let mut receipt = ParityReceipt {
+        schema: RECEIPT_SCHEMA_V1.to_string(),
+        receipt_id: String::new(),
+        created_utc: receipt::rfc3339_utc_now(),
+        lane,
+        reference: ReferenceIdentity {
+            tool: "llama.cpp".to_string(),
+            binary: "llama-server".to_string(),
+            version: None,
+            commit: None,
+        },
+        request: receipt::ReceiptRequest {
+            endpoint: "/v1/chat/completions".to_string(),
+            messages_or_prompt: stamp.messages_or_prompt,
+            max_tokens: effective_max_tokens,
+            temperature: stamp.temperature,
+            top_p: stamp.top_p,
+            top_k: stamp.top_k,
+            seed: stamp.seed,
+            stop: stamp.stop,
+        },
+        reproducible: stamp.reproducible,
+        result: ReceiptResult {
+            prompt_token_ids: generated.prompt_token_ids.clone(),
+            generated_token_ids: generated.generated_token_ids.clone(),
+            generated_text: generated.text.clone(),
+            completion_tokens: generated.completion_tokens as u32,
+            finish_reason: generated.finish_reason.to_string(),
+        },
+        parity: ParityBlock::not_compared(),
+        signature: None,
+    };
+    if let Err(err) = receipt.seal() {
+        tracing::warn!(error = %err, "failed to seal camelid_receipt; omitting receipt");
+        return None;
+    }
+    Some(receipt)
+}
+
+/// Outcome of an in-process deterministic replay for `verify-receipt`.
+pub struct ReceiptReplay {
+    pub lane: LaneIdentity,
+    pub result: ReceiptResult,
+}
+
+/// Replay a receipt's request through the exact non-streaming generation path
+/// (same handlers `serve` uses) against the given GGUF, returning what this
+/// build produced. Used by `camelid verify-receipt` to prove the receipt's
+/// recorded output is reproducible by Camelid itself.
+pub async fn replay_receipt_request(
+    gguf_path: &std::path::Path,
+    configured_threads: Option<usize>,
+    request: &receipt::ReceiptRequest,
+) -> std::result::Result<ReceiptReplay, String> {
+    let state = AppState::with_configured_threads(configured_threads);
+    let loaded = load_model_from_path(&state, gguf_path.to_path_buf(), None)
+        .await
+        .map_err(|err| format!("model load failed: {err}"))?;
+    let is_chat = request.endpoint.contains("chat");
+    let (prompt, messages) = if is_chat {
+        let messages: Vec<ChatMessage> = serde_json::from_value(request.messages_or_prompt.clone())
+            .map_err(|err| {
+                format!("receipt messages_or_prompt does not parse as chat messages: {err}")
+            })?;
+        (None, Some(messages))
+    } else {
+        let prompt: String =
+            serde_json::from_value(request.messages_or_prompt.clone()).map_err(|err| {
+                format!("receipt messages_or_prompt does not parse as a prompt string: {err}")
+            })?;
+        (Some(prompt), None)
+    };
+    let session_request = GenerationSessionRequest {
+        model: Some(loaded.id.clone()),
+        prompt,
+        messages,
+        max_tokens: Some(request.max_tokens),
+        stream: Some(false),
+        temperature: Some(request.temperature as f32),
+        top_k: request.top_k,
+        top_p: request.top_p.map(|value| value as f32),
+        seed: request.seed,
+        presence_penalty: None,
+        frequency_penalty: None,
+        logit_bias: None,
+        stop: if request.stop.is_empty() {
+            None
+        } else {
+            Some(StopSpec::Many(request.stop.clone()))
+        },
+        n: None,
+        best_of: None,
+        completion_logprobs: None,
+        chat_logprobs: None,
+        top_logprobs: None,
+        camelid_logit_token_ids: None,
+        camelid_prompt_token_ids: None,
+        camelid_dense_diagnostics: None,
+        camelid_dense_diagnostic_generated_index: None,
+        unsupported_fields: HashMap::new(),
+        default_max_tokens_cap: None,
+    };
+    let prepared = match prepare_generation(&state, session_request).await {
+        Ok(prepared) => prepared,
+        Err(response) => return Err(response_error_text(response).await),
+    };
+    let generated = match generate_decoded_tokens_blocking(prepared).await {
+        Ok(generated) => generated,
+        Err(response) => return Err(response_error_text(*response).await),
+    };
+    Ok(ReceiptReplay {
+        lane: loaded.lane,
+        result: ReceiptResult {
+            prompt_token_ids: generated.prompt_token_ids,
+            generated_token_ids: generated.generated_token_ids,
+            generated_text: generated.text,
+            completion_tokens: generated.completion_tokens as u32,
+            finish_reason: generated.finish_reason.to_string(),
+        },
+    })
+}
+
+async fn response_error_text(response: Response) -> String {
+    let status = response.status();
+    match axum::body::to_bytes(response.into_body(), 64 * 1024).await {
+        Ok(bytes) => format!("{status}: {}", String::from_utf8_lossy(&bytes)),
+        Err(_) => status.to_string(),
     }
 }
 
@@ -6870,6 +7123,17 @@ mod tests {
                 }),
             }),
             tokenizer_runtime: None,
+            lane: LaneIdentity {
+                model_id: "loaded-test".to_string(),
+                gguf_sha256: "ab".repeat(32),
+                gguf_filename: "Loaded-Test.gguf".to_string(),
+                quantization: "unknown".to_string(),
+                architecture: "unknown".to_string(),
+                tokenizer_kind: "unknown".to_string(),
+                tokenizer_sha256: None,
+                camelid_version: receipt::camelid_version(),
+                camelid_commit: receipt::camelid_commit(),
+            },
         };
 
         let caps = llama_server_chat_template_caps(Some(&model));

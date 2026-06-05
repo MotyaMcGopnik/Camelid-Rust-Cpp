@@ -9,6 +9,7 @@ pub mod inference;
 pub mod metal;
 pub mod model;
 pub mod model_source;
+pub mod receipt;
 pub mod tensor;
 pub mod tokenizer;
 

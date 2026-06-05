@@ -57,6 +57,8 @@ function App() {
     newChatTitle,
     setNewChatTitle,
     sending,
+    receiptMode,
+    setReceiptMode,
     loadingModelId,
     registerForm,
     setRegisterForm,
@@ -281,6 +283,8 @@ function App() {
             sendMessage={sendMessage}
             stopGeneration={stopGeneration}
             sending={sending}
+            receiptMode={receiptMode}
+            setReceiptMode={setReceiptMode}
             stoppingGeneration={stoppingGeneration}
           selectedModelRunnable={selectedModelRunnable}
           setTab={setTab}

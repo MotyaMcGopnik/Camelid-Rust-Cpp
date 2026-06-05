@@ -388,6 +388,9 @@ export function useDashboardData({ showNotice, clearNotice }) {
   const [composer, setComposer] = useState('')
   const [newChatTitle, setNewChatTitle] = useState('')
   const [sending, setSending] = useState(false)
+  // Opt-in parity receipts: sends the next message non-streaming with
+  // camelid_receipt:true so the response carries a verifiable receipt.
+  const [receiptMode, setReceiptMode] = useState(false)
   const [stoppingGeneration, setStoppingGeneration] = useState(false)
   const [loadingModelId, setLoadingModelId] = useState('')
   const [pendingChat, setPendingChat] = useState(null)
@@ -772,7 +775,16 @@ export function useDashboardData({ showNotice, clearNotice }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: requestController.signal,
-        body: JSON.stringify({ model: requestModelId, messages: requestMessages, temperature: 0, max_tokens: localChatMaxTokens(history), stream: true }),
+        body: JSON.stringify({
+          model: requestModelId,
+          messages: requestMessages,
+          temperature: 0,
+          max_tokens: localChatMaxTokens(history),
+          // Receipts only attach to non-streaming responses; the JSON
+          // fallback in readStreamingChatCompletion handles that shape.
+          stream: !receiptMode,
+          ...(receiptMode ? { camelid_receipt: true } : {}),
+        }),
       })
       const applyAssistantStreamPatch = (patch) => {
         updateConversationsState((current) => current.map((item) => (
@@ -848,6 +860,7 @@ export function useDashboardData({ showNotice, clearNotice }) {
           total_tokens: promptTokenEstimate + (streamed.completionTokens || estimateTokenCount(streamed.content)),
         },
         camelid: streamed.camelid || null,
+        camelid_receipt: streamed.camelidReceipt || null,
         streaming: false,
         streaming_phase: null,
         first_byte_ms: streamed.firstByteMs ?? null,
@@ -1265,6 +1278,8 @@ export function useDashboardData({ showNotice, clearNotice }) {
     newChatTitle,
     setNewChatTitle,
     sending,
+    receiptMode,
+    setReceiptMode,
     loadingModelId,
     registerForm,
     setRegisterForm,
