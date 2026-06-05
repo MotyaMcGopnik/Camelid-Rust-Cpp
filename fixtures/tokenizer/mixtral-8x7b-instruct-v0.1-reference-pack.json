@@ -1,7 +1,7 @@
 {
   "status": "reference_capture",
   "captured_at": "2026-05-09T13:18:00-07:00",
-  "source": "llama.cpp llama-tokenize --ids against exact-row sparse GGUF header; rendered prompts follow GGUF tokenizer.chat_template captured from Mixtral Q8_0 metadata",
+  "source": "llama.cpp llama-tokenize --ids against exact-row sparse GGUF header; rendered prompts follow GGUF tokenizer.chat_template captured from Mixtral Q8_0 metadata. raw_hello corrected 2026-06-05: the original capture recorded the un-prefixed id 16230, but current llama.cpp applies the SPM space prefix to raw text (verified live against the same-family Mistral v0.3 SPM vocab: 'Hello' -> [1, ' Hello']), matching SentencePiece add_dummy_prefix and this pack's own in-template '\u2581Hello'=22557 mapping; the in-template cases are unchanged (system_user_turn's 16230 follows a newline, where no prefix applies).",
   "expected_artifacts": {
     "target_row": "Mixtral-8x7B-Instruct-v0.1.Q8_0",
     "hf_repo": "leserg/Mixtral-8x7B-Instruct-v0.1-Q8_0-GGUF",
@@ -21,7 +21,7 @@
         "parse_special": true,
         "expected_tokens": [
           1,
-          16230
+          22557
         ]
       },
       {
