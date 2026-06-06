@@ -5198,6 +5198,12 @@ fn generate_token_ids(
         if finish_reason != "length" {
             break;
         }
+        // Speculative rounds emit several tokens per loop iteration, so the
+        // range alone no longer bounds the budget; enforce max_tokens on the
+        // emitted count directly.
+        if generated.len() >= prepared.max_tokens as usize {
+            break;
+        }
         let generated_index = generated.len();
         let collect_dense_for_step =
             collect_dense_diagnostics_for_generated_index(&prepared, generated_index);
@@ -5226,19 +5232,26 @@ fn generate_token_ids(
         }) {
             let remaining = (prepared.max_tokens as usize).saturating_sub(generated.len());
             let context_room = prepared.session.remaining_context();
-            if remaining > 0 && context_room > 0 {
+            let drafts = if remaining > 0 && context_room > 0 {
                 let draft_budget = spec
                     .draft_tokens
                     .min(remaining.saturating_sub(1))
                     .min(context_room.saturating_sub(1));
-                let drafts = spec.drafter.draft(&history, draft_budget).map_err(|err| {
+                spec.drafter.draft(&history, draft_budget).map_err(|err| {
                     Box::new(api_error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "speculative_draft_failed",
                         err.to_string(),
                         None,
                     ))
-                })?;
+                })?
+            } else {
+                Vec::new()
+            };
+            // No drafts (e.g. no n-gram match) → fall through to the plain
+            // single-token step below; a one-token verify chunk would only
+            // add chunk-path overhead over the tuned decode step.
+            if !drafts.is_empty() {
                 let base_position = prepared.session.kv_position();
                 let mut batch = Vec::with_capacity(1 + drafts.len());
                 batch.push(input[0]);
@@ -9174,6 +9187,9 @@ mod tests {
 
     /// Lossless speculation invariant: the spec round loop (batched verify +
     /// rollback) emits exactly the token stream vanilla greedy decode emits.
+    /// Callers must hold `test_support::env_lock()`: the vanilla and spec
+    /// passes must see the same CAMELID_* kernel-route env, and parallel
+    /// tests mutate it.
     fn assert_speculative_matches_vanilla(mut drafter: SpeculativeDrafter) {
         let config = tiny_spec_config();
         let weights = Arc::new(tiny_weights());
@@ -9228,11 +9244,13 @@ mod tests {
 
     #[test]
     fn ngram_speculation_matches_vanilla_greedy_decode() {
+        let _guard = crate::test_support::env_lock();
         assert_speculative_matches_vanilla(SpeculativeDrafter::NGram(NGramDrafter::default()));
     }
 
     #[test]
     fn model_drafter_self_draft_matches_vanilla_greedy_decode() {
+        let _guard = crate::test_support::env_lock();
         let config = tiny_spec_config();
         let weights = Arc::new(tiny_weights());
         // The target drafts for itself: every draft should be accepted, and
@@ -9245,6 +9263,7 @@ mod tests {
 
     #[test]
     fn verify_chunk_rollback_restores_decode_state() {
+        let _guard = crate::test_support::env_lock();
         let config = tiny_spec_config();
         let weights = Arc::new(tiny_weights());
         let prompt = vec![0u32, 1, 2];

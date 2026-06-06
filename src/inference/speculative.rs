@@ -21,7 +21,7 @@
 //! - [`ModelDrafter`]: a small model (same tokenizer) greedily drafts k
 //!   tokens; the target verifies them in one pass.
 
-use crate::inference::LlamaInferenceSession;
+use crate::inference::{LlamaInferenceSession, LlamaSampler};
 use crate::Result;
 
 /// Default drafted tokens per round for the n-gram drafter. Drafts are nearly
@@ -73,7 +73,10 @@ impl Default for NGramDrafter {
     fn default() -> Self {
         Self {
             max_ngram: 4,
-            min_ngram: 2,
+            // Two-token patterns (e.g. ", " pairs) recur with unrelated
+            // continuations and mostly waste verify rows; three-token
+            // matches measure far higher acceptance.
+            min_ngram: 3,
         }
     }
 }
@@ -113,6 +116,10 @@ impl NGramDrafter {
 pub struct ModelDrafter {
     session: LlamaInferenceSession,
     committed: usize,
+    /// Drafted tokens fed into the session's KV beyond `committed` last
+    /// round. The prefix of these that the target accepted is now real
+    /// history, so its KV entries can be kept instead of re-ingested.
+    speculative_fed: Vec<u32>,
 }
 
 impl ModelDrafter {
@@ -123,6 +130,7 @@ impl ModelDrafter {
         Self {
             session,
             committed: 0,
+            speculative_fed: Vec::new(),
         }
     }
 
@@ -130,9 +138,17 @@ impl ModelDrafter {
         if max_tokens == 0 || history.is_empty() {
             return Ok(Vec::new());
         }
-        // Drop last round's speculative tail (drafted tokens and any
-        // rejected context); accepted tokens re-enter via the pending chunk.
-        self.session.rollback_to_position(self.committed)?;
+        // Last round's speculative KV entries start at `committed`. The
+        // prefix that matches history (accepted drafts) is kept; only the
+        // rejected tail is rolled back and never re-fed.
+        let reuse = history[self.committed..]
+            .iter()
+            .zip(self.speculative_fed.iter())
+            .take_while(|(token, fed)| token == fed)
+            .count();
+        self.session.rollback_to_position(self.committed + reuse)?;
+        self.committed += reuse;
+        self.speculative_fed.clear();
         let pending = &history[self.committed..];
         if pending.is_empty() {
             return Ok(Vec::new());
@@ -147,17 +163,33 @@ impl ModelDrafter {
         if max_tokens == 0 {
             return Ok(Vec::new());
         }
-        let (predictions, _timings) = self.session.forward_greedy_verify_chunk(pending)?;
+        // Drafting runs on the tuned generation path (chunked prefill for the
+        // pending tokens, packed-GEMV decode for the sequential draft steps)
+        // rather than one-row verify chunks — the decode step is the fast
+        // route for single tokens.
+        let step = self.session.generate_next_token_with_history_diagnostics(
+            pending,
+            LlamaSampler::Greedy,
+            history,
+            false,
+        )?;
         self.committed = history.len();
         let mut drafts = Vec::with_capacity(max_tokens);
-        drafts.push(*predictions.last().expect("non-empty chunk has predictions"));
+        drafts.push(step.next_token_id);
         while drafts.len() < max_tokens {
             let last = *drafts.last().expect("drafts is non-empty");
-            let (next, _timings) = self.session.forward_greedy_verify_chunk(&[last])?;
-            drafts.push(next[0]);
+            let step = self.session.generate_next_token_with_history_diagnostics(
+                &[last],
+                LlamaSampler::Greedy,
+                history,
+                false,
+            )?;
+            drafts.push(step.next_token_id);
         }
-        // KV now holds `committed` history tokens plus the fed drafts; the
-        // next round's rollback discards the speculative tail.
+        // KV now holds `committed` history tokens plus the fed drafts (all
+        // but the last drafted token); the next round keeps whatever prefix
+        // the target accepts and rolls back the rest.
+        self.speculative_fed = drafts[..drafts.len().saturating_sub(1)].to_vec();
         Ok(drafts)
     }
 }

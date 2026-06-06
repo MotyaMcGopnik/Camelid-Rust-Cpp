@@ -2189,8 +2189,23 @@ fn apply_spec_decode_env(
     spec_draft_model: Option<PathBuf>,
     spec_draft_tokens: Option<usize>,
 ) {
-    if let Some(mode) = spec_decode.filter(|mode| !mode.trim().is_empty()) {
+    let mode = spec_decode.filter(|mode| {
+        let trimmed = mode.trim();
+        !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("off")
+    });
+    if let Some(mode) = mode {
         std::env::set_var("CAMELID_SPEC_DECODE", mode);
+        // Speculative verification needs CPU-resident packed Q8 weights; the
+        // Metal-resident execution plan deliberately keeps CPU-side weights
+        // file-backed (the GPU owns the resident copy), which makes verify
+        // rounds pay a file-speed weight pass each. A spec-enabled server
+        // therefore runs the validated CPU repack plan.
+        std::env::set_var("CAMELID_METAL_RESIDENT_DECODE", "0");
+        std::env::set_var("CAMELID_METAL_RESIDENT_PREFILL", "0");
+        tracing::info!(
+            "speculative decoding enabled; selecting the CPU execution plan \
+             (Metal resident paths disabled server-wide)"
+        );
     }
     if let Some(path) = spec_draft_model {
         std::env::set_var("CAMELID_SPEC_DRAFT_MODEL", path);
