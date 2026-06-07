@@ -8019,6 +8019,103 @@ fn output_projection_diagnostics_support_runtime_packed_tied_output_rows() {
     }
 }
 
+/// The CPU repack execution plan retains the output projection as loader-packed rows
+/// (`q8_0_packed_rows4_4x8`) or plain retained blocks (`q8_0_blocks`) with no dense
+/// values, no file backing, and no runtime storage. Dense diagnostics used to 503 on
+/// these ("... with 0 values") — both storages must now decode token rows.
+#[test]
+fn output_projection_diagnostics_support_loader_packed_and_retained_block_rows() {
+    let _env_guard = env_lock();
+    clear_dense_diagnostic_env();
+
+    let output_norm_values = (0..32)
+        .map(|idx| idx as f32 * 0.125 - 1.5)
+        .collect::<Vec<_>>();
+    let output_norm =
+        CpuTensor::from_f32("output_norm", vec![1, 32], output_norm_values.clone()).unwrap();
+    let row_blocks = vec![
+        Q8_0Block {
+            scale: 0.125,
+            quants: std::array::from_fn(|idx| idx as i8 - 8),
+        },
+        Q8_0Block {
+            scale: 0.0625,
+            quants: std::array::from_fn(|idx| if idx.is_multiple_of(2) { 6 } else { -5 }),
+        },
+        Q8_0Block {
+            scale: 0.09375,
+            quants: std::array::from_fn(|idx| (idx as i8 % 9) - 4),
+        },
+        Q8_0Block {
+            scale: 0.15625,
+            quants: std::array::from_fn(|idx| if idx.is_multiple_of(3) { 7 } else { -3 }),
+        },
+    ];
+    let logits = row_blocks
+        .iter()
+        .map(|block| {
+            output_norm_values
+                .iter()
+                .zip(block.quants.iter())
+                .map(|(input, quant)| *input * block.scale * f32::from(*quant))
+                .sum::<f32>()
+        })
+        .collect::<Vec<_>>();
+    let logits = CpuTensor::from_f32("logits", vec![1, 4], logits).unwrap();
+
+    // Loader-packed direct field (no runtime storage).
+    let packed =
+        Q8_0PackedRows4::from_rows(4, 1, Q8_0PackedRows4Interleave::I8, &row_blocks).unwrap();
+    let mut packed_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+        "output.weight",
+        TensorShape { dims: vec![32, 4] },
+        packed,
+    );
+    packed_weight.q8_0_packed_rows4_4x8 = match packed_weight.q8_0_runtime_storage.take() {
+        Some(Q8_0RuntimeStorage::PackedRows4(packed)) => Some(packed),
+        other => panic!("expected packed rows4 runtime storage, got {other:?}"),
+    };
+
+    // Plain retained blocks only.
+    let mut blocks_weight = CpuTensor::q8_0_runtime_packed_rows4_linear(
+        "output.weight",
+        TensorShape { dims: vec![32, 4] },
+        Q8_0PackedRows4::from_rows(4, 1, Q8_0PackedRows4Interleave::I8, &row_blocks).unwrap(),
+    );
+    blocks_weight.q8_0_runtime_storage = None;
+    blocks_weight.q8_0_blocks = Some(row_blocks.clone());
+
+    for (label, output_weight) in [
+        ("loader_packed", &packed_weight),
+        ("blocks", &blocks_weight),
+    ] {
+        assert!(
+            output_weight.data.is_empty(),
+            "{label} must have no dense values"
+        );
+        let diagnostics = output_projection_diagnostics(
+            &output_norm,
+            output_weight,
+            &logits,
+            &[0, 1],
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{label} diagnostics failed: {err}"));
+        assert_eq!(diagnostics.len(), 2, "{label}");
+        for (idx, diagnostic) in diagnostics.iter().enumerate() {
+            assert_eq!(diagnostic.token_id as usize, idx, "{label}");
+            assert_eq!(diagnostic.layout, "token_major", "{label}");
+            assert_close(diagnostic.reconstructed_logit, diagnostic.reported_logit);
+            assert_close(
+                diagnostic.decoded_component_reconstructed_logit,
+                diagnostic.reported_logit,
+            );
+        }
+    }
+}
+
 #[test]
 fn output_projection_diagnostics_reject_q8_0_file_backed_unaligned_rows_before_read() {
     let _env_guard = env_lock();
