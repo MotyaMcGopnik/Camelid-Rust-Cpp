@@ -12,6 +12,7 @@ pub mod model_source;
 pub mod receipt;
 pub mod tensor;
 pub mod tokenizer;
+pub mod wire_mmap;
 
 pub use error::{BackendError, Result};
 

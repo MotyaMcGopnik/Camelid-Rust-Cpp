@@ -9388,6 +9388,109 @@ pub fn detect_metal_device() -> MetalDeviceInfo {
 #[cfg(test)]
 mod tests {
 
+    /// End-to-end proof for the instant-start lane: Metal can wrap a page-aligned
+    /// window of an mmap'd GGUF with newBufferWithBytesNoCopy and the GPU reads the
+    /// file's own bytes at per-tensor offsets — no read loop, no conversion, no
+    /// upload copy. Skips without a Metal device or a local model file.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wire_mmap_nocopy_buffer_gpu_reads_file_bytes() {
+        use std::os::unix::fs::FileExt;
+
+        if !super::detect_metal_device().available {
+            return;
+        }
+        let model_path = std::env::var("CAMELID_TEST_GGUF").unwrap_or_else(|_| {
+            "/Volumes/Untitled/models/Llama-3.2-3B-Instruct-Q8_0.gguf".to_string()
+        });
+        let model_path = std::path::Path::new(&model_path);
+        if !model_path.exists() {
+            return; // CI runners carry no model files.
+        }
+
+        let gguf = crate::gguf::read_metadata(model_path).unwrap();
+        // Probe one early and one late Q8_0 tensor so both ends of the file are
+        // exercised through the window math.
+        let q8_tensors: Vec<_> = gguf
+            .tensors
+            .iter()
+            .filter(|t| t.tensor_type == crate::gguf::GgufTensorType::Q8_0)
+            .collect();
+        assert!(q8_tensors.len() >= 2, "model should carry Q8_0 tensors");
+        let probes = [q8_tensors[0], q8_tensors[q8_tensors.len() - 1]];
+
+        let mapping = crate::wire_mmap::GgufWireMmap::map(model_path).unwrap();
+        let ranges: Vec<(u64, usize)> = probes
+            .iter()
+            .map(|t| (t.absolute_offset, t.n_bytes as usize))
+            .collect();
+        let device = super::Device::system_default().unwrap();
+        let max_window = (device.max_buffer_length() as usize).min(1 << 30);
+        let plan = crate::wire_mmap::plan_wire_windows(&mapping, &ranges, max_window).unwrap();
+        let (windows, placements) = (plan.windows, plan.placements);
+
+        let queue = device.new_command_queue();
+        for (probe_index, tensor) in probes.iter().enumerate() {
+            let (window_index, in_window) = placements[probe_index];
+            let window = windows[window_index];
+            // SAFETY: window offsets are page-aligned multiples within the mapping,
+            // so base + aligned_offset stays page-aligned and in bounds.
+            let window_ptr = unsafe { mapping.base_ptr().add(window.aligned_offset as usize) };
+            assert_eq!(
+                window_ptr as usize % crate::wire_mmap::page_size(),
+                0,
+                "NoCopy pointer must be page-aligned"
+            );
+            let nocopy = device.new_buffer_with_bytes_no_copy(
+                window_ptr as *const std::ffi::c_void,
+                window.len as u64,
+                super::MTLResourceOptions::StorageModeShared,
+                None,
+            );
+
+            // GPU-copy the head and tail of the tensor out of the NoCopy buffer.
+            let head_len = (tensor.n_bytes as usize).min(256 * 1024);
+            let tail_len = (tensor.n_bytes as usize).min(4096);
+            let tail_offset = tensor.n_bytes as usize - tail_len;
+            let dst = device.new_buffer(
+                (head_len + tail_len) as u64,
+                super::MTLResourceOptions::StorageModeShared,
+            );
+            let cb = queue.new_command_buffer();
+            let blit = cb.new_blit_command_encoder();
+            blit.copy_from_buffer(&nocopy, in_window as u64, &dst, 0, head_len as u64);
+            blit.copy_from_buffer(
+                &nocopy,
+                (in_window + tail_offset) as u64,
+                &dst,
+                head_len as u64,
+                tail_len as u64,
+            );
+            blit.end_encoding();
+            cb.commit();
+            cb.wait_until_completed();
+
+            // Reference bytes straight from the file.
+            let file = std::fs::File::open(model_path).unwrap();
+            let mut expected_head = vec![0u8; head_len];
+            file.read_exact_at(&mut expected_head, tensor.absolute_offset)
+                .unwrap();
+            let mut expected_tail = vec![0u8; tail_len];
+            file.read_exact_at(
+                &mut expected_tail,
+                tensor.absolute_offset + tail_offset as u64,
+            )
+            .unwrap();
+
+            // SAFETY: dst is StorageModeShared and the command buffer completed.
+            let gpu = unsafe {
+                std::slice::from_raw_parts(dst.contents() as *const u8, head_len + tail_len)
+            };
+            assert_eq!(&gpu[..head_len], &expected_head[..], "{}", tensor.name);
+            assert_eq!(&gpu[head_len..], &expected_tail[..], "{}", tensor.name);
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn metal_q8_0_ksplit_gemv_matches_cpu_reference() {
