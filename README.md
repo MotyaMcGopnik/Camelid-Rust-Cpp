@@ -18,8 +18,10 @@ The local web frontend: a dark, collapsed-rail chat surface that enables chat on
 - **Direct GGUF loading** — point it at a `.gguf` file; no conversion or import step.
 - **OpenAI-style local API** — `/v1/chat/completions` and `/v1/completions` with streaming, served locally.
 - **Correctness-focused development** — optimized paths are gated on token-for-token parity with a reference implementation before they ship; unsupported configurations fail closed with typed errors instead of guessing.
+- **Proof-carrying inference** — any request can emit a sealed *parity receipt*: the exact GGUF (by SHA-256), the exact input, and the exact tokens produced, independently re-verifiable on your own machine against llama.cpp — including 7B receipts on a 16 GB Mac. A [conformance suite](docs/CONFORMANCE.md) measures any local runtime by one ruler: determinism, cross-runtime agreement, tokenizer parity, and provability.
 - **Reproducible benchmark evidence** — every published number comes from a committed evidence bundle with raw logs, commands, and versions. No raw log, no claim.
 - **Apple Silicon performance work** — a Metal-resident path (GPU prefill, GPU decode with on-GPU greedy sampling) that is measured against llama.cpp and MLX-LM on the same host, with wins, ties, and losses all stated.
+- **Fast model loading on Apple Silicon** — the local server maps Q8_0 weights for the GPU to read in place rather than reading and copying them, so reloading a model is quick and peak memory stays lower.
 
 ## Status
 
@@ -31,6 +33,7 @@ The local web frontend: a dark, collapsed-rail chat surface that enables chat on
 | Streaming chat | Working | SSE streaming on the chat endpoint. |
 | Apple Silicon Metal path | Working | GPU-resident prefill and decode, selected automatically when a Metal device is present; falls back to validated CPU paths otherwise. |
 | Web frontend | Working | Local React/Vite chat surface; enables chat only for model rows the compatibility contract recognizes. |
+| Parity receipts | Working | Opt-in sealed record of one request; `camelid verify-receipt` re-checks it independently against llama.cpp, including 7B receipts on a 16 GB host. |
 | Other quantizations | Not supported | Fail closed in v0.1. |
 | Distributed worker | Experimental | `serve-distributed` / pipeline worker-master commands exist; not part of the v0.1 support claim. |
 | Ghost mode (layer streaming) | Experimental | `ghost-run` executes one transformer block at a time from a repacked file for a strict memory ceiling; trades throughput for memory, no prefetch yet. |
@@ -93,13 +96,15 @@ Correctness evidence (token-parity gates, per-row validation artifacts) is index
 
 ### Parity receipts
 
-A parity receipt is a verifiable record of one request: the exact GGUF (by SHA-256), the exact input, and the exact tokens produced — checkable on your own machine:
+A parity receipt is a verifiable record of one request: the exact GGUF (by SHA-256), the exact input, and the exact tokens produced. Opt in with `"camelid_receipt": true` on `/v1/chat/completions` or `/v1/completions`, then check it on any machine:
 
 ```bash
 camelid verify-receipt receipt.json --gguf path/to/exact-model.Q8_0.gguf
 ```
 
-The verifier recomputes the receipt's digest, confirms your GGUF is the named file, replays the request through Camelid, and re-runs it against llama.cpp. Receipts only exist for deterministic (greedy) runs; sampled runs are stamped `reproducible: false` and are not verifiable. **A receipt verifies a single request; it does not change the release ledger or promote any lane.** Details: [`RECEIPTS.md`](RECEIPTS.md).
+The verifier recomputes the receipt's digest, confirms your GGUF is the named file, replays the request through Camelid, and re-runs it through llama.cpp — in two isolated passes so each model loads within one model's memory footprint, which lets a 7B receipt verify on a 16 GB Mac. Receipts only exist for deterministic (greedy) runs; sampled runs are stamped `reproducible: false` and are not verifiable. **A receipt verifies a single request; it does not change the release ledger or promote any lane.** Details: [`RECEIPTS.md`](RECEIPTS.md).
+
+To measure any local runtime — not only Camelid — by determinism, cross-runtime agreement, tokenizer parity, and provability on the same model bytes, see the [conformance suite](docs/CONFORMANCE.md).
 
 ## Documentation
 
