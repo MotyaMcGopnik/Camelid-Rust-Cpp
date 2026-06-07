@@ -121,20 +121,29 @@ Outputs: `results.json` (schema `camelid.conformance/v1`) and `SCOREBOARD.md`.
 ## Verifying big receipts on small hardware
 
 A receipt is only as useful as the hardware it can be checked on. The full
-chain re-runs the model twice — once in-process (Camelid's own replay) and once
-in a spawned `llama-server` — so a 7B Q8 receipt asks a host to hold ~15 GB if
-both load at once, which OOM-kills one of them on a 16 GB Mac. The Mistral-7B
-board surfaced exactly this against our own tooling.
+chain re-runs the model twice — Camelid's own replay and a spawned
+`llama-server` — so a 7B Q8 receipt (~7.7 GB each) would ask a host to hold
+~15 GB if both load at once, which OOM-kills one of them on a 16 GB Mac. The
+Mistral-7B board surfaced exactly this against our own tooling.
 
-`camelid verify-receipt` now loads them sequentially, never co-resident: the
-in-process replay (anonymous heap, which must fit) runs first while memory is
-cleanest, then the reference `llama-server` (file-mapped, able to grow against
-reclaimable page cache) starts only after the replay returns. The health-check
-allowance is generous so a genuinely slow cold load from external storage is
-never mistaken for a hang. With this, a 7B receipt verifies on a 16 GB host;
-on a memory-saturated box a worst-case decode peak can still tip it, so headroom
-helps for large models — but the smaller lanes verify reliably, and a receipt's
-two halves are independently checkable in separate runs regardless.
+`camelid verify-receipt` now runs Full mode as **two isolated subprocess
+passes**, each loading exactly one model and fully exiting — so the OS reclaims
+its entire footprint — before the next starts. At most one model is ever
+resident. Three details make it fit on a 16 GB host:
+
+- The **Camelid pass goes first**, while memory is cleanest, and loads its
+  weights as **memory-mapped wire pages** (`CAMELID_METAL_NOCOPY`) — reclaimable,
+  file-backed page cache rather than ~7.7 GB of anonymous heap that must fit.
+- The **reference pass loads second**, mapping the same file (reusing the cache).
+- The reference's context is **sized to the receipt's own length** (a receipt
+  records one bounded generation), so its KV-cache working set stays tiny
+  instead of using a fixed large default.
+
+Verified end to end on a 16 GB Mac with no special flags: a Mistral-7B receipt
+passes the full chain (`RECEIPT VERIFIED`, `first_divergent_token_index = -1`),
+and the smaller lanes verify with no regression. Each model load stays within
+one model's memory footprint, so the proof is checkable on the hardware people
+actually own.
 
 ## What this is not
 

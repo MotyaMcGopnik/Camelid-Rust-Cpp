@@ -109,6 +109,26 @@ pub async fn run(options: VerifyOptions) -> VerifyOutcome {
         return not_verified("self-digest");
     }
 
+    // Full verification runs as two isolated subprocess passes — a reference
+    // pass and a self pass — each loading exactly ONE model and fully exiting
+    // (so the OS reclaims its entire footprint) before the next starts. Two
+    // co-resident 7.7 GB models OOM-kill one of them on a 16 GB host; isolated
+    // passes keep at most one model resident, so a 7B receipt verifies on
+    // consumer hardware. The passes invoke this same binary in --reference-only
+    // and --self-only mode, whose single-pass flow is the in-process code below.
+    if options.mode == VerifyMode::Full {
+        // Size the reference llama-server's context to what THIS receipt actually
+        // needs (its prompt + generated tokens, plus margin) instead of a fixed
+        // large default. A receipt records one bounded generation, so this keeps
+        // the reference's KV-cache working set small, which matters when it loads
+        // right after the Camelid pass left the model's file pages in the cache.
+        let needed_ctx =
+            (receipt.result.prompt_token_ids.len() + receipt.result.generated_token_ids.len() + 16)
+                .next_multiple_of(64)
+                .clamp(64, options.llama_ctx as usize) as u32;
+        return run_full_via_isolated_passes(&options, needed_ctx);
+    }
+
     // Step 1: self-digest (cheap tamper check).
     match receipt.verify_self_digest() {
         Ok(()) => println!(
@@ -160,21 +180,14 @@ pub async fn run(options: VerifyOptions) -> VerifyOutcome {
         return VerifyOutcome::DivergenceRecord;
     }
 
-    // The two re-runs each load the same model; a 7B Q8 is ~7.7 GB, so on a
-    // 16 GB host they cannot be co-resident. Run them SEQUENTIALLY, Camelid
-    // first: the in-process replay allocates anonymous heap (which must fit or
-    // OOM), so it goes first while memory is cleanest; the reference llama-server
-    // loads second via mmap, which can grow against the now-reclaimable page
-    // cache rather than demand-fitting. (Empirically, with the reverse order the
-    // reference's file pages linger in the page cache and the second heap load
-    // OOMs; this order lets a 7B receipt verify on a 16 GB host.) The reference
-    // is also spawned only after the replay returns, from a process holding no
-    // model weights, which sidesteps the macOS large-process child-spawn failure.
+    // Reached only in --self-only / --reference-only mode (Full delegates to two
+    // isolated passes above), so at most one of the two re-runs below executes
+    // and they are never co-resident.
 
     // Step 4: Camelid re-run (proves Camelid is internally deterministic for
     // this lane and that the receipt's recorded output is real). Its AppState
     // and weights are owned within `replay_receipt_request` and dropped on
-    // return, before the reference server starts.
+    // return.
     if options.mode != VerifyMode::ReferenceOnly {
         match crate::api::replay_receipt_request(&options.gguf, options.threads, &receipt.request)
             .await
@@ -243,6 +256,122 @@ pub async fn run(options: VerifyOptions) -> VerifyOutcome {
 fn not_verified(step: &str) -> VerifyOutcome {
     println!("RECEIPT NOT VERIFIED (failed step: {step})");
     VerifyOutcome::NotVerified
+}
+
+/// Full verification as two isolated passes. Each pass invokes this same binary
+/// in a single mode (`--reference-only`, then `--self-only`), so it loads
+/// exactly one model and exits — the OS reclaims its full footprint before the
+/// next pass starts. This keeps at most one model resident at a time, which is
+/// what lets a large receipt (a 7B Q8 is ~7.7 GB) verify on a 16 GB host where
+/// two co-resident loads would OOM-kill one of them.
+fn run_full_via_isolated_passes(options: &VerifyOptions, reference_ctx: u32) -> VerifyOutcome {
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            println!(
+                "RECEIPT NOT VERIFIED (could not locate the camelid executable to spawn \
+                 isolated verification passes: {err})"
+            );
+            return VerifyOutcome::NotVerified;
+        }
+    };
+    println!(
+        "Verifying in two isolated passes — each loads one model and is reclaimed \
+         before the next, so a large receipt verifies within one model's memory footprint."
+    );
+
+    // Camelid pass FIRST, while the box is cleanest. It allocates the model as
+    // anonymous heap, which must fit or OOM and is the hard constraint; the
+    // reference pass's llama-server maps the file instead, which can reuse or
+    // reclaim page cache. Running the reference first leaves ~7.7 GB of its file
+    // pages cached and the second heap load then contends with them and OOMs.
+    println!("\n=== camelid pass (in-process replay) ===");
+    match run_isolated_verify_pass(&exe, options, IsolatedPass::SelfReplay) {
+        0 => {}
+        code => {
+            println!("\nRECEIPT NOT VERIFIED (camelid pass failed)");
+            return outcome_from_exit_code(code);
+        }
+    }
+
+    // Reference pass: loads only the llama.cpp reference model, after the
+    // Camelid pass subprocess has exited and its heap is reclaimed.
+    println!("\n=== reference pass (llama.cpp) ===");
+    match run_isolated_verify_pass(&exe, options, IsolatedPass::Reference { reference_ctx }) {
+        0 => {}
+        code => {
+            println!("\nRECEIPT NOT VERIFIED (reference pass failed)");
+            return outcome_from_exit_code(code);
+        }
+    }
+
+    println!(
+        "\nRECEIPT VERIFIED (self-digest, lane identity, Camelid replay, and llama.cpp \
+         reference re-run all passed across isolated passes)"
+    );
+    VerifyOutcome::Verified
+}
+
+#[derive(Clone, Copy)]
+enum IsolatedPass {
+    Reference { reference_ctx: u32 },
+    SelfReplay,
+}
+
+/// Spawn one single-mode verification pass as a child of this binary, streaming
+/// its output through, and return its exit code (0 = that half verified).
+fn run_isolated_verify_pass(
+    exe: &std::path::Path,
+    options: &VerifyOptions,
+    pass: IsolatedPass,
+) -> i32 {
+    let mut cmd = Command::new(exe);
+    cmd.arg("verify-receipt")
+        .arg(&options.receipt_path)
+        .arg("--gguf")
+        .arg(&options.gguf);
+    match pass {
+        IsolatedPass::SelfReplay => {
+            cmd.arg("--self-only");
+            // Load the replay's weights as page-aligned mmap wire pages instead
+            // of ~7 GB of anonymous heap blocks: file-backed pages are
+            // reclaimable page cache, so a 7B replay fits on a host with only a
+            // few GB free (the heap path OOMs there). Same GPU kernels, so the
+            // replayed tokens are identical. Ignored on non-macOS / without the
+            // wire stack, where it falls back to the block path.
+            cmd.env("CAMELID_METAL_NOCOPY", "1");
+        }
+        IsolatedPass::Reference { reference_ctx } => {
+            cmd.arg("--reference-only")
+                .arg("--llama-server")
+                .arg(&options.llama_server)
+                .arg("--llama-ctx")
+                .arg(reference_ctx.to_string())
+                .arg("--llama-port")
+                .arg(options.llama_port.to_string());
+        }
+    }
+    if let Some(threads) = options.threads {
+        cmd.arg("--threads").arg(threads.to_string());
+    }
+    // Inherit stdio so each pass's own PASS/FAIL lines stream straight through.
+    match cmd.status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(err) => {
+            println!("FAIL: could not spawn the isolated verification pass: {err}");
+            1
+        }
+    }
+}
+
+/// Map a child pass's exit code back to the orchestrator's outcome. Mirrors
+/// `VerifyOutcome::exit_code` (0 is handled by the caller as success).
+fn outcome_from_exit_code(code: i32) -> VerifyOutcome {
+    match code {
+        2 => VerifyOutcome::NotReproducible,
+        3 => VerifyOutcome::DivergenceRecord,
+        _ => VerifyOutcome::NotVerified,
+    }
 }
 
 /// Step 3: the supplied GGUF must be the exact file the receipt names.
