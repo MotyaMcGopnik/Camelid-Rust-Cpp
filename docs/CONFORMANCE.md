@@ -48,14 +48,16 @@ Ollama 0.30.6. All four were individually deterministic across three rounds.
   same model bytes. Silent to every user of that path.
 - **The two llama.cpp builds agree with each other** on generation and
   tokenization across all prompts.
-- **camelid matches llama.cpp on generation but the SentencePiece `/tokenize`
-  endpoints disagree** on prompts with no leading space. Root cause: the SPM
-  leading-space prefix is applied unconditionally by camelid's `/tokenize` but
-  tied to `add_special` by llama.cpp's. With `add_special` on (the generation
-  path) both prepend it, so generations agree; the bare endpoints differ. This
-  is a genuine ecosystem ambiguity in how the SPM space prefix is exposed, not
-  a defect in either generation path — recorded here rather than silently
-  conformed to one side.
+- **camelid matches llama.cpp on generation but their `/tokenize` endpoints
+  disagree** on prompts with no leading space: camelid's `/tokenize` prepends
+  the SentencePiece leading-space prefix where llama.cpp's bare endpoint does
+  not. With `add_special` on (the generation path) both prepend it, so
+  generations agree; only the bare endpoints differ — it never reaches output.
+  Notably this does **not** reproduce on the Mistral-7B board below (also
+  SentencePiece, full `/tokenize` agreement), so it is a tokenizer-config
+  difference in how the bare endpoint exposes the prefix, **not** a blanket
+  SentencePiece-family property. Recorded as a finding — including against
+  ourselves — rather than silently conformed to one side.
 - **camelid emitted a sealed receipt that verified through the full chain**
   (self-digest → lane identity → in-process replay → independent llama.cpp
   reference re-run), `first_divergent_token_index = -1`. No other runtime emits
@@ -69,14 +71,34 @@ memory-pressure restart respectively; the suite records such cases as findings
 and still scores the rest.)
 
 - **camelid and llama.cpp agree completely** — generation token ids and
-  `/tokenize` output both identical (`-1`) across every prompt. Where the
-  tokenizer is BPE, the SentencePiece leading-space ambiguity above does not
-  arise, and the two engines are byte-for-byte equivalent.
+  `/tokenize` output both identical (`-1`) across every prompt — byte-for-byte
+  equivalent.
 - **camelid's receipt verified through the full chain** against the independent
   reference.
 
-The contrast between the two models is the useful result: the suite isolates
-disagreement to a specific tokenizer family and a specific endpoint contract,
+### Mistral 7B Instruct v0.3 Q8_0 (SentencePiece tokenizer)
+
+Runtimes probed: camelid · llama.cpp (Homebrew b9430) · llama.cpp (pinned
+5d56eff). All three were individually deterministic.
+
+- **The `/tokenize` endpoints agree fully** (`-1`, every prompt) — camelid and
+  both llama.cpp builds. This is what refined the TinyLlama finding above: the
+  bare-endpoint leading-space difference is tokenizer-config-specific, not a
+  SentencePiece-family rule.
+- **Generation diverges only on near-ties.** camelid matches llama.cpp exactly
+  on the open-ended prompt, and forks on an adversarial repetition prompt at
+  token 3 ("…fox **jump** over…" vs "…fox **jumps** over…") and on the very last
+  token of the list prompt. camelid's Mistral row is independently proven
+  GPU-decode ≡ CPU-decode greedy-exact, so these are the two *implementations'*
+  tiny numeric differences flipping a near-tied argmax — the same class as
+  documented deep near-ties, not a correctness defect in either.
+- **camelid's 7B receipt verified through the full chain** on a 16 GB host
+  (`first_divergent_token_index = -1`) — see the verifier note below; large
+  receipts are why it had to learn to verify within one model's memory
+  footprint.
+
+The contrast across the three models is the useful result: the suite isolates
+disagreement to a specific tokenizer config and a specific endpoint contract,
 and confirms exact agreement where none of that applies — with a receipt
 proving camelid's side either way.
 
@@ -95,6 +117,24 @@ node tools/conformance/run.mjs \
 `--llama-server label=path` is repeatable; `--receipt-reference` upgrades the
 provability probe from self-checks to the full independent-reference chain.
 Outputs: `results.json` (schema `camelid.conformance/v1`) and `SCOREBOARD.md`.
+
+## Verifying big receipts on small hardware
+
+A receipt is only as useful as the hardware it can be checked on. The full
+chain re-runs the model twice — once in-process (Camelid's own replay) and once
+in a spawned `llama-server` — so a 7B Q8 receipt asks a host to hold ~15 GB if
+both load at once, which OOM-kills one of them on a 16 GB Mac. The Mistral-7B
+board surfaced exactly this against our own tooling.
+
+`camelid verify-receipt` now loads them sequentially, never co-resident: the
+in-process replay (anonymous heap, which must fit) runs first while memory is
+cleanest, then the reference `llama-server` (file-mapped, able to grow against
+reclaimable page cache) starts only after the replay returns. The health-check
+allowance is generous so a genuinely slow cold load from external storage is
+never mistaken for a hang. With this, a 7B receipt verifies on a 16 GB host;
+on a memory-saturated box a worst-case decode peak can still tip it, so headroom
+helps for large models — but the smaller lanes verify reliably, and a receipt's
+two halves are independently checkable in separate runs regardless.
 
 ## What this is not
 

@@ -160,21 +160,21 @@ pub async fn run(options: VerifyOptions) -> VerifyOutcome {
         return VerifyOutcome::DivergenceRecord;
     }
 
-    // Start the reference server BEFORE the in-process Camelid replay loads
-    // the model: spawning a child from a process that already holds gigabytes
-    // of resident weights has been observed to fail on macOS, and the server
-    // can warm up while the replay runs.
-    let reference_server = if options.mode != VerifyMode::SelfOnly {
-        Some(start_reference_server(
-            &options,
-            receipt.reference.version.as_deref(),
-        ))
-    } else {
-        None
-    };
+    // The two re-runs each load the same model; a 7B Q8 is ~7.7 GB, so on a
+    // 16 GB host they cannot be co-resident. Run them SEQUENTIALLY, Camelid
+    // first: the in-process replay allocates anonymous heap (which must fit or
+    // OOM), so it goes first while memory is cleanest; the reference llama-server
+    // loads second via mmap, which can grow against the now-reclaimable page
+    // cache rather than demand-fitting. (Empirically, with the reverse order the
+    // reference's file pages linger in the page cache and the second heap load
+    // OOMs; this order lets a 7B receipt verify on a 16 GB host.) The reference
+    // is also spawned only after the replay returns, from a process holding no
+    // model weights, which sidesteps the macOS large-process child-spawn failure.
 
     // Step 4: Camelid re-run (proves Camelid is internally deterministic for
-    // this lane and that the receipt's recorded output is real).
+    // this lane and that the receipt's recorded output is real). Its AppState
+    // and weights are owned within `replay_receipt_request` and dropped on
+    // return, before the reference server starts.
     if options.mode != VerifyMode::ReferenceOnly {
         match crate::api::replay_receipt_request(&options.gguf, options.threads, &receipt.request)
             .await
@@ -200,9 +200,11 @@ pub async fn run(options: VerifyOptions) -> VerifyOutcome {
         println!("SKIP camelid-rerun: --reference-only");
     }
 
-    // Step 5: reference re-run against llama.cpp.
-    if let Some(server) = reference_server {
-        let outcome = server.and_then(|server| reference_rerun(&receipt, &options, &server));
+    // Step 5: reference re-run against llama.cpp, started now that the Camelid
+    // replay has returned and its model memory is released.
+    if options.mode != VerifyMode::SelfOnly {
+        let outcome = start_reference_server(&options, receipt.reference.version.as_deref())
+            .and_then(|server| reference_rerun(&receipt, &options, &server));
         match outcome {
             Ok(()) => {}
             Err(detail) => {
@@ -489,7 +491,16 @@ fn tokenize(host: &str, port: u16, content: &str, add_special: bool) -> Result<V
 }
 
 fn wait_for_health(host: &str, port: u16, child: &mut ChildGuard) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(300);
+    // Large models cold-loading from slow external storage (a 7B Q8 is ~7.7 GB)
+    // can spend minutes in llama.cpp's "Loading model" state before /health
+    // returns 200 — and the receipt's own Camelid replay runs first with
+    // F_NOCACHE, so it does not warm the page cache for the reference. The cap
+    // is generous so a real load is never mistaken for a hang; a genuinely dead
+    // server is caught immediately by the child-exit check below, not by this
+    // deadline.
+    const HEALTH_TIMEOUT_SECS: u64 = 900;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(HEALTH_TIMEOUT_SECS);
     let mut last_error = String::from("no response");
     while Instant::now() < deadline {
         if let Ok(Some(status)) = child.0.try_wait() {
@@ -503,7 +514,8 @@ fn wait_for_health(host: &str, port: u16, child: &mut ChildGuard) -> Result<(), 
         std::thread::sleep(Duration::from_millis(500));
     }
     Err(format!(
-        "llama-server did not become healthy on {host}:{port} within 300s (last: {last_error})"
+        "llama-server did not become healthy on {host}:{port} within {}s (last: {last_error})",
+        started.elapsed().as_secs()
     ))
 }
 
