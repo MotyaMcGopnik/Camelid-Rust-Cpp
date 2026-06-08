@@ -228,12 +228,12 @@ export function validateTopology(topology) {
 export function sampleTopology() {
   const n = (p) => createNode(p)
   const nodes = [
-    n({ id: 'node-studio', display_name: 'Mac Studio', node_type: 'mac', hostname: 'studio.local', ip_address: '192.168.1.10', port: 22, connection_method: 'ssh', roles: ['coordinator', 'model_host'], status: 'online', os: 'macOS 15', arch: 'arm64', cpu_cores: 24, ram_gb: 192, gpu: 'Apple M2 Ultra (76-core)', vram: '192 GB unified', model_paths: ['/Volumes/Untitled/models'] }),
-    n({ id: 'node-mbp', display_name: 'MacBook Pro', node_type: 'mac', hostname: 'mbp.local', ip_address: '192.168.1.11', roles: ['worker'], status: 'online', os: 'macOS 15', arch: 'arm64', cpu_cores: 14, ram_gb: 64, gpu: 'Apple M3 Max', worker_state: 'running' }),
-    n({ id: 'node-gpu', display_name: 'Linux GPU box', node_type: 'linux', hostname: 'gpu01', ip_address: '192.168.1.20', roles: ['worker', 'model_host'], status: 'online', os: 'Ubuntu 24.04', arch: 'x86_64', cpu_cores: 32, ram_gb: 128, gpu: 'NVIDIA RTX 4090', vram: '24 GB', worker_state: 'running' }),
-    n({ id: 'node-pi', display_name: 'Raspberry Pi 5', node_type: 'raspberrypi', hostname: 'pi5.local', ip_address: '192.168.1.30', roles: ['worker'], status: 'degraded', os: 'Raspberry Pi OS', arch: 'arm64', cpu_cores: 4, ram_gb: 8 }),
-    n({ id: 'node-nas', display_name: 'NAS', node_type: 'linux', hostname: 'nas.local', ip_address: '192.168.1.40', roles: ['storage'], status: 'online', os: 'Linux', arch: 'x86_64', cpu_cores: 4, ram_gb: 16, model_paths: ['/mnt/models'] }),
-    n({ id: 'node-win', display_name: 'Windows PC', node_type: 'windows', hostname: 'win-rig', ip_address: '192.168.1.50', port: 5985, connection_method: 'winrm', roles: ['observer'], status: 'unknown', os: 'Windows 11', arch: 'x86_64', cpu_cores: 16, ram_gb: 32 }),
+    n({ id: 'node-studio', display_name: 'Mac Studio', node_type: 'mac', hostname: 'studio.local', ip_address: '192.0.2.10', port: 22, connection_method: 'ssh', roles: ['coordinator', 'model_host'], status: 'online', os: 'macOS 15', arch: 'arm64', cpu_cores: 24, ram_gb: 192, gpu: 'Apple M2 Ultra (76-core)', vram: '192 GB unified', model_paths: ['/Volumes/Untitled/models'] }),
+    n({ id: 'node-mbp', display_name: 'MacBook Pro', node_type: 'mac', hostname: 'mbp.local', ip_address: '192.0.2.11', roles: ['worker'], status: 'online', os: 'macOS 15', arch: 'arm64', cpu_cores: 14, ram_gb: 64, gpu: 'Apple M3 Max', worker_state: 'running' }),
+    n({ id: 'node-gpu', display_name: 'Linux GPU box', node_type: 'linux', hostname: 'gpu01', ip_address: '192.0.2.20', roles: ['worker', 'model_host'], status: 'online', os: 'Ubuntu 24.04', arch: 'x86_64', cpu_cores: 32, ram_gb: 128, gpu: 'NVIDIA RTX 4090', vram: '24 GB', worker_state: 'running' }),
+    n({ id: 'node-pi', display_name: 'Raspberry Pi 5', node_type: 'raspberrypi', hostname: 'pi5.local', ip_address: '192.0.2.30', roles: ['worker'], status: 'degraded', os: 'Raspberry Pi OS', arch: 'arm64', cpu_cores: 4, ram_gb: 8 }),
+    n({ id: 'node-nas', display_name: 'NAS', node_type: 'linux', hostname: 'nas.local', ip_address: '192.0.2.40', roles: ['storage'], status: 'online', os: 'Linux', arch: 'x86_64', cpu_cores: 4, ram_gb: 16, model_paths: ['/mnt/models'] }),
+    n({ id: 'node-win', display_name: 'Windows PC', node_type: 'windows', hostname: 'win-rig', ip_address: '192.0.2.50', port: 5985, connection_method: 'winrm', roles: ['observer'], status: 'unknown', os: 'Windows 11', arch: 'x86_64', cpu_cores: 16, ram_gb: 32 }),
   ]
   const connections = [
     createConnection({ source_node_id: 'node-studio', target_node_id: 'node-mbp', connection_type: 'thunderbolt', label: 'Thunderbolt 4', latency_ms: 0.4, status: 'online' }),

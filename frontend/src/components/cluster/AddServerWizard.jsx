@@ -124,7 +124,7 @@ export function AddServerWizard({ open, onClose, onAdd, initial }) {
             <div className="cluster-form">
               <Field label="Display name"><input autoFocus value={draft.display_name} onChange={(e) => set({ display_name: e.target.value })} placeholder="e.g. Studio Mac, Pi worker 1" /></Field>
               <div className="cluster-form__pair">
-                <Field label="Hostname or IP address"><input value={draft.hostname} onChange={(e) => set({ hostname: e.target.value })} placeholder="192.168.1.20 or mac-studio.local" /></Field>
+                <Field label="Hostname or IP address"><input value={draft.hostname} onChange={(e) => set({ hostname: e.target.value })} placeholder="192.0.2.20 or mac-studio.local" /></Field>
                 <Field label="Port"><input type="number" value={draft.port} onChange={(e) => set({ port: e.target.value })} /></Field>
               </div>
               <div className="cluster-form__group">
