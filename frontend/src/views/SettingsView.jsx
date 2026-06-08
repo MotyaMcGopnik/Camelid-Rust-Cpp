@@ -30,7 +30,7 @@ export default function SettingsView({
   const [apiBaseDraft, setApiBaseDraft] = useState(apiBase || 'http://127.0.0.1:8181')
   const [showAdvanced, setShowAdvanced] = useState(Boolean(command))
   const [showLogs, setShowLogs] = useState(false)
-  const [maxTokens, setMaxTokens] = useState(() => (typeof window !== 'undefined' && window.localStorage.getItem('camelid.maxTokens')) || '4096')
+  const [maxTokens, setMaxTokens] = useState(() => (typeof window !== 'undefined' && window.localStorage.getItem('camelid.maxTokens')) || '8192')
   const copyResetRef = useRef(null)
 
   useEffect(() => () => { if (copyResetRef.current) window.clearTimeout(copyResetRef.current) }, [])
@@ -163,8 +163,8 @@ export default function SettingsView({
             <select value={maxTokens} onChange={(e) => handleMaxTokens(e.target.value)} aria-label="Max response length">
               <option value="1024">1,024 tokens — short</option>
               <option value="2048">2,048 tokens</option>
-              <option value="4096">4,096 tokens — default</option>
-              <option value="8192">8,192 tokens — long</option>
+              <option value="4096">4,096 tokens</option>
+              <option value="8192">8,192 tokens — default</option>
               <option value="16384">16,384 tokens — very long</option>
             </select>
           </div>

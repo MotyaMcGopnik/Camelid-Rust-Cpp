@@ -104,7 +104,7 @@ function estimateChatTokenCount(messages) {
 
 const CODE_FIRST_SYSTEM_PROMPT = 'begin immediately with complete runnable code. No intro. Output one self-contained file unless the user asks otherwise. For Python, start exactly with ```python, include imports, and close the fence after the complete script. For Python games, prefer tkinter from the standard library over pygame, keep it compact, and include a complete runnable event loop. For HTML output ONE self-contained file. Never use external files or script src. Include inline <style> and inline <script> with working click/game logic before </body>. Start exactly with ```html then <!doctype html> and close the fence after </html>.'
 const MAX_TOKENS_STORAGE_KEY = 'camelid.maxTokens'
-const DEFAULT_CHAT_MAX_TOKENS = 4096
+const DEFAULT_CHAT_MAX_TOKENS = 8192
 
 function getConfiguredMaxTokens() {
   if (typeof window === 'undefined') return DEFAULT_CHAT_MAX_TOKENS
