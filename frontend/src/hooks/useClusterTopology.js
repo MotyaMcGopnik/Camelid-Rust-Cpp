@@ -39,14 +39,18 @@ export function useClusterTopology({ showNotice } = {}) {
     let cancelled = false
     fetch('/cluster-import.json', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((imp) => {
-        if (cancelled || !imp || !imp.import_id) return
+      .then((data) => {
+        if (cancelled || !data) return
+        // Accept a single import object or an array of them (each tracked by import_id).
+        const imports = Array.isArray(data) ? data : (Array.isArray(data.imports) ? data.imports : [data])
         let done = []
         try { done = JSON.parse(window.localStorage.getItem('camelid.clusterImports') || '[]') } catch { /* noop */ }
-        if (done.includes(imp.import_id)) return
-        setTopology((prev) => mergeImport(prev, imp))
-        try { window.localStorage.setItem('camelid.clusterImports', JSON.stringify([...done, imp.import_id])) } catch { /* noop */ }
-        pushEvent('ok', `Imported ${imp.nodes?.length || 0} discovered node(s) into the fabric.`)
+        const fresh = imports.filter((imp) => imp && imp.import_id && !done.includes(imp.import_id))
+        if (!fresh.length) return
+        setTopology((prev) => fresh.reduce((acc, imp) => mergeImport(acc, imp), prev))
+        try { window.localStorage.setItem('camelid.clusterImports', JSON.stringify([...done, ...fresh.map((i) => i.import_id)])) } catch { /* noop */ }
+        const added = fresh.reduce((n, imp) => n + (imp.nodes?.length || 0), 0)
+        pushEvent('ok', `Applied ${fresh.length} cluster import(s) — ${added} node entr${added === 1 ? 'y' : 'ies'}.`)
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -180,18 +184,29 @@ export function useClusterTopology({ showNotice } = {}) {
     if (!node) return false
     const hosts = [node.hostname, node.ip_address].filter(Boolean)
     if (!hosts.length) return false
+    // 1) Live camelid telemetry (real specs) on the camelid HTTP port.
     let tel = { online: false }
     for (const host of hosts) {
       tel = await fetchNodeTelemetry({ host, port: camelidPortFor(node) })
       if (tel.online) break
     }
-    if (!tel.online) return false
-    updateNode(id, { status: 'online', last_seen: nowIso(), ...specsToNodePatch(tel.specs) })
-    if (!quiet) {
-      const s = tel.specs || {}
-      pushEvent('ok', `${node.display_name} online via camelid — ${s.cpu_model || tel.engine}${s.cpu_cores ? ` · ${s.cpu_cores} cores` : ''}.`)
+    if (tel.online) {
+      updateNode(id, { status: 'online', last_seen: nowIso(), ...specsToNodePatch(tel.specs) })
+      if (!quiet) {
+        const s = tel.specs || {}
+        pushEvent('ok', `${node.display_name} online via camelid — ${s.cpu_model || tel.engine}${s.cpu_cores ? ` · ${s.cpu_cores} cores` : ''}.`)
+      }
+      return true
     }
-    return true
+    // 2) Non-HTTP services (e.g. a NanoCamelid pipeline stage on :9100): a TCP probe
+    //    on the service port confirms it's listening. Needs the dev hook (npm run dev).
+    const probe = await probeNode({ host: hosts[0], port: portFor(node) })
+    if (probe.available && probe.reachable) {
+      updateNode(id, { status: 'online', last_seen: nowIso() })
+      if (!quiet) pushEvent('ok', `${node.display_name} reachable on :${portFor(node)} — ${Math.round(probe.latencyMs)}ms.`)
+      return true
+    }
+    return false
   }, [updateNode, pushEvent])
 
   // On load, quietly detect which nodes are actually running camelid (real online + specs).
