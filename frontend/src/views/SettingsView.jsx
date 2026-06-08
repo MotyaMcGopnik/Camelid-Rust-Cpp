@@ -1,0 +1,204 @@
+import { useEffect, useRef, useState } from 'react'
+import { Card, CardHeader, CardBody } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
+import { Chip } from '../components/ui/Chip'
+import { StatusDot } from '../components/ui/StatusDot'
+import { Field } from '../components/ui/Field'
+import { Sparkle } from '../components/ui/Avatar'
+import { IconPlay, IconStop, IconCopy, IconCheck, IconServer, IconMonitor, IconSun, IconMoon, IconNetwork, IconChevronRight } from '../components/ui/icons'
+import { copyText } from '../lib/markdown'
+
+const THEME_OPTS = [
+  { value: 'system', label: 'System', Icon: IconMonitor },
+  { value: 'light', label: 'Light', Icon: IconSun },
+  { value: 'dark', label: 'Dark', Icon: IconMoon },
+]
+
+export default function SettingsView({
+  runtime,
+  apiBase,
+  setApiBase,
+  backend,
+  showNotice,
+  themePreference = 'system',
+  setThemePreference = () => {},
+  onOpenCluster = () => {},
+}) {
+  const online = runtime?.status === 'online'
+  const { status, command, setCommand, resolvedCommand, starting, start, stop } = backend
+  const [copied, setCopied] = useState(false)
+  const [apiBaseDraft, setApiBaseDraft] = useState(apiBase || 'http://127.0.0.1:8181')
+  const [showAdvanced, setShowAdvanced] = useState(Boolean(command))
+  const [showLogs, setShowLogs] = useState(false)
+  const [maxTokens, setMaxTokens] = useState(() => (typeof window !== 'undefined' && window.localStorage.getItem('camelid.maxTokens')) || '8192')
+  const copyResetRef = useRef(null)
+
+  useEffect(() => () => { if (copyResetRef.current) window.clearTimeout(copyResetRef.current) }, [])
+
+  const handleCopy = async () => {
+    await copyText(resolvedCommand || 'camelid serve')
+    setCopied(true)
+    if (copyResetRef.current) window.clearTimeout(copyResetRef.current)
+    copyResetRef.current = window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  const handleSaveApiBase = () => {
+    const next = apiBaseDraft.trim()
+    if (!next) { showNotice?.('API base cannot be empty.', 'error'); return }
+    setApiBase(next)
+    showNotice?.(`API base set to ${next.replace(/\/$/, '')}.`, 'success')
+  }
+
+  const handleMaxTokens = (value) => {
+    setMaxTokens(value)
+    if (typeof window !== 'undefined') window.localStorage.setItem('camelid.maxTokens', value)
+    showNotice?.(`Max response length set to ${Number(value).toLocaleString()} tokens.`, 'success')
+  }
+
+  const statusTone = online ? 'ready' : status.running ? 'warn' : 'offline'
+  const statusLabel = online ? 'Online' : status.running ? 'Starting…' : 'Offline'
+  const noBinary = status.available && !resolvedCommand
+
+  return (
+    <div className="settings-view">
+      <header className="settings-view__head">
+        <h1>Settings</h1>
+        <p>Start the local Camelid backend, point the UI at it, and tune appearance.</p>
+      </header>
+
+      <Card>
+        <CardHeader icon={<IconServer size={20} />} eyebrow="Backend" title="Camelid inference server" actions={
+          <span className="settings-status"><StatusDot tone={statusTone} pulse={online} /> <strong>{statusLabel}</strong></span>
+        } />
+        <CardBody>
+          <p className="settings-help">
+            {online
+              ? `Connected at ${(apiBase || '').replace(/\/$/, '') || 'the configured API base'}. Load a model from the Models page to start chatting.`
+              : status.running
+                ? 'The launched process is running — waiting for it to bind the port…'
+                : status.available
+                  ? 'Not running yet. Start it below — Camelid finds the built binary for you.'
+                  : 'Not running. The one-click launcher needs the dev server (npm run dev).'}
+          </p>
+
+          {status.available ? (
+            <>
+              <div className="settings-actions">
+                <Button variant="primary" icon={<IconPlay size={16} />} onClick={start} loading={starting} disabled={online || starting || status.running}>
+                  {online ? 'Running' : status.running ? 'Starting…' : 'Start backend'}
+                </Button>
+                {status.running && <Button variant="danger" icon={<IconStop size={16} />} onClick={stop}>Stop</Button>}
+                <Button variant="ghost" icon={copied ? <IconCheck size={16} /> : <IconCopy size={16} />} onClick={handleCopy}>
+                  {copied ? 'Copied' : 'Copy command'}
+                </Button>
+              </div>
+
+              <p className={`settings-run ${noBinary ? 'is-warn' : ''}`}>
+                {noBinary
+                  ? 'No built camelid binary found automatically. Add a launch command under Advanced, or run cargo build --release.'
+                  : <>Runs <code>{resolvedCommand}</code>{command.trim() ? '' : ' (auto-detected)'}.</>}
+              </p>
+
+              <button type="button" className="settings-disclosure" onClick={() => setShowAdvanced((v) => !v)} aria-expanded={showAdvanced}>
+                {showAdvanced ? 'Hide' : 'Advanced'} — override launch command
+              </button>
+              {showAdvanced && (
+                <Field hint="Leave blank to auto-detect the built binary. Runs from the repo root; e.g. cargo run --release -- serve.">
+                  <input type="text" value={command} spellCheck={false} placeholder={status.detected || 'camelid serve'} onChange={(e) => setCommand(e.target.value)} />
+                </Field>
+              )}
+
+              <div className="settings-logs">
+                <button type="button" className="settings-disclosure" onClick={() => setShowLogs((v) => !v)} aria-expanded={showLogs}>
+                  {showLogs ? 'Hide' : 'Show'} backend log
+                </button>
+                {showLogs && <pre className="settings-logs__pre">{status.logTail?.trim() || 'No output yet. Start the backend to see logs.'}</pre>}
+              </div>
+            </>
+          ) : (
+            <>
+              <Field label="Launch command">
+                <input type="text" value={command} spellCheck={false} placeholder="camelid serve" onChange={(e) => setCommand(e.target.value)} />
+              </Field>
+              <div className="settings-actions">
+                <Button variant="ghost" icon={copied ? <IconCheck size={16} /> : <IconCopy size={16} />} onClick={handleCopy}>
+                  {copied ? 'Copied' : 'Copy command'}
+                </Button>
+              </div>
+              <p className="settings-help settings-help--muted">
+                Run <code>{resolvedCommand || 'camelid serve'}</code> in a terminal from the repo root, then this turns Online automatically.
+              </p>
+            </>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader eyebrow="Connection" title="API base URL" />
+        <CardBody>
+          <p className="settings-help">Where the UI sends requests. Change this to reach a backend on another host or port.</p>
+          <div className="settings-inline">
+            <input type="text" value={apiBaseDraft} spellCheck={false} onChange={(e) => setApiBaseDraft(e.target.value)} placeholder="http://127.0.0.1:8181" />
+            <Button variant="tonal" onClick={handleSaveApiBase} disabled={apiBaseDraft.trim() === (apiBase || '')}>Save</Button>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card interactive className="settings-cluster-card" onClick={onOpenCluster} role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter') onOpenCluster() }}>
+        <CardHeader
+          icon={<IconNetwork size={20} />}
+          eyebrow="Infrastructure"
+          title="Cluster Topology"
+          actions={<IconChevronRight size={20} />}
+        />
+        <CardBody>Connect Macs, Windows PCs, Linux servers, and Raspberry Pis into one local Camelid compute fabric — add machines, assign roles, and see how everything is wired.</CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader eyebrow="Chat" title="Response length" />
+        <CardBody>
+          <p className="settings-help">How many tokens Camelid can generate per reply. Larger means more complete answers and full programs (less truncation), but slower. Supported rows are validated to ~2K context; larger values still run model-native.</p>
+          <div className="settings-select-row">
+            <select value={maxTokens} onChange={(e) => handleMaxTokens(e.target.value)} aria-label="Max response length">
+              <option value="1024">1,024 tokens — short</option>
+              <option value="2048">2,048 tokens</option>
+              <option value="4096">4,096 tokens</option>
+              <option value="8192">8,192 tokens — default</option>
+              <option value="16384">16,384 tokens — very long</option>
+            </select>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader eyebrow="Appearance" title="Theme" />
+        <CardBody>
+          <div className="settings-theme">
+            {THEME_OPTS.map(({ value, label, Icon }) => (
+              <button
+                key={value}
+                type="button"
+                className={`settings-theme__opt ${themePreference === value ? 'is-active' : ''}`}
+                aria-pressed={themePreference === value}
+                onClick={() => setThemePreference(value)}
+              >
+                <Icon size={18} /> <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card tone="muted">
+        <div className="settings-about">
+          <Sparkle size={28} />
+          <div>
+            <strong>Camelid</strong>
+            <p>Local, proof-carrying LLM inference. The UI talks to the backend over the OpenAI-compatible HTTP API.</p>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}

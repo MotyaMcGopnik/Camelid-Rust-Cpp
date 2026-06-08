@@ -159,7 +159,7 @@ try {
   assert.match(blockedWrongArtifactMarkup, /Runtime ready, support gated/, '3B live chat should show runtime readiness while support remains artifact-gated')
   assert.match(blockedWrongArtifactMarkup, /llama32_3b_instruct_q8_0: exact GGUF not verified/, '3B live chat must name the exact artifact blocker')
   assert.match(blockedWrongArtifactMarkup, /requires the exact Llama-3\.2-3B-Instruct-Q8_0\.gguf artifact/, '3B artifact blocker must name the canonical GGUF filename')
-  assert.match(blockedWrongArtifactMarkup, /disabled="">Send</, '3B composer send must stay disabled for a runtime-ready neighboring artifact')
+  assert.match(blockedWrongArtifactMarkup, /data-send-ready="false"/, '3B composer send must stay disabled for a runtime-ready neighboring artifact')
   assert.doesNotMatch(blockedWrongArtifactMarkup, /Message Camelid"[^>]*disabled/, '3B draft composer should stay editable while exact-row support is still gated')
   assert.doesNotMatch(blockedWrongArtifactMarkup, /Local chat ready/, '3B spoofed artifact must not render the supported live-chat state')
   assert.doesNotMatch(blockedWrongArtifactMarkup, /Demo starters/, '3B spoofed artifact must not expose runnable demo prompts')
@@ -191,8 +191,10 @@ try {
   }))
 
   assert.match(streamingMarkup, /data-streaming-state="active"/, 'streaming assistant rows should render an active streaming state')
-  assert.match(streamingMarkup, /Live chat exact-row readiness[\s\S]*Runtime[\s\S]*Local chat ready[\s\S]*Support[\s\S]*llama32_3b_instruct_q8_0: supported current gate[\s\S]*Capabilities[\s\S]*Template ready · Context ready · Throughput not promoted/, 'non-empty live 3B chats should keep runtime, exact-row support, and row-scoped capability lanes visible after messages exist')
-  assert.match(streamingMarkup, /Row-scoped \/api\/capabilities evidence; it does not widen model-native context/, 'live 3B capability lanes must avoid widening exact-row support into broader claims')
+  // Redesign (2026-06): consolidated status line keeps runtime-ready + exact-row support visible
+  // after messages exist (capability-lane detail now lives in System/API views, asserted there).
+  assert.match(streamingMarkup, /Local chat ready/, 'non-empty live 3B chats should keep the runtime-ready state visible after messages exist')
+  assert.match(streamingMarkup, /llama32_3b_instruct_q8_0: supported current gate/, 'non-empty live 3B chats should keep the exact-row support label visible after messages exist')
   assert.match(streamingMarkup, /COMPATIBILITY\.md and \/api\/capabilities agree/, 'live 3B chat readiness must name the exact-row support-contract requirement')
   assert.match(streamingMarkup, /data-streaming-code-state="open"/, 'open streaming fences should expose the active code state')
   assert.match(streamingMarkup, /Still generating — code block incomplete/, 'open streaming code should visibly say it is incomplete')
@@ -355,12 +357,13 @@ try {
   assert.match(exactReadyMarkup, /chat completions/, 'API view should display provider-scoped feature ids as neutral capability names')
   assert.match(exactReadyMarkup, /standard-compatible streaming stays enabled\./, 'API view should sanitize provider-specific feature notes before rendering')
 
+  // Redesign (2026-06): the TopBar support-contract strip was removed. The slim TopBar shows the
+  // conversation title and, on the chat tab, a compact model status chip. Support-contract caveat
+  // filtering is covered by frontendSupportContractCopy (3b-closure) and the System/API views.
   const topBarMarkup = renderToStaticMarkup(React.createElement(TopBar, {
-    tab: 'api',
+    tab: 'chat',
     setTab: noop,
     selectedConversationTitle: '',
-    selectedConversationUpdatedAt: '',
-    selectedConversationPreview: '',
     runtime: readyRuntime,
     capabilities,
     selectedModelId: selectedModel.id,
@@ -368,9 +371,8 @@ try {
     models: [selectedModel],
   }))
 
-  assert.match(topBarMarkup, /Support contract/, 'TopBar should render the support contract status surface')
-  assert.doesNotMatch(topBarMarkup, /arbitrary|Jinja/s, 'TopBar support contract label should filter resolved template/Jinja caveats')
-  assert.match(topBarMarkup, /production throughput|throughput/s, 'TopBar support contract label should keep production-throughput caveats until explicit production evidence is green')
+  assert.match(topBarMarkup, /topbar__model/, 'chat-tab TopBar should render the compact model status chip')
+  assert.match(topBarMarkup, /Llama 3\.2 3B Instruct Q8_0/, 'TopBar model chip should show the selected model name')
 
   const aliasSelectedModel = {
     ...selectedModel,
@@ -389,11 +391,9 @@ try {
   assert.doesNotMatch(aliasApiMarkup, /&quot;model&quot;: &quot;browser-llama32-3b-alias&quot;/, 'API curl must not create model_mismatch risk for alias-selected exact rows')
 
   const aliasTopBarMarkup = renderToStaticMarkup(React.createElement(TopBar, {
-    tab: 'api',
+    tab: 'chat',
     setTab: noop,
     selectedConversationTitle: '',
-    selectedConversationUpdatedAt: '',
-    selectedConversationPreview: '',
     runtime: readyRuntime,
     capabilities,
     selectedModelId: aliasSelectedModel.id,
@@ -401,10 +401,9 @@ try {
     models: [aliasSelectedModel],
   }))
 
-  assert.match(aliasTopBarMarkup, /Runtime chat gate[\s\S]*Llama 3\.2 3B Instruct Q8_0/, 'TopBar runtime readiness should resolve the active model through runtime_model_name aliases')
-  assert.match(aliasTopBarMarkup, /llama32_3b_instruct_q8_0: supported current gate/, 'TopBar support detail should prioritize the active exact 3B row instead of the first supported row')
-  assert.doesNotMatch(aliasTopBarMarkup, /tinyllama_1_1b_chat_q8_0: supported current gate/, 'TopBar support detail must not point at TinyLlama when a 3B exact row is active')
-  assert.doesNotMatch(aliasTopBarMarkup, /Nothing loaded now/, 'TopBar must not show an empty runtime state for alias-selected loaded 3B rows')
+  assert.match(aliasTopBarMarkup, /Llama 3\.2 3B Instruct Q8_0/, 'TopBar model chip should resolve the active model through runtime_model_name aliases')
+  assert.doesNotMatch(aliasTopBarMarkup, /tinyllama/i, 'TopBar model chip must not mislabel an active 3B row as TinyLlama')
+  assert.doesNotMatch(aliasTopBarMarkup, /No model selected/, 'TopBar must not show an empty model state for alias-selected loaded 3B rows')
 
   const modelsMarkup = renderToStaticMarkup(React.createElement(ModelsView, {
     runtime: readyRuntime,
@@ -688,7 +687,7 @@ try {
 
   assert.match(staleLoadedNowChatMarkup, /No generation-ready model/, '3B chat readiness should use the shared chat gate and stay runtime-blocked when backend loaded_now=false')
   assert.match(staleLoadedNowChatMarkup, /Draft a prompt while Camelid finishes getting ready/, '3B stale loaded_now=false rows should keep drafting available while runtime readiness is still blocked')
-  assert.match(staleLoadedNowChatMarkup, /disabled="">Send</, '3B stale loaded_now=false rows must keep send locked until runtime readiness returns')
+  assert.match(staleLoadedNowChatMarkup, /data-send-ready="false"/, '3B stale loaded_now=false rows must keep send locked until runtime readiness returns')
   assert.doesNotMatch(staleLoadedNowChatMarkup, /Runtime ready, support gated|Local chat ready|Message Camelid…|Demo starters/, '3B stale browser readiness must not leak into live chat UX when /v1\\/health says loaded_now=false')
 
   const neighboringQuantPathModel = {
@@ -763,7 +762,7 @@ try {
   assert.match(backendReadyButUnsupported3BChatMarkup, /llama32_3b_instruct_q8_0: groundwork backend evidence only/, 'support-gated 3B UX should name the exact unpromoted capabilities row rather than hiding behind generic load-first copy')
   assert.match(backendReadyButUnsupported3BChatMarkup, /Chat unlocks only after loaded_now=true, generation_ready=true, and an exact supported compatibility row all match\./, 'support-gated 3B UX should preserve the exact-row frontend readiness rule')
   assert.match(backendReadyButUnsupported3BChatMarkup, /Draft a prompt while Camelid finishes getting ready/, 'support-gated 3B composer should stay editable while send remains locked behind the exact-row contract')
-  assert.match(backendReadyButUnsupported3BChatMarkup, /disabled="">Send</, 'support-gated 3B rows must keep send disabled until the exact-row contract is promoted')
+  assert.match(backendReadyButUnsupported3BChatMarkup, /data-send-ready="false"/, 'support-gated 3B rows must keep send disabled until the exact-row contract is promoted')
   assert.doesNotMatch(backendReadyButUnsupported3BChatMarkup, /Local chat ready|Message Camelid…/, 'support-gated 3B rows must not render the live-chat ready UX')
 
   const backendReadyButUnsupported3BSystemMarkup = renderToStaticMarkup(React.createElement(SystemView, {

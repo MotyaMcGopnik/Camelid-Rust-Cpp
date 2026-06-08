@@ -14,7 +14,7 @@ const LOCAL_MODELS_STORAGE_KEY = 'camelid.localModels'
 const CONVERSATIONS_STORAGE_KEY = 'camelid.conversations'
 const MEMORIES_STORAGE_KEY = 'camelid.memories'
 const API_BASE_STORAGE_KEY = 'camelid.apiBase'
-const VALID_TABS = new Set(['chat', 'library', 'api', 'analytics', 'history', 'memory', 'system'])
+const VALID_TABS = new Set(['chat', 'library', 'api', 'analytics', 'history', 'memory', 'system', 'settings', 'cluster'])
 const DEFAULT_API_BASE = import.meta.env?.VITE_CAMELID_API_BASE || 'http://127.0.0.1:8181'
 
 function getInitialTab() {
@@ -103,8 +103,14 @@ function estimateChatTokenCount(messages) {
 }
 
 const CODE_FIRST_SYSTEM_PROMPT = 'begin immediately with complete runnable code. No intro. Output one self-contained file unless the user asks otherwise. For Python, start exactly with ```python, include imports, and close the fence after the complete script. For Python games, prefer tkinter from the standard library over pygame, keep it compact, and include a complete runnable event loop. For HTML output ONE self-contained file. Never use external files or script src. Include inline <style> and inline <script> with working click/game logic before </body>. Start exactly with ```html then <!doctype html> and close the fence after </html>.'
-const LOCAL_CHAT_DEMO_MAX_TOKENS = 800
-const LOCAL_CHAT_CODE_MAX_TOKENS = 2048
+const MAX_TOKENS_STORAGE_KEY = 'camelid.maxTokens'
+const DEFAULT_CHAT_MAX_TOKENS = 8192
+
+function getConfiguredMaxTokens() {
+  if (typeof window === 'undefined') return DEFAULT_CHAT_MAX_TOKENS
+  const value = Number.parseInt(window.localStorage.getItem(MAX_TOKENS_STORAGE_KEY) || '', 10)
+  return Number.isFinite(value) && value >= 256 ? value : DEFAULT_CHAT_MAX_TOKENS
+}
 
 function looksLikeCodePrompt(value) {
   const text = String(value || '').toLowerCase()
@@ -121,9 +127,10 @@ function applyLocalChatPolicy(messages) {
   ]
 }
 
-function localChatMaxTokens(messages) {
-  const lastUser = [...(messages || [])].reverse().find((message) => message.role === 'user')
-  return looksLikeCodePrompt(lastUser?.content) ? LOCAL_CHAT_CODE_MAX_TOKENS : LOCAL_CHAT_DEMO_MAX_TOKENS
+function localChatMaxTokens() {
+  // Configurable in Settings → Chat. Defaults generously so long answers and full
+  // programs aren't truncated (the old 800/2048 caps cut off larger code).
+  return getConfiguredMaxTokens()
 }
 
 function tokensPerSecond(tokens, elapsedMs) {

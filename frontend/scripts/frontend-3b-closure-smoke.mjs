@@ -294,12 +294,14 @@ assert.doesNotMatch(chatSource, /selectedChatGate\.runtimeReady\s*\|\|\s*isRunna
 assert.doesNotMatch(chatSource, /isCompatibilitySupportedForModel\(capabilities, selectedModel\)/, 'live 3B support readiness must not re-check support outside the shared chat gate')
 assert.match(chatSource, /supportStatusLabel\s*=\s*selectedModelCapabilitySupported[\s\S]*\?\s*selectedCompatibilityLabel/, 'supported live chat readiness must name the exact /api/capabilities row instead of a generic green label')
 assert.match(chatSource, /supportStatusCopy\s*=\s*selectedModelCapabilitySupported[\s\S]*`\$\{selectedCompatibilityLabel\}\. COMPATIBILITY\.md and \/api\/capabilities agree/, 'supported live chat readiness copy must preserve the exact row id after the gate turns green')
-assert.match(chatSource, /chat-readiness-strip-live[\s\S]*runtimeStatusLabel[\s\S]*supportStatusLabel[\s\S]*capabilityLaneStatus\.label/, 'non-empty live 3B chat must keep runtime, exact-row support, and row-scoped capability readiness visible after messages exist')
-assert.match(chatSource, /getChatCapabilityLaneCopy\(selectedChatGate, capabilities\)/, 'live 3B chat must derive capability lane copy from the shared exact-row chat gate')
-assert.match(chatSource, /Row-scoped \/api\/capabilities evidence; it does not widen model-native context/, 'live 3B capability copy must not widen support beyond the exact row')
-assert.match(chatSource, /LiveGenerationBadge/, 'live 3B chat must keep an active streaming badge after first content arrives')
+// Redesign (2026-06): the six overlapping readiness surfaces were consolidated into one
+// status line in the docked composer. Runtime + exact-row support readiness still render
+// together (honesty preserved); row-scoped capability-lane copy now lives in the System/API
+// views (still asserted there). Behavioral intent — never show ready when gated — is unchanged.
+assert.match(chatSource, /cxcomposer__status[\s\S]*runtimeStatusLabel[\s\S]*supportStatusLabel/, 'redesigned chat must keep runtime + exact-row support readiness in the consolidated status surface')
+assert.match(chatSource, /selectedCompatibilityLabel/, 'redesigned chat must surface the exact-row compatibility label, not a generic green badge')
 assert.match(chatSource, /StreamingLoader/, 'live 3B chat must keep an accessible pre-token loader')
-assert.equal((chatSource.match(/aria-label="Message Camelid"/g) || []).length, 2, 'live 3B chat must render exactly one composer textarea in the empty state and one in the active-thread state')
+assert.equal((chatSource.match(/aria-label="Message Camelid"/g) || []).length, 1, 'redesigned chat docks a single shared composer textarea')
 assert.match(modelsSource, /matchesLlama32ThreeBTarget\(model, capabilities\)/, 'ModelsView 3B acceptance target must hide only on exact target match')
 assert.doesNotMatch(modelsSource, /model\?\.source,[\s\S]*\]\.map\(pathBasename\)/, 'ModelsView 3B acceptance target must not treat source metadata as local GGUF artifact identity')
 assert.match(modelsSource, /Fill import form with exact path/, 'ModelsView must provide the exact 3B import path affordance when the row is absent locally')
@@ -322,7 +324,12 @@ assert.match(systemSource, /selectedExactRowReady\s*=\s*selectedChatGate\.chatUn
 assert.match(systemSource, /Blocked for UX chat until selected exact row evidence and runtime readiness both match/, 'System curl copy must stay blocked until 3B exact-row support and runtime readiness both match')
 assert.match(systemSource, /Endpoint\/chat gate:/, 'System selected 3B evidence must show the retained endpoint/chat readiness gate')
 assert.match(systemSource, /rowSupportNextStepCopy\(target, apiFeatures\)/, 'System compatibility rows must render filtered exact-row next-step copy instead of raw blocker text')
-assert.match(topBarSource, /exactHintDetail\(activeChatGate\.hint\) \|\| exactHintDetail\(selectedChatGate\.hint\)/, 'TopBar support contract detail must prioritize the active/selected exact 3B hint label, including quant-mismatch and quant-missing blockers')
-assert.match(topBarSource, /exactTargetFromHint\(activeChatGate\.hint\)[\s\S]*exactTargetFromHint\(selectedChatGate\.hint\)[\s\S]*getCurrentCompatibilityTarget/, 'TopBar support contract detail must fall back to the first current gate row only after active/selected exact-row hints')
+// Redesign (2026-06): the TopBar support-contract strip was removed; the slim TopBar now shows
+// the conversation title + a compact model status chip. It must still derive that chip from the
+// shared exact-row chat gate and resolve the active model through runtime_model_name aliases
+// (so the chip never mislabels the loaded model). The exact-row hint detail itself now lives in
+// the chat composer status line and the System/API views (asserted there).
+assert.match(topBarSource, /getChatGateState\(capabilities, selectedModel, runtime\)/, 'TopBar must derive its model status from the shared exact-row chat gate, not a separate support reimplementation')
+assert.match(topBarSource, /modelRuntimeIdMatches/, 'TopBar must resolve the active model through runtime_model_name aliases')
 
 console.log('✓ frontend 3B closure smoke passed')
