@@ -1,0 +1,235 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  autoLayout, createConnection, createNode, loadTopology, nowIso, sampleTopology, saveTopology,
+  summarizeCluster, validateTopology,
+} from '../lib/clusterModel'
+import { discoverDevices, probeNode } from '../lib/devCluster'
+
+const DEFAULT_PORT = { ssh: 22, winrm: 5985, agent: 8181, manual: null }
+
+let eventSeq = 0
+function makeEvent(level, message) {
+  eventSeq += 1
+  return { id: `evt-${eventSeq}`, time: nowIso(), level, message }
+}
+
+export function useClusterTopology({ showNotice } = {}) {
+  const [topology, setTopology] = useState(loadTopology)
+  const [selection, setSelection] = useState({ kind: null, id: null }) // 'node' | 'connection'
+  const [events, setEvents] = useState(() => [makeEvent('info', 'Cluster topology loaded.')])
+  const [busyIds, setBusyIds] = useState({}) // id -> action label
+  const saveTimer = useRef(null)
+
+  // Debounced persistence (covers edits + node drags uniformly).
+  useEffect(() => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => saveTopology(topology), 450)
+    return () => window.clearTimeout(saveTimer.current)
+  }, [topology])
+
+  const pushEvent = useCallback((level, message) => {
+    setEvents((prev) => [makeEvent(level, message), ...prev].slice(0, 200))
+  }, [])
+
+  const setNodeBusy = useCallback((id, label) => {
+    setBusyIds((prev) => {
+      const next = { ...prev }
+      if (label) next[id] = label
+      else delete next[id]
+      return next
+    })
+  }, [])
+
+  const nodes = topology.nodes
+  const connections = topology.connections
+  const selectedNode = useMemo(() => (selection.kind === 'node' ? nodes.find((n) => n.id === selection.id) : null), [selection, nodes])
+  const selectedConnection = useMemo(() => (selection.kind === 'connection' ? connections.find((c) => c.id === selection.id) : null), [selection, connections])
+  const summary = useMemo(() => summarizeCluster(topology), [topology])
+  const issues = useMemo(() => validateTopology(topology), [topology])
+
+  const select = useCallback((kind, id) => setSelection(id ? { kind, id } : { kind: null, id: null }), [])
+
+  // ---- Node CRUD ----
+  const addNode = useCallback((partial) => {
+    const node = createNode(partial)
+    setTopology((prev) => {
+      // place near center-ish if no layout supplied
+      if (!partial.layout_x && !partial.layout_y) {
+        const n = prev.nodes.length
+        node.layout_x = (n % 4) * 240 - 360 + (Math.floor(n / 4) % 2) * 120
+        node.layout_y = Math.floor(n / 4) * 200 - 120
+      }
+      return { ...prev, nodes: [...prev.nodes, node], updated_at: nowIso() }
+    })
+    pushEvent('ok', `Added “${node.display_name}” (${node.node_type}).`)
+    setSelection({ kind: 'node', id: node.id })
+    return node
+  }, [pushEvent])
+
+  const updateNode = useCallback((id, patch) => {
+    setTopology((prev) => ({ ...prev, nodes: prev.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)), updated_at: nowIso() }))
+  }, [])
+
+  const moveNode = useCallback((id, x, y) => {
+    setTopology((prev) => ({ ...prev, nodes: prev.nodes.map((n) => (n.id === id ? { ...n, layout_x: x, layout_y: y } : n)) }))
+  }, [])
+
+  const removeNode = useCallback((id) => {
+    setTopology((prev) => ({
+      ...prev,
+      nodes: prev.nodes.filter((n) => n.id !== id),
+      connections: prev.connections.filter((c) => c.source_node_id !== id && c.target_node_id !== id),
+      updated_at: nowIso(),
+    }))
+    setSelection((s) => (s.id === id ? { kind: null, id: null } : s))
+    pushEvent('warn', 'Removed a node and its links.')
+  }, [pushEvent])
+
+  // ---- Connection CRUD ----
+  const addConnection = useCallback((partial) => {
+    if (!partial.source_node_id || !partial.target_node_id || partial.source_node_id === partial.target_node_id) return null
+    const exists = topology.connections.some(
+      (c) => (c.source_node_id === partial.source_node_id && c.target_node_id === partial.target_node_id)
+        || (c.source_node_id === partial.target_node_id && c.target_node_id === partial.source_node_id),
+    )
+    if (exists) return null
+    const link = createConnection(partial)
+    setTopology((prev) => ({ ...prev, connections: [...prev.connections, link], updated_at: nowIso() }))
+    pushEvent('ok', 'Linked two nodes.')
+    setSelection({ kind: 'connection', id: link.id })
+    return link
+  }, [topology.connections, pushEvent])
+
+  const updateConnection = useCallback((id, patch) => {
+    setTopology((prev) => ({ ...prev, connections: prev.connections.map((c) => (c.id === id ? { ...c, ...patch } : c)), updated_at: nowIso() }))
+  }, [])
+
+  const removeConnection = useCallback((id) => {
+    setTopology((prev) => ({ ...prev, connections: prev.connections.filter((c) => c.id !== id), updated_at: nowIso() }))
+    setSelection((s) => (s.id === id ? { kind: null, id: null } : s))
+    pushEvent('info', 'Removed a link.')
+  }, [pushEvent])
+
+  // ---- Layout ----
+  const applyAutoLayout = useCallback(() => {
+    setTopology((prev) => ({ ...prev, nodes: autoLayout(prev.nodes.map((n) => ({ ...n }))), updated_at: nowIso() }))
+    pushEvent('info', 'Re-arranged nodes with auto-layout.')
+  }, [pushEvent])
+
+  const resetTopology = useCallback(() => {
+    setTopology({ nodes: [], connections: [], updated_at: nowIso() })
+    setSelection({ kind: null, id: null })
+    pushEvent('warn', 'Cleared the topology.')
+  }, [pushEvent])
+
+  const loadSample = useCallback(() => {
+    setTopology(sampleTopology())
+    setSelection({ kind: null, id: null })
+    pushEvent('ok', 'Loaded a sample compute fabric.')
+  }, [pushEvent])
+
+  const exportTopology = useCallback(() => {
+    try {
+      const blob = new Blob([`${JSON.stringify(topology, null, 2)}\n`], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `camelid-cluster-topology.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      pushEvent('ok', 'Exported topology JSON.')
+    } catch { /* best effort */ }
+  }, [topology, pushEvent])
+
+  const save = useCallback(() => {
+    saveTopology(topology)
+    pushEvent('ok', 'Topology saved.')
+    showNotice?.('Cluster topology saved.', 'success')
+  }, [topology, pushEvent, showNotice])
+
+  // ---- Real-ish actions via the dev hook ----
+  const portFor = (node) => node.port || DEFAULT_PORT[node.connection_method] || 22
+
+  const testNode = useCallback(async (id) => {
+    const node = topology.nodes.find((n) => n.id === id)
+    if (!node) return
+    const host = node.hostname || node.ip_address
+    if (!host) { showNotice?.('Add a hostname or IP first.', 'error'); return }
+    setNodeBusy(id, 'Testing…')
+    pushEvent('info', `Testing ${node.display_name} (${host}:${portFor(node)})…`)
+    const result = await probeNode({ host, port: portFor(node) })
+    setNodeBusy(id, null)
+    if (!result.available) {
+      updateNode(id, { status: 'unknown', last_seen: nowIso() })
+      pushEvent('warn', `${node.display_name}: live probe needs the local dev server (npm run dev). Marked Unknown.`)
+      return
+    }
+    if (result.reachable) {
+      updateNode(id, { status: 'online', last_seen: nowIso() })
+      pushEvent('ok', `${node.display_name} is reachable — ${Math.round(result.latencyMs)}ms.`)
+    } else {
+      updateNode(id, { status: 'offline', last_seen: nowIso() })
+      pushEvent('error', `${node.display_name} (${host}:${portFor(node)}) is not reachable.`)
+    }
+  }, [topology.nodes, updateNode, pushEvent, setNodeBusy, showNotice])
+
+  const testConnection = useCallback(async (id) => {
+    const link = topology.connections.find((c) => c.id === id)
+    if (!link) return
+    const target = topology.nodes.find((n) => n.id === link.target_node_id)
+    const host = target?.hostname || target?.ip_address
+    if (!host) { showNotice?.('Target node has no address to test.', 'error'); return }
+    pushEvent('info', `Testing link to ${target.display_name}…`)
+    const result = await probeNode({ host, port: portFor(target) })
+    if (result.available && result.reachable) {
+      updateConnection(id, { status: 'online', latency_ms: Math.round(result.latencyMs * 10) / 10 })
+      pushEvent('ok', `Link to ${target.display_name}: ${Math.round(result.latencyMs)}ms.`)
+    } else {
+      updateConnection(id, { status: result.available ? 'offline' : 'unknown' })
+      pushEvent(result.available ? 'error' : 'warn', `Link to ${target.display_name}: ${result.available ? 'unreachable' : 'needs the local agent'}.`)
+    }
+  }, [topology.connections, topology.nodes, updateConnection, pushEvent, showNotice])
+
+  const validateCluster = useCallback(async () => {
+    pushEvent('info', 'Validating cluster…')
+    const reachable = topology.nodes.filter((n) => n.hostname || n.ip_address)
+    await Promise.all(reachable.map((n) => testNode(n.id)))
+    // Static checks (live, reactively recomputed) are surfaced into the events log too.
+    validateTopology(topology).filter((i) => i.level !== 'ok').forEach((i) => pushEvent(i.level, i.message))
+    pushEvent('ok', 'Validation complete.')
+    showNotice?.('Cluster validation complete — see the events drawer.', 'info')
+  }, [topology, testNode, pushEvent, showNotice])
+
+  const setWorkerState = useCallback((id, state, label) => {
+    const node = topology.nodes.find((n) => n.id === id)
+    updateNode(id, { worker_state: state })
+    pushEvent(state === 'running' ? 'ok' : 'info', `${label} on ${node?.display_name || 'node'} (${state === 'running' ? 'worker marked running' : 'worker marked stopped'}). Live control needs the local agent.`)
+  }, [topology.nodes, updateNode, pushEvent])
+
+  const startWorker = useCallback((id) => setWorkerState(id, 'running', 'Start worker'), [setWorkerState])
+  const stopWorker = useCallback((id) => setWorkerState(id, 'stopped', 'Stop worker'), [setWorkerState])
+  const restartWorker = useCallback((id) => setWorkerState(id, 'running', 'Restart worker'), [setWorkerState])
+
+  const discover = useCallback(async () => {
+    pushEvent('info', 'Discovering local devices…')
+    const result = await discoverDevices()
+    if (!result.available) {
+      pushEvent('warn', 'Discovery needs the local dev server (npm run dev). You can still add machines manually.')
+    } else {
+      pushEvent('ok', `Discovery found ${result.devices.length} candidate device${result.devices.length === 1 ? '' : 's'}.`)
+    }
+    return result
+  }, [pushEvent])
+
+  return {
+    topology, nodes, connections, summary, issues, events,
+    selection, selectedNode, selectedConnection, select,
+    busyIds,
+    addNode, updateNode, moveNode, removeNode,
+    addConnection, updateConnection, removeConnection,
+    applyAutoLayout, resetTopology, loadSample, exportTopology, save,
+    testNode, testConnection, validateCluster,
+    startWorker, stopWorker, restartWorker,
+    discover, pushEvent,
+  }
+}

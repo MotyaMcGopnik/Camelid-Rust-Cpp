@@ -2,3 +2,12 @@
 @import './styles/base.css';
 @import './styles/layout.css';
 @import './styles/components.css';
+
+/* Redesign layer — new modular stylesheets, imported last so they take
+   precedence over the legacy rules above during the transition. The legacy
+   layout.css/components.css are removed in the final cleanup pass. */
+@import './styles/ui.css';
+@import './styles/shell.css';
+@import './styles/chat.css';
+@import './styles/views.css';
+@import './styles/cluster.css';

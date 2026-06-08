@@ -4,6 +4,7 @@ import { capabilityStatusTone, compatibilityHintCopy, compatibilityHintLabel, co
 import { getChatGateState } from '../lib/chatGate'
 import { formatBytes, formatCompactNumber } from '../lib/formatters'
 import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, modelRuntimeIdMatches } from '../lib/modelState'
+import { SupportedModels } from '../components/models/SupportedModels'
 
 const FILTERS = [
   { key: 'all', label: 'Everything' },
@@ -610,6 +611,15 @@ export default function ModelsView({
           </button>
         </div>
       </div>
+
+      <SupportedModels
+        models={models}
+        runtime={runtime}
+        installCatalogModel={installCatalogModel}
+        cancelModelDownload={cancelModelDownload}
+        activateModel={activateModel}
+        loadingModelId={loadingModelId}
+      />
 
       <section className="models-status-grid" aria-label="Camelid runtime model readiness">
         <div className="panel models-status-card">

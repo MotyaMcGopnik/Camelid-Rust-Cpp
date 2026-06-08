@@ -485,14 +485,14 @@ assert.equal(
 )
 const llama3EightBExactArtifactModel = {
   name: 'Meta Llama 3 8B Instruct Q8_0',
-  model_path: '<ubuntu-model-path>/Meta-Llama-3-8B-Instruct-Q8_0.gguf',
+  model_path: '<ubuntu-model-path>/Meta-Llama-3-8B-Instruct.Q8_0.gguf',
   quant: 'Q8_0',
 }
 const llama3EightBHint = findCompatibilityHint(capabilityFixture, llama3EightBExactArtifactModel)
 assert.equal(llama3EightBHint.target.id, 'llama3_8b_instruct_q8_0', 'Llama 3 8B must match its exact supported row')
 assert.match(compatibilityHintCopy(llama3EightBHint), /checked 512\/1024\/2048-context packs, compact template-shapes pack evidence, bounded memory\/hot-path measurements, and current-head 1024\/2048 PASS evidence/)
 assert.match(compatibilityHintCopy(llama3EightBHint), /No model-native\/larger context or broader\/full support is implied/)
-const llama3HyphenEightBHint = findCompatibilityHint(capabilityFixture, { model_path: '<ubuntu-model-path>/Meta-Llama-3-8B-Instruct-Q8_0.gguf', quant: 'Q8_0' })
+const llama3HyphenEightBHint = findCompatibilityHint(capabilityFixture, { model_path: '<ubuntu-model-path>/Meta-Llama-3-8B-Instruct.Q8_0.gguf', quant: 'Q8_0' })
 assert.equal(llama3HyphenEightBHint.target.id, 'llama3_8b_instruct_q8_0', 'Llama-3-8B filenames should match the exact Llama 3 8B row')
 const llama3EightBNameOnlyHint = findCompatibilityHint(capabilityFixture, { name: 'Meta Llama 3 8B Instruct Q8_0', quant: 'Q8_0' })
 assert.equal(llama3EightBNameOnlyHint.kind, 'artifact_mismatch', 'Llama 3 8B must not unlock from a size/instruct/quant match without exact artifact evidence')
