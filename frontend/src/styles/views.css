@@ -791,3 +791,18 @@
 .sys-row__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .sys-row__head > span:first-child { font-size: var(--text-sm); font-weight: 600; color: var(--color-text); overflow-wrap: anywhere; }
 .sys-row small { font-size: var(--text-xs); color: var(--color-text-muted); line-height: var(--leading-snug); overflow-wrap: anywhere; }
+
+/* ==========================================================================
+   Models view (.cxv) — chrome migrated to the cxv card/panel system.
+   The dense card internals (.model-card, .pin-badge, .models-card-*, etc.)
+   stay styled by the .camelid-view--page block above; these rules just settle
+   the kept legacy sub-blocks inside the new cxv-panel flex rhythm so Models
+   spaces like System/API/Analytics.
+   ========================================================================== */
+.models-view.cxv .models-hero-ledger { margin-top: 0; }
+.models-view.cxv .cxv-panel > .models-section-heading { margin-bottom: 0; }
+.models-view.cxv .cxv-panel > .model-summary { margin: 0; }
+/* Toolbar info strips sit flush under the search row, carried by the panel gap. */
+.models-view.cxv .cxv-panel > .models-truth-strip,
+.models-view.cxv .cxv-panel > .models-compatibility-strip,
+.models-view.cxv .cxv-panel > .models-summary-strip { margin: 0; }
