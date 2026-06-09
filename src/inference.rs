@@ -12632,7 +12632,7 @@ fn quantize_q8_0_rows_into<'a>(
     })
 }
 
-fn quantize_q8_0_blocks(input: &[f32]) -> Vec<Q8_0Block> {
+pub(crate) fn quantize_q8_0_blocks(input: &[f32]) -> Vec<Q8_0Block> {
     let mut blocks = Vec::with_capacity(input.len() / Q8_0_BLOCK_VALUES);
     quantize_q8_0_blocks_into(input, &mut blocks);
     blocks
@@ -12991,6 +12991,88 @@ unsafe fn q8_0_dot_rows_neon_dotprod(weight: &[Q8_0Block], input: &[Q8_0Block]) 
     }
 
     total_sum
+}
+
+/// Q8×Q8 dot of one weight row read straight from the GGUF **wire** bytes (34-byte
+/// blocks: a little-endian f16 scale + 32 i8 quants) against a pre-quantized
+/// activation row, dispatching to the same NEON `sdot` path as
+/// [`q8_0_dot_rows_neon_dotprod`]. This lets the gemma4 wire-mmap runtime share
+/// the fast i8 dot without first materializing weights as 36-byte `Q8_0Block`
+/// structs (which would mean an 8GB second resident copy). Reduction order and
+/// per-block `int_sum * w_scale * x_scale` accumulation match the block kernel.
+pub(crate) fn q8_0_wire_row_dot(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        if aarch64_dotprod_enabled() {
+            // SAFETY: dotprod feature confirmed at runtime; the caller passes a
+            // row of `input.len()` 34-byte wire blocks (bounds-checked indexing).
+            return unsafe { q8_0_wire_row_dot_neon_dotprod(weight_wire, input) };
+        }
+    }
+    q8_0_wire_row_dot_scalar(weight_wire, input)
+}
+
+/// Portable scalar reference for [`q8_0_wire_row_dot`] (non-aarch64, or when
+/// dotprod is disabled via `CAMELID_AARCH64_DOTPROD=0`).
+pub(crate) fn q8_0_wire_row_dot_scalar(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 {
+    const WIRE: usize = 34;
+    let mut total = 0.0_f32;
+    for (b, i_block) in input.iter().enumerate() {
+        let base = b * WIRE;
+        let scale = f16_bits_to_f32(u16::from_le_bytes([weight_wire[base], weight_wire[base + 1]]));
+        let mut isum = 0i32;
+        for j in 0..32 {
+            isum += (weight_wire[base + 2 + j] as i8 as i32) * (i_block.quants[j] as i32);
+        }
+        total += isum as f32 * scale * i_block.scale;
+    }
+    total
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[target_feature(enable = "dotprod")]
+unsafe fn q8_0_wire_row_dot_neon_dotprod(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 {
+    use std::arch::aarch64::{vdupq_n_s32, vld1q_s8};
+    use std::arch::asm;
+    const WIRE: usize = 34;
+
+    let mut total = 0.0_f32;
+    for (b, i_block) in input.iter().enumerate() {
+        let base = b * WIRE;
+        let scale = f16_bits_to_f32(u16::from_le_bytes([weight_wire[base], weight_wire[base + 1]]));
+        let qptr = weight_wire.as_ptr().add(base + 2) as *const i8;
+
+        if let Some(next) = input.get(b + 2) {
+            let _ = next; // prefetch the weight bytes two blocks ahead
+            asm!(
+                "prfm pldl1keep, [{ptr}]",
+                ptr = in(reg) weight_wire.as_ptr().add((b + 2) * WIRE),
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+
+        let weight_lo = vld1q_s8(qptr);
+        let weight_hi = vld1q_s8(qptr.add(16));
+        let input_lo = vld1q_s8(i_block.quants.as_ptr());
+        let input_hi = vld1q_s8(i_block.quants.as_ptr().add(16));
+
+        let mut acc = vdupq_n_s32(0);
+        asm!(
+            "sdot {acc:v}.4s, {weight_lo:v}.16b, {input_lo:v}.16b",
+            "sdot {acc:v}.4s, {weight_hi:v}.16b, {input_hi:v}.16b",
+            acc = inout(vreg) acc,
+            weight_lo = in(vreg) weight_lo,
+            input_lo = in(vreg) input_lo,
+            weight_hi = in(vreg) weight_hi,
+            input_hi = in(vreg) input_hi,
+            options(nostack, preserves_flags)
+        );
+
+        let int_sum = horizontal_sum_i32x4(acc);
+        total += int_sum as f32 * scale * i_block.scale;
+    }
+
+    total
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

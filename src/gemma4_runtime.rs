@@ -12,6 +12,7 @@
 
 use crate::gguf::{read_metadata, GgufTensorType};
 use crate::inference::gemma4::{gelu_tanh, soft_cap_in_place};
+use crate::inference::{q8_0_wire_row_dot, quantize_q8_0_blocks};
 use crate::model::{Gemma4Binding, Gemma4Metadata, LlamaModelConfig};
 use crate::tensor::{f16_bits_to_f32, TensorStore};
 use crate::tokenizer::Tokenizer;
@@ -86,42 +87,24 @@ impl WireQ8 {
         f16_bits_to_f32(u16::from_le_bytes([bytes[b], bytes[b + 1]]))
     }
 
-    /// Dot one 32-value Q8 block's quants with 32 inputs. Both operands are bound
-    /// to fixed `[_; 32]` arrays so the compiler proves the bounds and emits a
-    /// vectorized scalar-product (the wire bytes are read in place, no decode copy).
-    #[inline(always)]
-    fn block_dot(qbytes: &[u8], xb: &[f32]) -> f32 {
-        let q: &[u8; Q8_VALUES_PER_BLOCK] = qbytes.try_into().expect("32 quant bytes");
-        let x: &[f32; Q8_VALUES_PER_BLOCK] = xb.try_into().expect("32 inputs");
-        let mut s = 0.0f32;
-        for j in 0..Q8_VALUES_PER_BLOCK {
-            s += (q[j] as i8) as f32 * x[j];
-        }
-        s
-    }
-
     /// y[o] = sum_i dequant(W[o*in + i]) * x[i]. Rows are block-aligned
-    /// (in % 32 == 0); we walk blocks: one f16 scale + a 32-lane mul-add per block.
+    /// (in % 32 == 0). The activation `x` is quantized to Q8 once, then each
+    /// output row is a Q8×Q8 NEON `sdot` against the weight row read in place
+    /// from the wire bytes ([`q8_0_wire_row_dot`]) — the same fast i8 dot the
+    /// Llama path uses, ~Nx the prior scalar f32 mul-add per block. Quantizing
+    /// the activation mirrors what llama.cpp does for Q8_0 matmuls, so the
+    /// bit-against-llama.cpp parity in `tests/gemma4_forward.rs` is preserved.
     fn matvec(&self, in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
-        const BV: usize = Q8_VALUES_PER_BLOCK;
         const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
         debug_assert_eq!(x.len(), in_dim);
-        debug_assert_eq!(in_dim % BV, 0, "matvec assumes block-aligned rows");
-        let blocks_per_row = in_dim / BV;
+        debug_assert_eq!(in_dim % Q8_VALUES_PER_BLOCK, 0, "matvec assumes block-aligned rows");
+        let blocks_per_row = in_dim / Q8_VALUES_PER_BLOCK;
+        let row_bytes = blocks_per_row * BB;
         let bytes = self.bytes();
+        let xq = quantize_q8_0_blocks(x);
         (0..out_dim)
             .into_par_iter()
-            .map(|o| {
-                let row_block0 = o * blocks_per_row;
-                let mut sum = 0.0f32;
-                for b in 0..blocks_per_row {
-                    let block = row_block0 + b;
-                    let scale = Self::block_scale(bytes, block);
-                    let qs = block * BB + 2;
-                    sum += scale * Self::block_dot(&bytes[qs..qs + BV], &x[b * BV..b * BV + BV]);
-                }
-                sum
-            })
+            .map(|o| q8_0_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], &xq))
             .collect()
     }
 
