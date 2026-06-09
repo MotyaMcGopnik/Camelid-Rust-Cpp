@@ -410,6 +410,7 @@ fn tiny_config() -> LlamaModelConfig {
         vocab_size: Some(3),
         file_type: Some(0),
         moe: None,
+        gemma4: None,
     }
 }
 

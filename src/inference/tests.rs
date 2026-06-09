@@ -1086,6 +1086,7 @@ fn prefill_layer_major_scoped_q8_cache_reuses_file_reads_across_chunks() {
         vocab_size: Some(2),
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let dense_vector = |name: &str| CpuTensor::from_f32(name, vec![32], vec![1.0; 32]).unwrap();
     let dense_matrix =
@@ -7415,6 +7416,7 @@ fn applies_rope_to_each_attention_head() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
@@ -7451,6 +7453,7 @@ fn apply_rope_uses_configured_frequency_base() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
 
@@ -7497,6 +7500,7 @@ fn apply_rope_uses_llama3_frequency_scaling_metadata() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
 
@@ -7547,6 +7551,7 @@ fn apply_rope_uses_gguf_rope_frequency_factors() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![0.0, 0.0, 1.0, 0.0]).unwrap();
     let rope_freqs = CpuTensor::from_f32("rope_freqs.weight", vec![2], vec![1.0, 4.0]).unwrap();
@@ -7604,6 +7609,7 @@ fn rope_diagnostics_reconstruct_reported_rotation() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
     let reported = apply_rope(&tensor, 1, 2, &config, None, "query_rope").unwrap();
@@ -7666,6 +7672,7 @@ fn split_half_rope_pairing_is_available_for_diagnostics() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 4], vec![1.0, 0.0, 0.0, 0.0]).unwrap();
     let head_dim = 4;
@@ -7740,6 +7747,7 @@ fn inverse_rope_direction_is_available_for_diagnostics() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 2], vec![1.0, 0.0]).unwrap();
     let head_dim = 2;
@@ -7813,6 +7821,7 @@ fn one_based_rope_position_mode_is_available_for_diagnostics() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let tensor = CpuTensor::from_f32("query", vec![1, 2], vec![1.0, 0.0]).unwrap();
 
@@ -9334,6 +9343,7 @@ fn single_token_forward_diagnostics_follow_llama_stage_order() {
         vocab_size: Some(3),
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let weights = Arc::new(LlamaLoadedWeights {
         token_embedding: CpuTensor::from_f32(
@@ -9594,6 +9604,7 @@ fn chunked_prefill_matches_sequential_prefill_outputs_and_cache() {
         vocab_size: Some(4),
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let weights = Arc::new(LlamaLoadedWeights {
         token_embedding: CpuTensor::from_f32(
@@ -9785,6 +9796,7 @@ fn prefill_layer_rejects_misaligned_kv_cache_cursor() {
         vocab_size: Some(4),
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let layer = LlamaLayerWeights {
         attention_norm: CpuTensor::from_f32("blk.0.attn_norm.weight", vec![2], vec![1.0, 1.0])
@@ -9879,6 +9891,7 @@ fn batch_attention_rejects_reads_beyond_allocated_kv_cache() {
         vocab_size: Some(4),
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let kv_cache = LlamaKvCache::new(LlamaKvCachePlan::from_config(&config).unwrap()).unwrap();
     let query = CpuTensor::from_f32("query", vec![1, 2], vec![0.1, 0.2]).unwrap();
@@ -10018,6 +10031,7 @@ fn zero_prefill_chunk_env_falls_back_without_panicking() {
         vocab_size: Some(4),
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let weights = Arc::new(LlamaLoadedWeights {
         token_embedding: CpuTensor::from_f32(
@@ -10772,6 +10786,7 @@ fn resident_prefill_rope_tables_match_per_position_builder() {
         vocab_size: None,
         file_type: None,
         moe: None,
+        gemma4: None,
     };
     let n = 7;
     let head_dim = 8;

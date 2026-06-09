@@ -24,6 +24,11 @@ pub struct LlamaModelConfig {
     pub vocab_size: Option<u32>,
     pub file_type: Option<u32>,
     pub moe: Option<MixtralMoeMetadata>,
+    /// Gemma 4 (`general.architecture = "gemma4"`) specific metadata. `None` for
+    /// every other architecture. Holds the per-layer-type attention dims, dual
+    /// RoPE bases, sliding-window pattern, KV-sharing depth, Per-Layer-Embedding
+    /// width, and final logit soft-cap that a Llama-shaped config cannot express.
+    pub gemma4: Option<Gemma4Metadata>,
 }
 
 impl LlamaModelConfig {
@@ -31,7 +36,7 @@ impl LlamaModelConfig {
         let architecture = match gguf.architecture() {
             Some(
                 architecture @ ("llama" | "mistral" | "qwen2" | "qwen3" | "smollm3" | "gemma3"
-                | "phi3" | "lfm2"),
+                | "gemma4" | "phi3" | "lfm2"),
             ) => architecture,
             Some(other) => return Err(BackendError::UnsupportedModelArchitecture(other.into())),
             None => {
@@ -42,6 +47,7 @@ impl LlamaModelConfig {
         };
 
         let moe = MixtralMoeMetadata::from_gguf(gguf, architecture);
+        let gemma4 = Gemma4Metadata::from_gguf(gguf, architecture);
 
         let attention_head_count = required_u32(
             gguf,
@@ -100,6 +106,7 @@ impl LlamaModelConfig {
                 }),
             file_type: gguf.metadata_u32("general.file_type"),
             moe,
+            gemma4,
         })
     }
 }
@@ -132,6 +139,136 @@ impl MixtralMoeMetadata {
             expert_count,
             expert_used_count,
         })
+    }
+}
+
+/// Gemma 4 (`general.architecture = "gemma4"`) attention/embedding metadata that
+/// the shared Llama config cannot represent. Parsed from the `gemma4.*` GGUF keys.
+///
+/// Gemma 4 alternates sliding (local) and full (global) attention on a 5:1
+/// schedule, and — unlike Llama — the two layer types use *different* per-head
+/// dimensions and RoPE bases. The elastic "E" variants additionally feed a
+/// Per-Layer-Embedding stream into every block. None of this drives the forward
+/// pass yet; this struct only captures the parsed values for the Gemma 4 runtime.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Gemma4Metadata {
+    /// Per-head dim for sliding (local) layers — GGUF `attention.key_length_swa`.
+    pub head_dim_sliding: u32,
+    /// Per-head dim for full (global) layers — GGUF `attention.key_length`.
+    pub head_dim_global: u32,
+    /// RoPE base for full (global) layers — GGUF `rope.freq_base`.
+    pub rope_freq_base_global: f32,
+    /// RoPE base for sliding (local) layers — GGUF `rope.freq_base_swa`.
+    pub rope_freq_base_sliding: f32,
+    /// Rotary dim applied on full (global) layers — GGUF `rope.dimension_count`.
+    pub rope_dim_global: u32,
+    /// Rotary dim applied on sliding (local) layers — GGUF `rope.dimension_count_swa`.
+    pub rope_dim_sliding: u32,
+    /// Local attention window — GGUF `attention.sliding_window`.
+    pub sliding_window: u32,
+    /// Count of trailing layers that share KV projections — GGUF
+    /// `attention.shared_kv_layers` (0 = no cross-layer KV sharing).
+    pub num_kv_shared_layers: u32,
+    /// Per-Layer-Embedding width — GGUF `embedding_length_per_layer_input`
+    /// (0 for the dense variants, which carry no PLE stream).
+    pub per_layer_input_dim: u32,
+    /// Final logit soft-cap — GGUF `final_logit_softcapping` (None if absent).
+    pub final_logit_softcapping: Option<f32>,
+    /// Per-layer attention type: `true` = sliding (local), `false` = full (global).
+    /// Derived from the 5:1 schedule with a forced full final layer, matching the
+    /// Gemma 4 reference and the observed `attention.sliding_window_pattern`.
+    pub layer_is_sliding: Vec<bool>,
+}
+
+impl Gemma4Metadata {
+    /// Returns `Some` only for the `gemma4` architecture; `None` otherwise.
+    pub fn from_gguf(gguf: &GgufFile, architecture: &str) -> Option<Self> {
+        if architecture != "gemma4" {
+            return None;
+        }
+        let key = |suffix: &str| architecture_key(architecture, suffix);
+        let head_dim_sliding = gguf
+            .metadata_u32(&key("attention.key_length_swa"))
+            .or_else(|| gguf.metadata_u32(&key("attention.key_length")))
+            .unwrap_or(256);
+        let head_dim_global = gguf
+            .metadata_u32(&key("attention.key_length"))
+            .unwrap_or(head_dim_sliding);
+        let block_count = gguf.metadata_u32(&key("block_count")).unwrap_or(0);
+        let layer_is_sliding = gemma4_sliding_schedule(block_count);
+        Some(Self {
+            head_dim_sliding,
+            head_dim_global,
+            rope_freq_base_global: gguf
+                .metadata_f32(&key("rope.freq_base"))
+                .unwrap_or(1_000_000.0),
+            rope_freq_base_sliding: gguf
+                .metadata_f32(&key("rope.freq_base_swa"))
+                .unwrap_or(10_000.0),
+            rope_dim_global: gguf
+                .metadata_u32(&key("rope.dimension_count"))
+                .unwrap_or(head_dim_global),
+            rope_dim_sliding: gguf
+                .metadata_u32(&key("rope.dimension_count_swa"))
+                .unwrap_or(head_dim_sliding),
+            sliding_window: gguf
+                .metadata_u32(&key("attention.sliding_window"))
+                .unwrap_or(512),
+            num_kv_shared_layers: gguf
+                .metadata_u32(&key("attention.shared_kv_layers"))
+                .unwrap_or(0),
+            per_layer_input_dim: gguf
+                .metadata_u32(&key("embedding_length_per_layer_input"))
+                .unwrap_or(0),
+            final_logit_softcapping: gguf.metadata_f32(&key("final_logit_softcapping")),
+            layer_is_sliding,
+        })
+    }
+
+    /// True if decoder layer `idx` uses sliding (local) attention.
+    pub fn is_sliding_layer(&self, idx: usize) -> bool {
+        self.layer_is_sliding.get(idx).copied().unwrap_or(false)
+    }
+}
+
+/// Gemma 4's per-layer attention schedule: a 5:1 sliding:full repeat (every 6th
+/// layer is full/global) with the final layer forced to full attention. This
+/// mirrors `Gemma4TextConfig.__post_init__` and the `attention.sliding_window_pattern`
+/// array carried in the GGUF. `true` = sliding (local), `false` = full (global).
+fn gemma4_sliding_schedule(block_count: u32) -> Vec<bool> {
+    const SLIDING_PERIOD: u32 = 6;
+    let mut schedule: Vec<bool> = (0..block_count)
+        .map(|i| (i + 1) % SLIDING_PERIOD != 0)
+        .collect();
+    if let Some(last) = schedule.last_mut() {
+        *last = false;
+    }
+    schedule
+}
+
+#[cfg(test)]
+mod gemma4_tests {
+    use super::gemma4_sliding_schedule;
+
+    #[test]
+    fn sliding_schedule_is_5to1_with_full_final_layer() {
+        // E4B has 42 layers; the reference forces full attention every 6th layer.
+        let schedule = gemma4_sliding_schedule(42);
+        assert_eq!(schedule.len(), 42);
+        let full_layers: Vec<usize> = schedule
+            .iter()
+            .enumerate()
+            .filter(|(_, sliding)| !**sliding)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(full_layers, vec![5, 11, 17, 23, 29, 35, 41]);
+        // The first five are sliding, the sixth (index 5) is full — matches the
+        // observed GGUF pattern [1,1,1,1,1,0,...].
+        assert_eq!(&schedule[..6], &[true, true, true, true, true, false]);
+        // Final layer must always be full attention even when the count is not a
+        // multiple of six.
+        let odd = gemma4_sliding_schedule(40);
+        assert_eq!(odd.last(), Some(&false));
     }
 }
 
