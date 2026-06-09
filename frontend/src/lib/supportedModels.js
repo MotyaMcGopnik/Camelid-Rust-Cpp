@@ -40,4 +40,13 @@ export const SUPPORTED_MODELS = [
     quant: 'Q8_0',
     blurb: 'Largest supported row — highest quality, needs the most memory.',
   },
+  {
+    catalog_id: 'gemma4_e4b_it_q8_0',
+    name: 'Gemma 4 E4B-It',
+    repo_id: 'unsloth/gemma-4-E4B-it-GGUF',
+    filename: 'gemma-4-E4B-it-Q8_0.gguf',
+    size_bytes: 8192951456,
+    quant: 'Q8_0',
+    blurb: 'Gemma 4 (E-series matformer) — from-scratch gemma4 engine, greedy-identical to the reference. Serve with CAMELID_GEMMA4_SERVE=1.',
+  },
 ]
