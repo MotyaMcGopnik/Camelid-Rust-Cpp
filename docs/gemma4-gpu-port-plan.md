@@ -109,11 +109,19 @@ New kernels required:
     but a 40-arg wrapper is ugly, so it folds into STEP 6 with a proper per-layer
     weight-bundle struct (`Gemma4ResidentLayer`). Done there alongside the resident
     weight residency + multi-layer orchestration.
-- **STEP 6 — full-layer chain (5d) + cross-layer KV sharing + sliding window across
-  all 42 layers.** Introduce a `Gemma4ResidentLayer` weight bundle so
-  `encode_gemma4_layer` = attention(in→mid) + ffn(mid→out) isn't a 40-arg call;
-  then drive all 42 layers with per-layer plan (head_dim/θ/window) + cross-layer KV
-  source from `Gemma4Metadata::layer_plan`.
+- **STEP 6 — full-layer chain + multi-layer orchestration.**
+  - **6a DONE** — `Gemma4ResidentLayer` weight bundle (6 norms + 7 wire weight
+    buffers + dims/eps, `from_wire` ctor) + `encode_gemma4_layer` =
+    attention(in→mid) + ffn(mid→out) in one serial command buffer.
+    `try_gemma4_layer` + `metal_gemma4_layer_matches_cpu` validate the full layer
+    vs the combined CPU chain. A complete gemma layer runs on GPU. Completes 5d.
+  - **6b NEXT** — drive all 42 layers: loop with ping-pong in/out buffers, per-layer
+    cos/sin tables (dual-θ), per-layer plan (head_dim/window). **Cross-layer KV
+    sharing** needs a shared-layer attention path: layers ≥ `first_kv_shared` skip
+    K/V projection+norm+rope+scatter and run attention against `kv_source_layer`'s
+    cache (the source already scattered the current token earlier this forward). Add
+    an `owns_kv` branch (+ source cache args) to `encode_gemma4_attention`. Validate
+    a 2-layer (1 owning + 1 sharing) chain vs CPU.
 - **STEP 7 — PLE stream** (per-token `pli` at token start + per-layer 7-step
   injection on GPU with f32 GEMVs + geglu + norm + scale).
 - **STEP 8 — logits + soft-cap + sampling tail**, end-to-end resident token.
