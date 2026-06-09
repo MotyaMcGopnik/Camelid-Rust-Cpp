@@ -177,8 +177,8 @@ fn gemma4_prefill_matches_oracle() {
     };
 
     // --- decoder layers ----------------------------------------------------
-    let embed_rms = (hs[seq - 1].iter().map(|v| v * v).sum::<f32>() / hidden as f32).sqrt();
-    eprintln!("embed hidden_rms (last pos) = {embed_rms:.4}");
+    let sum_last = |hs: &[Vec<f32>]| hs.iter().map(|r| r.iter().sum::<f32>()).sum::<f32>();
+    eprintln!("inp_scaled sum (all tokens) = {:.4}  (llama.cpp ref ~ -90.71 for last row)", sum_last(&hs));
 
     // Gemma 4 passes scaling=1.0 to the softmax; the query scale is baked into the
     // learned q_norm/k_norm weights (no extra 1/sqrt(head_dim)).
@@ -187,6 +187,13 @@ fn gemma4_prefill_matches_oracle() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(n_layers);
+    // Cross-layer KV sharing: layers >= first_kv_shared reuse the K/V of the last
+    // same-type (sliding/full) layer before first_kv_shared, instead of their own.
+    let first_kv_shared = n_layers - g.num_kv_shared_layers as usize;
+    let mut shared_k_sliding: Option<Vec<Vec<f32>>> = None;
+    let mut shared_v_sliding: Option<Vec<Vec<f32>>> = None;
+    let mut shared_k_full: Option<Vec<Vec<f32>>> = None;
+    let mut shared_v_full: Option<Vec<Vec<f32>>> = None;
     for l in 0..n_run {
         let lt = &binding.layers[l];
         let sliding = g.is_sliding_layer(l);
@@ -226,29 +233,45 @@ fn gemma4_prefill_matches_oracle() {
         let mut qs = vec![vec![0f32; q_dim]; seq];
         let mut ks = vec![vec![0f32; kv_dim]; seq];
         let mut vs = vec![vec![0f32; kv_dim]; seq];
+        let compute_kv = l < first_kv_shared;
         for t in 0..seq {
             let xn = rms_norm(&hs[t], Some(&attn_norm_w), eps);
             let mut q = matvec(&q_w, &xn, hidden, q_dim);
-            let mut k = matvec(&k_w, &xn, hidden, kv_dim);
-            let mut v = matvec(&v_w, &xn, hidden, kv_dim);
-            // q_norm / k_norm (per head, head_dim), then rope. v_norm weightless.
             for h in 0..heads {
                 let s = &mut q[h * head_dim..(h + 1) * head_dim];
                 s.copy_from_slice(&rms_norm(s, Some(&qn_w), eps));
             }
-            for h in 0..kv_heads {
-                let s = &mut k[h * head_dim..(h + 1) * head_dim];
-                s.copy_from_slice(&rms_norm(s, Some(&kn_w), eps));
-                if std::env::var("NO_VNORM").is_err() {
+            apply_rope(&mut q, heads, head_dim, t, theta);
+            qs[t] = q;
+            if compute_kv {
+                let mut k = matvec(&k_w, &xn, hidden, kv_dim);
+                let mut v = matvec(&v_w, &xn, hidden, kv_dim);
+                for h in 0..kv_heads {
+                    let s = &mut k[h * head_dim..(h + 1) * head_dim];
+                    s.copy_from_slice(&rms_norm(s, Some(&kn_w), eps));
                     let sv = &mut v[h * head_dim..(h + 1) * head_dim];
                     sv.copy_from_slice(&rms_norm(sv, None, eps));
                 }
+                apply_rope(&mut k, kv_heads, head_dim, t, theta);
+                ks[t] = k;
+                vs[t] = v;
             }
-            apply_rope(&mut q, heads, head_dim, t, theta);
-            apply_rope(&mut k, kv_heads, head_dim, t, theta);
-            qs[t] = q;
-            ks[t] = k;
-            vs[t] = v;
+        }
+        // Resolve the K/V for this layer: store (non-shared) or reuse (shared).
+        if compute_kv {
+            if sliding {
+                shared_k_sliding = Some(ks.clone());
+                shared_v_sliding = Some(vs.clone());
+            } else {
+                shared_k_full = Some(ks.clone());
+                shared_v_full = Some(vs.clone());
+            }
+        } else if sliding {
+            ks = shared_k_sliding.clone().expect("sliding shared kv");
+            vs = shared_v_sliding.clone().expect("sliding shared kv");
+        } else {
+            ks = shared_k_full.clone().expect("full shared kv");
+            vs = shared_v_full.clone().expect("full shared kv");
         }
         // attention output per position
         let scale = q_scale(head_dim);
@@ -335,20 +358,27 @@ fn gemma4_prefill_matches_oracle() {
                     );
                 }
                 add_into(&mut hs[t], &pn);
-                // NOTE: reference layer_scalar is a ones-buffer (1.0, no-op). The
-                // GGUF layer_output_scale (`scale`) is NOT that — leave it unused
-                // here. (Was erroneously multiplying the whole hidden state.)
-                let _ = scale;
+                // llama.cpp: l_out = (residual + PLE) * layer_output_scale. (The HF
+                // layer_scalar=1.0 no-op folds this scale into the GGUF tensor.)
+                for v in hs[t].iter_mut() {
+                    *v *= scale;
+                }
             }
         }
-        let rms = (hs[seq - 1].iter().map(|v| v * v).sum::<f32>() / hidden as f32).sqrt();
-        if l < 3 || l == n_layers - 1 {
-            eprintln!("  layer {l} done (sliding={sliding}, head_dim={head_dim}) hidden_rms={rms:.4}");
+        if matches!(l, 0 | 4 | 5 | 11 | 41) {
+            let tot: f32 = hs.iter().map(|r| r.iter().sum::<f32>()).sum();
+            let refs = [(0, -23.41), (4, 528.32), (5, 696.44), (11, -743.48), (41, 54.93)];
+            let r = refs.iter().find(|(i, _)| *i == l).map(|(_, v)| *v).unwrap_or(0.0);
+            eprintln!("  l_out-{l} sum = {tot:.4}  (llama.cpp ref = {r})");
         }
     }
 
     // final norm + tied logits + softcap, last position
     let (out_norm_w, _) = load_f32(&store, &binding.output_norm.name);
+    let result_sum: f32 = (0..seq)
+        .map(|t| rms_norm(&hs[t], Some(&out_norm_w), eps).iter().sum::<f32>())
+        .sum();
+    eprintln!("result_norm sum = {result_sum:.4}  (llama.cpp ref = 85.58)");
     let last = rms_norm(&hs[seq - 1], Some(&out_norm_w), eps);
     // logits via tied token_embd rows (dequantize each row, dot with `last`)
     let vocab = config.vocab_size.unwrap() as usize;
@@ -377,8 +407,18 @@ fn gemma4_prefill_matches_oracle() {
     eprintln!("oracle token {ORACLE_FIRST_TOKEN} is at rank {oracle_rank} (logit {oracle_logit:.4})");
     let best = logits[0];
     eprintln!("argmax = {} (logit {:.4}); oracle = {ORACLE_FIRST_TOKEN}", best.0, best.1);
-    eprintln!(
-        "RESULT: {}",
-        if best.0 as u32 == ORACLE_FIRST_TOKEN { "MATCH ✅" } else { "MISMATCH ❌ (debug: scaling/rope/PLE)" }
-    );
+    let matched = best.0 as u32 == ORACLE_FIRST_TOKEN;
+    eprintln!("RESULT: {}", if matched { "MATCH ✅" } else { "MISMATCH ❌" });
+    // Default run (all layers, no env overrides) must reproduce the llama.cpp
+    // greedy token. The env toggles (LAYERS/NO_PLE/NO_VNORM) are debug-only.
+    if std::env::var("LAYERS").is_err()
+        && std::env::var("NO_PLE").is_err()
+        && std::env::var("NO_VNORM").is_err()
+    {
+        assert_eq!(
+            best.0 as u32, ORACLE_FIRST_TOKEN,
+            "gemma4 prefill argmax ({}) must match the llama.cpp oracle (9079 ' Paris')",
+            best.0
+        );
+    }
 }
