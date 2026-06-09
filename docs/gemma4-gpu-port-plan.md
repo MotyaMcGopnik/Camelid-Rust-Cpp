@@ -162,17 +162,22 @@ New kernels required:
     - **RESULT**: `The capital of France is` →
       `[9079, 236761, 108, 1018, 14977, 53121, 2900, 563, 506, 5279, 529, 7001]` =
       "Paris." — **token-identical to CPU/llama.cpp.**
-    - **Perf: 4.77 → ~8.1 tok/s** (parity unchanged). Two wins: recycle scratch via
-      `pool_recycle` (was allocating ~hundreds of buffers/token); make the per-layer
-      PLE matrices RESIDENT (`ple_bufs`, uploaded once) instead of re-copying ~220MB
-      of f32 matrices/token. **Profiling: the GPU forward is now AT the bandwidth
-      wall** — per-token GPU exec ~68ms = 8GB/68ms = ~118 GB/s (M4 wall ~120), CPU
-      encode only ~1.5ms. So kernel/pipelining have NO headroom. Remaining per-token
-      cost is CPU prep (~11ms: pli f32 matvec + embedding gather + RoPE tables) +
-      readback. Theoretical ceiling for reading 8GB/token is ~14.7 tok/s; to beat it
-      you must read LESS (more aggressive quant, or speculative decode). vs CPU sdot
-      (6.75 tok/s) the GPU is ~1.2x; the GPU's 2.2x bandwidth edge is masked by the
-      fixed per-token CPU overhead. `CAMELID_GEMMA4_GPU_TIMING=1` reports prep/gpu.
+    - **Perf: 4.77 → ~11.2 tok/s** (parity unchanged; ~2.3x). Wins, in order:
+      1. `pool_recycle` scratch (was ~hundreds of buffer allocs/token). 113→93ms.
+      2. RESIDENT PLE matrices (`ple_bufs`, uploaded once) vs re-copying ~220MB
+         f32/token. 93→84ms.
+      3. **pli on the GPU** (`encode_gemma4_pli` + `set_pli`): the ~12ms CPU prep was
+         a 110MB f32 matvec; folded into existing kernels (no new kernel), it moved
+         to the GPU. CPU prep ~12ms → ~3.6ms (just the per_layer_token_embd row
+         gather).
+      **The GPU forward is AT the bandwidth wall**: per-token GPU exec ~77ms =
+      8GB/77ms ≈ 118 GB/s (M4 wall ~120), CPU encode ~1.5ms. No kernel/pipelining
+      headroom. **Memory lesson (16GB)**: keep token_embd/per_layer_token_embd in the
+      FILE-BACKED mmap, NOT owned RAM — owning 3.7GB anonymous made the OS swap the
+      8GB anonymous GPU WirePages under load (GPU forward thrashed to 569ms/token).
+      File-backed pages evict cheaply instead of swapping. vs CPU sdot (6.75) the GPU
+      is ~1.65x. Theoretical ceiling reading 8GB/token is ~13 tok/s; to beat it read
+      LESS (Q4/Q6, speculative decode). `CAMELID_GEMMA4_GPU_TIMING=1` reports prep/gpu.
 
 ## CI / safety notes
 
