@@ -5505,6 +5505,174 @@ pub fn try_gemma4_head(
     Some(out)
 }
 
+/// One layer's f32 PLE matrices (E-series only; `None` per layer for dense models).
+/// Output-major like the CPU `f32_matvec`: `inp_gate` is `[ple_dim][hidden]`, `proj`
+/// is `[hidden][ple_dim]`, `post_norm` is `[hidden]`.
+pub struct Gemma4ResidentPle {
+    pub inp_gate: Vec<f32>,
+    pub proj: Vec<f32>,
+    pub post_norm: Vec<f32>,
+    pub output_scale: f32,
+}
+
+/// Per-token CPU-computed inputs the GPU forward needs for one layer: the dual-θ
+/// RoPE tables for this position, the PLE per-layer input `pli`, and the resolved
+/// attention window start (`max(0, filled-window)` for sliding, 0 for global).
+pub struct Gemma4TokenLayerInput {
+    pub cos_t: Vec<f32>,
+    pub sin_t: Vec<f32>,
+    pub pli: Vec<f32>,
+    pub window_start: usize,
+}
+
+/// Drive a full gemma4 token forward on the GPU in ONE command buffer:
+/// `h0` (the position's scaled input embedding) → N decoder layers (each
+/// [`encode_gemma4_layer`] + optional [`encode_gemma4_ple`]) → [`encode_gemma4_head`]
+/// → soft-capped logits. Cross-layer KV sharing: owning layers (`owns_kv[l]`) hold
+/// their own cache (built from `cache_k_init[l]`/`cache_v_init[l]`); shared layers
+/// read `kv_source[l]`'s cache. The caller computes per-token data (embedding,
+/// RoPE tables, `pli`, window starts) on the CPU — see [`Gemma4TokenLayerInput`].
+/// Returns the `vocab` logits. None if Metal unavailable or shapes invalid.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_forward(
+    layers: &[Gemma4ResidentLayer],
+    ple: &[Option<Gemma4ResidentPle>],
+    owns_kv: &[bool],
+    kv_source: &[usize],
+    inputs: &[Gemma4TokenLayerInput],
+    cache_k_init: &[Option<Vec<f32>>],
+    cache_v_init: &[Option<Vec<f32>>],
+    h0: &[f32],
+    output_norm: &[f32],
+    token_embd_wire: &[u8],
+    vocab: usize,
+    softcap: f32,
+    eps: f32,
+    max_positions: usize,
+    write_position: usize,
+    filled: usize,
+    scale: f32,
+) -> Option<Vec<f32>> {
+    let n = layers.len();
+    let hidden = h0.len();
+    if n == 0
+        || hidden == 0
+        || ple.len() != n
+        || owns_kv.len() != n
+        || kv_source.len() != n
+        || inputs.len() != n
+        || cache_k_init.len() != n
+        || cache_v_init.len() != n
+        || output_norm.len() != hidden
+    {
+        return None;
+    }
+    let k = metal_linear_kernel()?;
+    let mkbuf = |bytes: usize| {
+        k.device
+            .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared)
+    };
+    // Build a cache buffer pair for each owning layer; shared layers reuse a source's.
+    let mut caches: Vec<Option<(Buffer, Buffer)>> = Vec::with_capacity(n);
+    for l in 0..n {
+        if owns_kv[l] {
+            let ck = cache_k_init[l].as_ref()?;
+            let cv = cache_v_init[l].as_ref()?;
+            let len = layers[l].n_kv_heads * max_positions * layers[l].head_dim;
+            if ck.len() != len || cv.len() != len {
+                return None;
+            }
+            let ckb = mkbuf(len * 4);
+            let cvb = mkbuf(len * 4);
+            write_buffer_f32(&ckb, ck);
+            write_buffer_f32(&cvb, cv);
+            caches.push(Some((ckb, cvb)));
+        } else {
+            caches.push(None);
+        }
+    }
+    let buf_a = mkbuf(hidden * 4);
+    let buf_b = mkbuf(hidden * 4);
+    let mid = mkbuf(hidden * 4);
+    let logits_buf = mkbuf(vocab * 4);
+    let embd_buf = mkbuf(token_embd_wire.len());
+    write_buffer_f32(&buf_a, h0);
+    write_buffer_u8(&embd_buf, token_embd_wire);
+
+    let mut keep = Vec::new();
+    let cb = k.queue.new_command_buffer();
+    let e = cb.new_compute_command_encoder();
+    let mut from_a = true;
+    for l in 0..n {
+        let (in_buf, out_buf) = if from_a {
+            (&buf_a, &buf_b)
+        } else {
+            (&buf_b, &buf_a)
+        };
+        let src = if owns_kv[l] { l } else { kv_source[l] };
+        let (ck, cv) = caches[src].as_ref()?;
+        let inp = &inputs[l];
+        encode_gemma4_layer(
+            e,
+            k,
+            &mut keep,
+            &layers[l],
+            in_buf,
+            &mid,
+            out_buf,
+            &inp.cos_t,
+            &inp.sin_t,
+            ck,
+            cv,
+            max_positions,
+            write_position,
+            filled,
+            inp.window_start,
+            scale,
+            owns_kv[l],
+        );
+        if let Some(p) = &ple[l] {
+            encode_gemma4_ple(
+                e,
+                k,
+                &mut keep,
+                out_buf,
+                &inp.pli,
+                &p.inp_gate,
+                &p.proj,
+                &p.post_norm,
+                p.output_scale,
+                eps,
+                hidden,
+                inp.pli.len(),
+            );
+        }
+        from_a = !from_a;
+    }
+    // After n layers the final hidden is the last out_buf (buf_b iff n is odd).
+    let final_buf = if from_a { &buf_a } else { &buf_b };
+    encode_gemma4_head(
+        e,
+        k,
+        &mut keep,
+        final_buf,
+        &logits_buf,
+        output_norm,
+        &embd_buf,
+        vocab,
+        softcap,
+        eps,
+    );
+    e.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let mut out = vec![0.0f32; vocab];
+    read_buffer_f32(&logits_buf, &mut out);
+    drop(keep);
+    Some(out)
+}
+
 /// Standalone full gemma4 layer: builds buffers (incl. a prefilled cache), runs
 /// [`encode_gemma4_layer`] (attention → FFN) in one command buffer, reads back the
 /// hidden output. For validating the full-layer chain against CPU. None if Metal
@@ -10765,6 +10933,30 @@ pub fn try_gemma4_head(
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_forward(
+    _layers: &[Gemma4ResidentLayer],
+    _ple: &[Option<Gemma4ResidentPle>],
+    _owns_kv: &[bool],
+    _kv_source: &[usize],
+    _inputs: &[Gemma4TokenLayerInput],
+    _cache_k_init: &[Option<Vec<f32>>],
+    _cache_v_init: &[Option<Vec<f32>>],
+    _h0: &[f32],
+    _output_norm: &[f32],
+    _token_embd_wire: &[u8],
+    _vocab: usize,
+    _softcap: f32,
+    _eps: f32,
+    _max_positions: usize,
+    _write_position: usize,
+    _filled: usize,
+    _scale: f32,
+) -> Option<Vec<f32>> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
 pub struct ResidentDecodeState;
 
 #[cfg(not(target_os = "macos"))]
@@ -13022,6 +13214,235 @@ mod tests {
             assert!((a - b).abs() < 5.0e-3, "{a} != {b}");
         }
         // Greedy argmax must agree.
+        let amax = |v: &[f32]| {
+            v.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i)
+                .unwrap()
+        };
+        assert_eq!(amax(&got), amax(&want));
+    }
+
+    // The full GPU forward (try_gemma4_forward: N layers + per-layer PLE + head, one
+    // command buffer) must match the SAME pipeline assembled from the individually
+    // CPU-validated try_* pieces in sequence. Two owning layers + PLE + head.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_forward_matches_composed_pieces() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 256usize;
+        let ffn_dim = 256usize;
+        let ple_dim = 64usize;
+        let vocab = 160usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let half = head_dim / 2;
+        let max_positions = 8usize;
+        let write_position = 3usize;
+        let filled = 4usize;
+        let eps = 1.0e-6f32;
+        let softcap = 30.0f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let mw = |rows: usize, in_dim: usize, seed: usize| -> Vec<u8> {
+            let mut wire = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                for blk in quantize_q8_0_blocks(&row).iter() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for &q in blk.quants.iter() {
+                        wire.push(q as u8);
+                    }
+                }
+            }
+            wire
+        };
+        let mk_norms = |off: usize| {
+            (
+                (0..hidden)
+                    .map(|i| 0.8 + ((i + off) as f32 % 5.0) * 0.05)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.9 + ((i + off) as f32 % 3.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.85 + ((i + off) as f32 % 4.0) * 0.04)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.95 + ((i + off) as f32 % 6.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.7 + ((i + off) as f32 % 11.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.6 + ((i + off) as f32 % 7.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+            )
+        };
+        let build_layer = |off: usize| {
+            let (an, pa, fnw, pf, qn, kn) = mk_norms(off);
+            Gemma4ResidentLayer::from_wire(
+                an,
+                qn,
+                kn,
+                pa,
+                fnw,
+                pf,
+                &mw(q_dim, hidden, off + 1),
+                &mw(kv_dim, hidden, off + 5),
+                &mw(kv_dim, hidden, off + 9),
+                &mw(hidden, q_dim, off + 13),
+                &mw(ffn_dim, hidden, off + 17),
+                &mw(ffn_dim, hidden, off + 21),
+                &mw(hidden, ffn_dim, off + 25),
+                n_heads,
+                n_kv_heads,
+                head_dim,
+                ffn_dim,
+                eps,
+            )
+            .expect("layer")
+        };
+        let mk_ple = |off: usize| Gemma4ResidentPle {
+            inp_gate: (0..ple_dim * hidden)
+                .map(|n| (((n + off) % 29) as f32 - 14.0) * 0.02)
+                .collect(),
+            proj: (0..hidden * ple_dim)
+                .map(|n| (((n + off) % 23) as f32 - 11.0) * 0.03)
+                .collect(),
+            post_norm: (0..hidden)
+                .map(|i| 0.9 + ((i + off) as f32 % 5.0) * 0.04)
+                .collect(),
+            output_scale: 0.061,
+        };
+        let mk_input = |off: usize| Gemma4TokenLayerInput {
+            cos_t: (0..half)
+                .map(|i| (0.3 + (i + off) as f32 * 0.01).cos())
+                .collect(),
+            sin_t: (0..half)
+                .map(|i| (0.3 + (i + off) as f32 * 0.01).sin())
+                .collect(),
+            pli: (0..ple_dim)
+                .map(|i| ((i + off) as f32 % 9.0 - 4.0) * 0.2)
+                .collect(),
+            window_start: 0,
+        };
+        let cache_len = n_kv_heads * max_positions * head_dim;
+        let mk_cache = |off: usize| -> Vec<f32> {
+            (0..cache_len)
+                .map(|i| (((i + off) % 17) as f32 - 8.0) * 0.05)
+                .collect()
+        };
+
+        let h0: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let output_norm: Vec<f32> = (0..hidden)
+            .map(|i| 0.88 + (i as f32 % 5.0) * 0.03)
+            .collect();
+        let embd_wire = mw(vocab, hidden, 99);
+
+        let l0 = build_layer(0);
+        let l1 = build_layer(50);
+        let ple0 = mk_ple(2);
+        let ple1 = mk_ple(7);
+        let in0 = mk_input(0);
+        let in1 = mk_input(4);
+        let ck0 = mk_cache(0);
+        let cv0 = mk_cache(3);
+        let ck1 = mk_cache(6);
+        let cv1 = mk_cache(11);
+
+        // ---- Oracle: chain the individually CPU-validated try_* pieces. ----
+        let h1 = try_gemma4_layer(
+            &l0,
+            &h0,
+            &in0.cos_t,
+            &in0.sin_t,
+            &ck0,
+            &cv0,
+            max_positions,
+            write_position,
+            filled,
+            0,
+            scale,
+            true,
+        )
+        .expect("l0");
+        let h1p = try_gemma4_ple(
+            &h1,
+            &in0.pli,
+            &ple0.inp_gate,
+            &ple0.proj,
+            &ple0.post_norm,
+            ple0.output_scale,
+            eps,
+            ple_dim,
+        )
+        .expect("ple0");
+        let h2 = try_gemma4_layer(
+            &l1,
+            &h1p,
+            &in1.cos_t,
+            &in1.sin_t,
+            &ck1,
+            &cv1,
+            max_positions,
+            write_position,
+            filled,
+            0,
+            scale,
+            true,
+        )
+        .expect("l1");
+        let h2p = try_gemma4_ple(
+            &h2,
+            &in1.pli,
+            &ple1.inp_gate,
+            &ple1.proj,
+            &ple1.post_norm,
+            ple1.output_scale,
+            eps,
+            ple_dim,
+        )
+        .expect("ple1");
+        let want =
+            try_gemma4_head(&h2p, &output_norm, &embd_wire, vocab, softcap, eps).expect("head");
+
+        // ---- Integrated: one command buffer for everything. ----
+        let got = try_gemma4_forward(
+            &[l0, l1],
+            &[Some(ple0), Some(ple1)],
+            &[true, true],
+            &[0, 1],
+            &[in0, in1],
+            &[Some(ck0), Some(ck1)],
+            &[Some(cv0), Some(cv1)],
+            &h0,
+            &output_norm,
+            &embd_wire,
+            vocab,
+            softcap,
+            eps,
+            max_positions,
+            write_position,
+            filled,
+            scale,
+        )
+        .expect("forward");
+
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 5.0e-3, "{a} != {b}");
+        }
         let amax = |v: &[f32]| {
             v.iter()
                 .enumerate()
