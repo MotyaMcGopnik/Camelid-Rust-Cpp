@@ -15,6 +15,7 @@ use crate::model::{Gemma4Binding, Gemma4Metadata, LlamaModelConfig};
 use crate::tensor::{Q8_0TensorBlocks, TensorStore};
 use crate::tokenizer::Tokenizer;
 use crate::{BackendError, Result};
+use rayon::prelude::*;
 use std::path::Path;
 
 /// y[o] = sum_i dequant(W[o*in + i]) * x[i], where the Q8 blocks store the tensor
@@ -24,6 +25,7 @@ fn q8_matvec(w: &Q8_0TensorBlocks, in_dim: usize, out_dim: usize, x: &[f32]) -> 
     const BV: usize = 32;
     debug_assert_eq!(x.len(), in_dim);
     (0..out_dim)
+        .into_par_iter()
         .map(|o| {
             let base = o * in_dim;
             let mut sum = 0.0f32;
@@ -39,6 +41,7 @@ fn q8_matvec(w: &Q8_0TensorBlocks, in_dim: usize, out_dim: usize, x: &[f32]) -> 
 
 fn f32_matvec(w: &[f32], in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
     (0..out_dim)
+        .into_par_iter()
         .map(|o| {
             let row = &w[o * in_dim..(o + 1) * in_dim];
             row.iter().zip(x).map(|(a, b)| a * b).sum()
@@ -349,11 +352,13 @@ impl Gemma4Runtime {
         // final norm + tied logits + softcap (last position only)
         let last = rms_norm(&hs[seq - 1], Some(&self.output_norm), eps);
         let vocab = self.config.vocab_size.unwrap() as usize;
-        let mut logits = Vec::with_capacity(vocab);
-        for v in 0..vocab {
-            let row = self.token_embd.dequantize_elements(v * hidden, hidden)?;
-            logits.push(row.iter().zip(&last).map(|(a, b)| a * b).sum::<f32>());
-        }
+        let mut logits: Vec<f32> = (0..vocab)
+            .into_par_iter()
+            .map(|v| {
+                let row = self.token_embd.dequantize_elements(v * hidden, hidden).unwrap();
+                row.iter().zip(&last).map(|(a, b)| a * b).sum()
+            })
+            .collect();
         if let Some(cap) = self.g.final_logit_softcapping {
             soft_cap_in_place(&mut logits, cap);
         }
