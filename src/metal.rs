@@ -12239,6 +12239,293 @@ mod tests {
         }
     }
 
+    // Two gemma4 layers chained in ONE command buffer with a persistent shared cache:
+    // layer 0 owns its K/V and scatters this token; layer 1 (cross-shared) reads
+    // layer 0's cache (incl. the just-scattered token) with no K/V projection. Must
+    // match the same two-layer chain on CPU. Validates the multi-layer driver +
+    // cross-layer KV sharing end-to-end.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_two_layers_shared_kv_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 256usize;
+        let ffn_dim = 256usize;
+        let group = n_heads / n_kv_heads;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let half = head_dim / 2;
+        let max_positions = 8usize;
+        let write_position = 3usize;
+        let filled = 4usize;
+        let eps = 1.0e-6f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let make_weight = |rows: usize, in_dim: usize, seed: usize| -> (Vec<u8>, Vec<Vec<f32>>) {
+            let mut wire = Vec::new();
+            let mut deq = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                let mut drow = vec![0.0f32; in_dim];
+                for (b, blk) in quantize_q8_0_blocks(&row).iter().enumerate() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for (j, &q) in blk.quants.iter().enumerate() {
+                        wire.push(q as u8);
+                        drow[b * 32 + j] = blk.scale * q as f32;
+                    }
+                }
+                deq.push(drow);
+            }
+            (wire, deq)
+        };
+        // Distinct weights per layer (seed offset 100 for layer 1).
+        let mk_layer_w = |off: usize| {
+            (
+                make_weight(q_dim, hidden, off + 1),
+                make_weight(kv_dim, hidden, off + 5),
+                make_weight(kv_dim, hidden, off + 9),
+                make_weight(hidden, q_dim, off + 13),
+                make_weight(ffn_dim, hidden, off + 17),
+                make_weight(ffn_dim, hidden, off + 21),
+                make_weight(hidden, ffn_dim, off + 25),
+            )
+        };
+        let w0 = mk_layer_w(0);
+        let w1 = mk_layer_w(100);
+        let mk_norms = |off: usize| {
+            (
+                (0..hidden)
+                    .map(|i| 0.8 + ((i + off) as f32 % 5.0) * 0.05)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.9 + ((i + off) as f32 % 3.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.85 + ((i + off) as f32 % 4.0) * 0.04)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.95 + ((i + off) as f32 % 6.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.7 + ((i + off) as f32 % 11.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.6 + ((i + off) as f32 % 7.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+            )
+        };
+        let (an0, pa0, fn0, pf0, qn0, kn0) = mk_norms(0);
+        let (an1, pa1, fn1, pf1, qn1, kn1) = mk_norms(3);
+        let cos_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).cos()).collect();
+        let sin_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).sin()).collect();
+        let h_in: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let cache_len = n_kv_heads * max_positions * head_dim;
+        let cache_k0: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.05)
+            .collect();
+        let cache_v0: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 23) as f32 - 11.0) * 0.04)
+            .collect();
+
+        // ---- CPU reference ----
+        let rms = |x: &[f32], w: Option<&[f32]>| -> Vec<f32> {
+            let mss = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
+            let inv = (mss + eps).powf(-0.5);
+            (0..x.len())
+                .map(|i| x[i] * inv * w.map_or(1.0, |w| w[i]))
+                .collect()
+        };
+        let matmul = |deq: &[Vec<f32>], x: &[f32]| -> Vec<f32> {
+            deq.iter()
+                .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
+                .collect()
+        };
+        let per_head = |x: &[f32], heads: usize, w: Option<&[f32]>| -> Vec<f32> {
+            let mut out = vec![0.0f32; x.len()];
+            for h in 0..heads {
+                let n = rms(&x[h * head_dim..(h + 1) * head_dim], w);
+                out[h * head_dim..(h + 1) * head_dim].copy_from_slice(&n);
+            }
+            out
+        };
+        let rope = |x: &mut [f32], heads: usize| {
+            for h in 0..heads {
+                let base = h * head_dim;
+                for i in 0..half {
+                    let (x0, x1) = (x[base + i], x[base + half + i]);
+                    x[base + i] = x0 * cos_t[i] - x1 * sin_t[i];
+                    x[base + half + i] = x0 * sin_t[i] + x1 * cos_t[i];
+                }
+            }
+        };
+        // attention over a flat cache; returns ctx [q_dim].
+        let attend = |q: &[f32], ck: &[f32], cv: &[f32]| -> Vec<f32> {
+            let mut ctx = vec![0.0f32; q_dim];
+            for h in 0..n_heads {
+                let kvh = h / group;
+                let qh = &q[h * head_dim..(h + 1) * head_dim];
+                let mut sc = Vec::new();
+                for p in 0..filled {
+                    let base = kvh * max_positions * head_dim + p * head_dim;
+                    sc.push(
+                        scale
+                            * qh.iter()
+                                .zip(&ck[base..base + head_dim])
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>(),
+                    );
+                }
+                let m = sc.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let mut den = 0.0f32;
+                for s in &mut sc {
+                    *s = (*s - m).exp();
+                    den += *s;
+                }
+                for (idx, p) in (0..filled).enumerate() {
+                    let base = kvh * max_positions * head_dim + p * head_dim;
+                    let wgt = sc[idx] / den;
+                    for d in 0..head_dim {
+                        ctx[h * head_dim + d] += wgt * cv[base + d];
+                    }
+                }
+            }
+            ctx
+        };
+        let ffn = |h: &[f32],
+                   gate: &[Vec<f32>],
+                   up: &[Vec<f32>],
+                   down: &[Vec<f32>],
+                   fnw: &[f32],
+                   pfw: &[f32]|
+         -> Vec<f32> {
+            let nf = rms(h, Some(fnw));
+            let g = matmul(gate, &nf);
+            let u = matmul(up, &nf);
+            let act: Vec<f32> = g
+                .iter()
+                .zip(&u)
+                .map(|(a, b)| crate::inference::gemma4::gelu_tanh(*a) * b)
+                .collect();
+            rms(&matmul(down, &act), Some(pfw))
+        };
+
+        // layer 0 (owning): compute k/v, inject into a copy of cache0, attention, ffn.
+        let nf0 = rms(&h_in, Some(&an0));
+        let mut q0 = per_head(&matmul(&w0.0 .1, &nf0), n_heads, Some(&qn0));
+        let mut k0 = per_head(&matmul(&w0.1 .1, &nf0), n_kv_heads, Some(&kn0));
+        let v0 = per_head(&matmul(&w0.2 .1, &nf0), n_kv_heads, None);
+        rope(&mut q0, n_heads);
+        rope(&mut k0, n_kv_heads);
+        let mut eff_k = cache_k0.clone();
+        let mut eff_v = cache_v0.clone();
+        for kvh in 0..n_kv_heads {
+            let base = kvh * max_positions * head_dim + write_position * head_dim;
+            eff_k[base..base + head_dim].copy_from_slice(&k0[kvh * head_dim..(kvh + 1) * head_dim]);
+            eff_v[base..base + head_dim].copy_from_slice(&v0[kvh * head_dim..(kvh + 1) * head_dim]);
+        }
+        let ctx0 = attend(&q0, &eff_k, &eff_v);
+        let attn0 = rms(&matmul(&w0.3 .1, &ctx0), Some(&pa0));
+        let h_mid0: Vec<f32> = h_in.iter().zip(&attn0).map(|(a, b)| a + b).collect();
+        let dn0 = ffn(&h_mid0, &w0.4 .1, &w0.5 .1, &w0.6 .1, &fn0, &pf0);
+        let h_out0: Vec<f32> = h_mid0.iter().zip(&dn0).map(|(a, b)| a + b).collect();
+
+        // layer 1 (shared, reads eff_k/eff_v from layer 0): q only.
+        let nf1 = rms(&h_out0, Some(&an1));
+        let mut q1 = per_head(&matmul(&w1.0 .1, &nf1), n_heads, Some(&qn1));
+        rope(&mut q1, n_heads);
+        let ctx1 = attend(&q1, &eff_k, &eff_v);
+        let attn1 = rms(&matmul(&w1.3 .1, &ctx1), Some(&pa1));
+        let h_mid1: Vec<f32> = h_out0.iter().zip(&attn1).map(|(a, b)| a + b).collect();
+        let dn1 = ffn(&h_mid1, &w1.4 .1, &w1.5 .1, &w1.6 .1, &fn1, &pf1);
+        let want: Vec<f32> = h_mid1.iter().zip(&dn1).map(|(a, b)| a + b).collect();
+
+        // ---- GPU: two layers, one command buffer, persistent shared cache ----
+        let layer0 = Gemma4ResidentLayer::from_wire(
+            an0, qn0, kn0, pa0, fn0, pf0, &w0.0 .0, &w0.1 .0, &w0.2 .0, &w0.3 .0, &w0.4 .0,
+            &w0.5 .0, &w0.6 .0, n_heads, n_kv_heads, head_dim, ffn_dim, eps,
+        )
+        .expect("layer0");
+        let layer1 = Gemma4ResidentLayer::from_wire(
+            an1, qn1, kn1, pa1, fn1, pf1, &w1.0 .0, &w1.1 .0, &w1.2 .0, &w1.3 .0, &w1.4 .0,
+            &w1.5 .0, &w1.6 .0, n_heads, n_kv_heads, head_dim, ffn_dim, eps,
+        )
+        .expect("layer1");
+        let kk = metal_linear_kernel().expect("metal");
+        let mk = |bytes: usize| {
+            kk.device
+                .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared)
+        };
+        let buf_a = mk(hidden * 4);
+        let buf_b = mk(hidden * 4);
+        let mid = mk(hidden * 4);
+        let ck = mk(cache_len * 4);
+        let cv = mk(cache_len * 4);
+        write_buffer_f32(&buf_a, &h_in);
+        write_buffer_f32(&ck, &cache_k0);
+        write_buffer_f32(&cv, &cache_v0);
+        let mut keep = Vec::new();
+        let cb = kk.queue.new_command_buffer();
+        let e = cb.new_compute_command_encoder();
+        // layer 0 owns: buf_a -> buf_b, scatters into ck/cv.
+        encode_gemma4_layer(
+            e,
+            kk,
+            &mut keep,
+            &layer0,
+            &buf_a,
+            &mid,
+            &buf_b,
+            &cos_t,
+            &sin_t,
+            &ck,
+            &cv,
+            max_positions,
+            write_position,
+            filled,
+            0,
+            scale,
+            true,
+        );
+        // layer 1 shared: buf_b -> buf_a, reads ck/cv (now holding layer 0's token).
+        encode_gemma4_layer(
+            e,
+            kk,
+            &mut keep,
+            &layer1,
+            &buf_b,
+            &mid,
+            &buf_a,
+            &cos_t,
+            &sin_t,
+            &ck,
+            &cv,
+            max_positions,
+            write_position,
+            filled,
+            0,
+            scale,
+            false,
+        );
+        e.end_encoding();
+        cb.commit();
+        cb.wait_until_completed();
+        let mut got = vec![0.0f32; hidden];
+        read_buffer_f32(&buf_a, &mut got);
+        drop(keep);
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 4.0e-2, "{a} != {b}");
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn metal_attention_block_resident_matches_standalone() {
