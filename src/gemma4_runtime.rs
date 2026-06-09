@@ -318,13 +318,10 @@ impl Gemma4Runtime {
     ) -> Result<Vec<f32>> {
         let hidden = self.config.embedding_length as usize;
         let heads = self.config.attention_head_count as usize;
-        let kv_heads = self.config.attention_head_count_kv as usize;
-        let ffn_dim = self.config.feed_forward_length as usize;
         let ple_dim = self.g.per_layer_input_dim as usize;
         let eps = self.config.rms_norm_epsilon;
         let n_layers = self.layers.len();
         let ple_total = n_layers * ple_dim;
-        let group = heads / kv_heads;
         let win = self.g.sliding_window as usize;
 
         let mut h: Vec<f32> = self
@@ -367,6 +364,10 @@ impl Gemma4Runtime {
             let sliding = self.g.is_sliding_layer(l);
             let head_dim = self.g.head_dim_at(l) as usize;
             let theta = self.g.rope_freq_base_at(l);
+            // Per-layer geometry: 12B varies kv heads across layers, E2B varies
+            // the FFN width. Never use the config scalars here.
+            let kv_heads = self.g.kv_heads_at(l) as usize;
+            let ffn_dim = self.g.ffn_length_at(l) as usize;
             let q_dim = heads * head_dim;
             let kv_dim = kv_heads * head_dim;
 
@@ -400,6 +401,9 @@ impl Gemma4Runtime {
             } else {
                 self.last_full_layer
             };
+            // GQA group against the cache actually read — the SOURCE layer's
+            // geometry when KV is shared.
+            let group = heads / self.g.kv_heads_at(src) as usize;
             let lo = if sliding {
                 (pos + 1).saturating_sub(win)
             } else {
@@ -626,9 +630,7 @@ impl Gemma4GpuRuntime {
         let f32t = |name: &str| -> Result<Vec<f32>> { Ok(store.load_cpu_f32(name)?.data) };
 
         let hidden = config.embedding_length as usize;
-        let ffn_dim = config.feed_forward_length as usize;
         let heads = config.attention_head_count as usize;
-        let kv_heads = config.attention_head_count_kv as usize;
         let n_layers = config.block_count as usize;
         let vocab = config.vocab_size.unwrap() as usize;
         let eps = config.rms_norm_epsilon;
@@ -648,13 +650,16 @@ impl Gemma4GpuRuntime {
             )
         };
 
-        let plan = g.layer_plan(n_layers, heads, kv_heads);
+        let plan = g.layer_plan(n_layers, heads);
         let mut layers = Vec::with_capacity(n_layers);
         let mut ple = Vec::with_capacity(n_layers);
         let mut owns_kv = Vec::with_capacity(n_layers);
         let mut kv_source = Vec::with_capacity(n_layers);
         for (l, lb) in binding.layers.iter().enumerate() {
             let hd = g.head_dim_at(l) as usize;
+            // Per-layer geometry (12B varies kv heads, E2B varies FFN width).
+            let kv_heads = plan[l].kv_heads;
+            let ffn_dim = g.ffn_length_at(l) as usize;
             let layer = crate::metal::Gemma4ResidentLayer::from_wire_pages(
                 f32t(&lb.attn_norm.name)?,
                 f32t(&lb.attn_q_norm.name)?,

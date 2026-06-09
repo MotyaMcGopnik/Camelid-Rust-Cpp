@@ -403,10 +403,97 @@ pub enum StopSpec {
     Many(Vec<String>),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Content-part types from the OpenAI parts form that Camelid cannot honor
+    /// (`image_url`, `input_audio`, `video_url`, …). Camelid generates text
+    /// tokens only — vision/audio towers are never loaded — so the chat
+    /// handlers fail closed with a typed `unsupported_multimodal_content`
+    /// error whenever this is non-empty. Plain-string content and `text` parts
+    /// never populate it.
+    #[serde(skip)]
+    pub unsupported_content_parts: Vec<String>,
+}
+
+/// Wire shape for `ChatMessage` deserialization: accepts the OpenAI plain
+/// string form and the content-parts array form. `text` parts are concatenated
+/// in order; every non-text part records its `type` so the handler can reject
+/// the request with a typed error instead of a generic JSON parse failure.
+#[derive(Deserialize)]
+struct ChatMessageWire {
+    role: String,
+    content: ChatContentWire,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ChatContentWire {
+    Text(String),
+    Parts(Vec<ChatContentPartWire>),
+}
+
+#[derive(Deserialize)]
+struct ChatContentPartWire {
+    #[serde(rename = "type")]
+    part_type: String,
+    text: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ChatMessage {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ChatMessageWire::deserialize(deserializer)?;
+        let (content, unsupported_content_parts) = match wire.content {
+            ChatContentWire::Text(text) => (text, Vec::new()),
+            ChatContentWire::Parts(parts) => {
+                let mut text = String::new();
+                let mut unsupported = Vec::new();
+                for part in parts {
+                    if part.part_type == "text" {
+                        text.push_str(part.text.as_deref().unwrap_or(""));
+                    } else {
+                        unsupported.push(part.part_type);
+                    }
+                }
+                (text, unsupported)
+            }
+        };
+        Ok(ChatMessage {
+            role: wire.role,
+            content,
+            unsupported_content_parts,
+        })
+    }
+}
+
+/// Fail-closed guard for multimodal chat input. Returns the typed error
+/// response when any message carries non-text content parts.
+fn reject_unsupported_multimodal_content(messages: &[ChatMessage]) -> Option<Response> {
+    let mut part_types: Vec<&str> = messages
+        .iter()
+        .flat_map(|m| m.unsupported_content_parts.iter().map(String::as_str))
+        .collect();
+    if part_types.is_empty() {
+        return None;
+    }
+    part_types.sort_unstable();
+    part_types.dedup();
+    Some(api_error(
+        StatusCode::BAD_REQUEST,
+        "unsupported_multimodal_content",
+        format!(
+            "unsupported multimodal content part(s): {}. Camelid is a text-token \
+             inference engine; image/audio/video inputs are fail-closed for every \
+             model row (Gemma 4 vision/audio towers are never loaded). Send content \
+             as a string or as {{\"type\":\"text\"}} parts.",
+            part_types.join(", ")
+        ),
+        Some("messages"),
+    ))
 }
 
 enum PromptInput {
@@ -3652,6 +3739,14 @@ async fn chat_completions(
         Ok(payload) => payload,
         Err(err) => return malformed_json_error(err),
     };
+    // Fail closed on multimodal input before any routing: no Camelid row loads
+    // a vision/audio tower, so image/audio/video parts must produce a typed
+    // error, never a silent text-only generation.
+    if let Some(messages) = req.messages.as_deref() {
+        if let Some(response) = reject_unsupported_multimodal_content(messages) {
+            return response;
+        }
+    }
     // Gemma 4 serve path (additive, gated by CAMELID_GEMMA4_SERVE). Short-circuits
     // if this request targets a loaded gemma4 runtime; otherwise falls through to
     // the existing Llama/3B path unchanged.
@@ -8378,6 +8473,7 @@ mod tests {
         assert_eq!(
             render_chat_prompt(
                 &[ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "hello".to_string(),
                 }],
@@ -8418,6 +8514,7 @@ mod tests {
         assert_eq!(
             render_chat_prompt(
                 &[ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " hello ".to_string(),
                 }],
@@ -8437,18 +8534,22 @@ mod tests {
             render_chat_prompt(
                 &[
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "system".to_string(),
                         content: "Answer briefly.".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "user".to_string(),
                         content: "Say alpha.".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "assistant".to_string(),
                         content: "alpha".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "user".to_string(),
                         content: "Now say beta.".to_string(),
                     },
@@ -8469,10 +8570,12 @@ mod tests {
             render_chat_prompt(
                 &[
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "user".to_string(),
                         content: "Complete cam".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "assistant".to_string(),
                         content: "elid".to_string(),
                     },
@@ -8492,6 +8595,7 @@ mod tests {
         assert_eq!(
             render_chat_prompt(
                 &[ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "Line one.\n\n  Indented line two.  ".to_string(),
                 }],
@@ -8515,10 +8619,12 @@ mod tests {
             render_chat_prompt(
                 &[
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "system".to_string(),
                         content: " Be brief. ".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "user".to_string(),
                         content: " Hello there. ".to_string(),
                     },
@@ -8537,6 +8643,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "Hello there.".to_string(),
             }],
@@ -8558,14 +8665,17 @@ mod tests {
             render_chat_prompt(
                 &[
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "user".to_string(),
                         content: "Complete cam".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "assistant".to_string(),
                         content: " elid ".to_string(),
                     },
                     ChatMessage {
+                        unsupported_content_parts: Vec::new(),
                         role: "user".to_string(),
                         content: "Now say hi".to_string(),
                     },
@@ -8584,6 +8694,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -8606,6 +8717,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -8630,10 +8742,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "system".to_string(),
                     content: "  Be brief.  ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "  hello  ".to_string(),
                 },
@@ -8659,10 +8773,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "system".to_string(),
                     content: "  Be brief.  ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "  hello  ".to_string(),
                 },
@@ -8688,14 +8804,17 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Alpha? ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "assistant".to_string(),
                     content: " alpha ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Beta? ".to_string(),
                 },
@@ -8721,14 +8840,17 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Alpha? ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "assistant".to_string(),
                     content: " alpha ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Beta? ".to_string(),
                 },
@@ -8754,10 +8876,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "system".to_string(),
                     content: "  Be brief.  ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "  hello  ".to_string(),
                 },
@@ -8782,6 +8906,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -8805,18 +8930,22 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "system".to_string(),
                     content: " Answer tersely. ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Alpha? ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "assistant".to_string(),
                     content: " alpha ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Beta? ".to_string(),
                 },
@@ -8841,10 +8970,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "Complete cam".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "assistant".to_string(),
                     content: " elid ".to_string(),
                 },
@@ -8868,6 +8999,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -8890,6 +9022,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization_for_model(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -8913,10 +9046,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "Complete cam".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "assistant".to_string(),
                     content: " elid ".to_string(),
                 },
@@ -8943,6 +9078,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -8967,18 +9103,22 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "system".to_string(),
                     content: " Answer tersely. ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Alpha? ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "assistant".to_string(),
                     content: " alpha ".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: " Beta? ".to_string(),
                 },
@@ -9006,10 +9146,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "system".to_string(),
                     content: "Be brief.".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "hello".to_string(),
                 },
@@ -9034,10 +9176,12 @@ mod tests {
         let rendered = render_chat_prompt_for_tokenization(
             &[
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: " system ".to_string(),
                     content: "Be brief.".to_string(),
                 },
                 ChatMessage {
+                    unsupported_content_parts: Vec::new(),
                     role: "user".to_string(),
                     content: "hello".to_string(),
                 },
@@ -9060,6 +9204,7 @@ mod tests {
             "{% for message in messages %}{{ message['role'] }}={{ message['content'] }}\n{% endfor %}",
         );
         let messages = [ChatMessage {
+            unsupported_content_parts: Vec::new(),
             role: "user".to_string(),
             content: "hello".to_string(),
         }];
@@ -9086,6 +9231,7 @@ mod tests {
 
         let rendered = render_chat_prompt_for_tokenization(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
@@ -9104,6 +9250,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
@@ -9125,6 +9272,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -9151,6 +9299,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
@@ -9175,6 +9324,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
@@ -9200,6 +9350,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
@@ -9225,6 +9376,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "  hello  ".to_string(),
             }],
@@ -9266,6 +9418,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
@@ -9287,6 +9440,7 @@ mod tests {
 
         let err = render_chat_prompt_for_tokenization_for_model_result(
             &[ChatMessage {
+                unsupported_content_parts: Vec::new(),
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
