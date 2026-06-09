@@ -122,8 +122,14 @@ New kernels required:
     `metal_gemma4_two_layers_shared_kv_matches_cpu` (two layers, one command buffer,
     ping-pong + persistent shared cache, layer 1 reads layer 0's scattered token).
     Multi-layer orchestration + cross-layer KV sharing proven end-to-end.
-- **STEP 7 — PLE stream** (per-token `pli` at token start + per-layer 7-step
-  injection on GPU with f32 GEMVs + geglu + norm + scale).
+- **STEP 7 — PLE stream. DONE (per-layer inject).** `encode_gemma4_ple`:
+  `gated = ple_inp_gate·h` (f32 GEMV) → `gelu(gated)·pli` (gelu_mul) →
+  `proj = ple_proj·gated` (f32 GEMV) → `h = (h + rms_norm(proj, post_norm)) *
+  output_scale`. New `scale_f32` kernel + `encode_linear_transposed_f32`
+  (output-major f32 GEMV). Validated by `metal_gemma4_ple_matches_cpu`. The
+  per-token `pli` (per_layer_token_embd Q8 gather + per_layer_model_proj f32 matvec
+  + norms) is computed on CPU once per token (depends only on the input embedding)
+  and passed in — wired in the runtime (STEP 9).
 - **STEP 8 — logits + soft-cap + sampling tail**, end-to-end resident token.
 - **STEP 9 — end-to-end parity** (`tests/gemma4_forward.rs` greedy decode must
   emit identical token ids) + **benchmark** vs the 6 tok/s CPU baseline. Gate the
