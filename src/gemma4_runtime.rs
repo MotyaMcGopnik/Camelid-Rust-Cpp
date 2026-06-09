@@ -108,14 +108,28 @@ impl WireQ8 {
     /// caller that runs several projections off one activation (q/k/v share the
     /// pre-attention norm; gate/up share the pre-FFN norm) quantize it a single
     /// time instead of once per projection.
+    ///
+    /// Rows are processed in fixed chunks rather than one rayon task per row:
+    /// the 262K-vocab output projection would otherwise spawn 262K tiny tasks
+    /// per token and pay closure/steal overhead comparable to the ~48-block dot
+    /// itself. Each row's dot is unchanged and rows land at fixed indices, so
+    /// the result is bit-identical to the per-row version (greedy parity safe).
     fn matvec_q(&self, out_dim: usize, xq: &[Q8_0Block]) -> Vec<f32> {
         const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
+        const ROW_CHUNK: usize = 64;
         let row_bytes = xq.len() * BB;
         let bytes = self.bytes();
-        (0..out_dim)
-            .into_par_iter()
-            .map(|o| q8_0_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq))
-            .collect()
+        let mut out = vec![0f32; out_dim];
+        out.par_chunks_mut(ROW_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, dst)| {
+                let base = chunk_idx * ROW_CHUNK;
+                for (i, d) in dst.iter_mut().enumerate() {
+                    let o = base + i;
+                    *d = q8_0_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq);
+                }
+            });
+        out
     }
 
     /// Dequantize a contiguous element range [start, start+len) — used for
@@ -143,6 +157,25 @@ impl WireQ8 {
         }
         Ok(out)
     }
+}
+
+/// Greedy-decode stop set: the tokenizer's metadata-declared end ids (EOS/EOT/
+/// EOM) plus `<end_of_turn>` when that literal piece exists in the vocab. Gemma 4
+/// rows do NOT agree on marker spelling — E4B's vocab carries `<end_of_turn>`,
+/// E2B/12B render id 106 as `<turn|>` — so a string round-trip alone misses the
+/// stop on some rows (the model then emits EOG ids forever). The metadata ids
+/// are the authoritative contract; llama.cpp stops on the same set.
+fn gemma4_stop_token_ids(tokenizer: &Tokenizer) -> Vec<u32> {
+    let sp = &tokenizer.special;
+    let mut ids: Vec<u32> = [sp.eos, sp.eot, sp.eom].iter().flatten().copied().collect();
+    if let Ok(tokens) = tokenizer.encode("<end_of_turn>", false, true) {
+        if tokens.len() == 1 {
+            ids.push(tokens[0]);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 fn f32_matvec(w: &[f32], in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
@@ -202,11 +235,46 @@ struct LayerWeights {
     ple_output_scale: f32,
 }
 
+/// Per-phase CPU decode counters (µs), populated only when
+/// `CAMELID_GEMMA4_CPU_TIMING=1`. Printed by `generate_greedy` as an average per
+/// step: embedding+PLE prep, attention (proj/rope/scores/output), FFN(+PLE
+/// injection), and the 262K-vocab output projection. Diagnostics only — no
+/// effect on generated tokens.
+static CPU_EMBED_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CPU_ATTN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CPU_FFN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CPU_OUTPROJ_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CPU_STEP_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn cpu_timing_enabled() -> bool {
+    std::env::var("CAMELID_GEMMA4_CPU_TIMING").is_ok_and(|v| v == "1")
+}
+
+fn report_cpu_timing() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let n = CPU_STEP_N.load(Relaxed).max(1);
+    eprintln!(
+        "[gemma4-cpu-timing] {n} steps: embed+pli {}us, attention {}us, ffn+ple {}us, output-proj {}us (avg/step)",
+        CPU_EMBED_US.load(Relaxed) / n,
+        CPU_ATTN_US.load(Relaxed) / n,
+        CPU_FFN_US.load(Relaxed) / n,
+        CPU_OUTPROJ_US.load(Relaxed) / n,
+    );
+}
+
 /// A loaded Gemma 4 model ready to generate.
+///
+/// Supports loading a contiguous **layer range** for distributed layer sharding:
+/// a shard holds weights only for `[first_layer, first_layer + layers.len())`,
+/// computes its own PLE inputs from the token id (PLE depends only on the token,
+/// never on upstream activations), and exchanges the hidden state at the cut
+/// point. The full single-node runtime is the `0..block_count` special case.
 pub struct Gemma4Runtime {
     config: LlamaModelConfig,
     g: Gemma4Metadata,
     tokenizer: Tokenizer,
+    /// Global index of the first locally-loaded layer (0 on a full runtime).
+    first_layer: usize,
     layers: Vec<LayerWeights>,
     token_embd: WireQ8,
     per_layer_token_embd: Option<WireQ8>,
@@ -218,8 +286,23 @@ pub struct Gemma4Runtime {
     last_full_layer: usize,
 }
 
+/// One shard step's result: interior shards hand the hidden state to the next
+/// shard; the tail shard (owning the final layer) produces logits.
+pub enum Gemma4StepOutput {
+    Hidden(Vec<f32>),
+    Logits(Vec<f32>),
+}
+
 impl Gemma4Runtime {
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_layer_range(path, None)
+    }
+
+    /// Load only the given contiguous global layer range (None = all layers).
+    /// Fails closed if the range would separate a KV-sharing layer from the
+    /// cache it reads (the split must keep every shared layer on the same shard
+    /// as its source layer).
+    pub fn load_layer_range(path: &Path, range: Option<std::ops::Range<usize>>) -> Result<Self> {
         let gguf = read_metadata(path)?;
         let config = LlamaModelConfig::from_gguf(&gguf)?;
         let g = config.gemma4.clone().ok_or_else(|| {
@@ -229,6 +312,28 @@ impl Gemma4Runtime {
         let store = TensorStore::open(path, &gguf);
         let tokenizer = Tokenizer::from_gguf(&gguf)?;
 
+        let block_count = config.block_count as usize;
+        let range = range.unwrap_or(0..block_count);
+        if range.start >= range.end || range.end > block_count {
+            return Err(BackendError::InvalidModelMetadata(format!(
+                "gemma4 layer range {range:?} is invalid for {block_count} layers"
+            )));
+        }
+        // Cross-layer KV sharing constraint: every local layer must read a cache
+        // owned by a layer in the same range.
+        let plan = g.layer_plan(block_count, config.attention_head_count as usize);
+        for l in range.clone() {
+            let src = plan[l].kv_source_layer;
+            if !range.contains(&src) {
+                return Err(BackendError::InvalidModelMetadata(format!(
+                    "gemma4 layer range {range:?} separates layer {l} from its shared \
+                     KV source layer {src}; choose a split that keeps the trailing \
+                     shared-KV block together (first shared source is layer {})",
+                    block_count - g.num_kv_shared_layers as usize
+                )));
+            }
+        }
+
         // Memory-map the GGUF once. Q8 weights are referenced in place (no eager
         // decode); kick off background readahead so the first generation does not
         // pay the whole cold-fault cost serially.
@@ -237,8 +342,8 @@ impl Gemma4Runtime {
         let q8 = |name: &str| WireQ8::new(&store, &mmap, name);
         let f32t = |name: &str| -> Result<Vec<f32>> { Ok(store.load_cpu_f32(name)?.data) };
 
-        let mut layers = Vec::with_capacity(binding.layers.len());
-        for l in &binding.layers {
+        let mut layers = Vec::with_capacity(range.len());
+        for l in &binding.layers[range.clone()] {
             layers.push(LayerWeights {
                 attn_norm: f32t(&l.attn_norm.name)?,
                 attn_q: q8(&l.attn_q.name)?,
@@ -269,6 +374,7 @@ impl Gemma4Runtime {
         let first_kv_shared = config.block_count as usize - g.num_kv_shared_layers as usize;
         Ok(Self {
             tokenizer,
+            first_layer: range.start,
             token_embd: q8(&binding.token_embedding.name)?,
             per_layer_token_embd: binding
                 .per_layer_token_embd
@@ -305,6 +411,33 @@ impl Gemma4Runtime {
         &self.tokenizer
     }
 
+    /// Global layer range loaded on this shard.
+    pub fn local_layer_range(&self) -> std::ops::Range<usize> {
+        self.first_layer..self.first_layer + self.layers.len()
+    }
+
+    pub fn block_count(&self) -> usize {
+        self.config.block_count as usize
+    }
+
+    pub fn hidden_size(&self) -> usize {
+        self.config.embedding_length as usize
+    }
+
+    /// Greedy stop set for this model (metadata EOS/EOT/EOM + literal
+    /// `<end_of_turn>` when present).
+    pub fn stop_token_ids(&self) -> Vec<u32> {
+        gemma4_stop_token_ids(&self.tokenizer)
+    }
+
+    /// Fresh per-LOCAL-layer KV caches for one sequence.
+    pub fn empty_kv_caches(&self) -> (Vec<Vec<Vec<f32>>>, Vec<Vec<Vec<f32>>>) {
+        (
+            vec![Vec::new(); self.layers.len()],
+            vec![Vec::new(); self.layers.len()],
+        )
+    }
+
     /// Process one token at absolute `pos`, appending its K/V to the per-layer
     /// caches (`kc`/`vc`; only non-shared layers store entries — shared layers read
     /// the last same-type layer's cache, already updated this step). Returns the
@@ -316,40 +449,102 @@ impl Gemma4Runtime {
         kc: &mut [Vec<Vec<f32>>],
         vc: &mut [Vec<Vec<f32>>],
     ) -> Result<Vec<f32>> {
+        match self.step_range(token, pos, None, kc, vc)? {
+            Gemma4StepOutput::Logits(logits) => Ok(logits),
+            Gemma4StepOutput::Hidden(_) => Err(BackendError::InvalidModelMetadata(
+                "step() requires a runtime that owns the final layer; use step_range \
+                 on interior shards"
+                    .into(),
+            )),
+        }
+    }
+
+    /// One token's forward over the locally-loaded layer range.
+    ///
+    /// `h_in` is the hidden state arriving from the upstream shard (`None` on
+    /// the shard owning layer 0, which embeds the token itself). KV caches are
+    /// indexed by LOCAL layer (length `self.layers.len()`). PLE inputs are
+    /// recomputed locally from the token id — they depend only on the token's
+    /// embedding row, never on upstream activations, so no extra wire traffic.
+    /// Returns logits on the shard owning the final layer, otherwise the hidden
+    /// state to forward.
+    pub fn step_range(
+        &self,
+        token: u32,
+        pos: usize,
+        h_in: Option<Vec<f32>>,
+        kc: &mut [Vec<Vec<f32>>],
+        vc: &mut [Vec<Vec<f32>>],
+    ) -> Result<Gemma4StepOutput> {
         let hidden = self.config.embedding_length as usize;
         let heads = self.config.attention_head_count as usize;
         let ple_dim = self.g.per_layer_input_dim as usize;
         let eps = self.config.rms_norm_epsilon;
-        let n_layers = self.layers.len();
-        let ple_total = n_layers * ple_dim;
+        let n_local = self.layers.len();
+        let block_count = self.config.block_count as usize;
+        // PLE tables are sized by the GLOBAL layer count.
+        let ple_total = block_count * ple_dim;
         let win = self.g.sliding_window as usize;
+        let is_tail = self.first_layer + n_local == block_count;
 
-        let mut h: Vec<f32> = self
+        let timing = cpu_timing_enabled();
+        let t_start = std::time::Instant::now();
+
+        // The scaled token embedding: the layer-0 input on the head shard, and
+        // the PLE context source on every shard (PLE depends only on the token).
+        let h0: Vec<f32> = self
             .token_embd
             .dequantize_elements(token as usize * hidden, hidden)?
             .iter()
             .map(|v| v * (hidden as f32).sqrt())
             .collect();
+        let mut h = match h_in {
+            Some(h_in) => {
+                if h_in.len() != hidden {
+                    return Err(BackendError::RuntimeShapeMismatch(format!(
+                        "shard received hidden state of {} values, expected {hidden}",
+                        h_in.len()
+                    )));
+                }
+                h_in
+            }
+            None => {
+                if self.first_layer != 0 {
+                    return Err(BackendError::InvalidModelMetadata(
+                        "interior shard requires the upstream hidden state".into(),
+                    ));
+                }
+                h0.clone()
+            }
+        };
 
-        // per-layer input (token-identity + context) for this token: [n_layers][ple_dim]
+        // Per-layer input (token-identity + context) for the LOCAL layers only:
+        // pli[li] belongs to global layer first_layer + li.
         let pli: Vec<Vec<f32>> = if let (Some(te), Some(proj), Some(pn)) = (
             self.per_layer_token_embd.as_ref(),
             self.per_layer_model_proj.as_ref(),
             self.per_layer_proj_norm.as_ref(),
         ) {
-            let ti = te.dequantize_elements(token as usize * ple_total, ple_total)?;
-            let ctx = f32_matvec(proj, hidden, ple_total, &h);
+            let local_span = n_local * ple_dim;
+            let ti = te.dequantize_elements(
+                token as usize * ple_total + self.first_layer * ple_dim,
+                local_span,
+            )?;
+            // proj is [ple_total rows x hidden] row-major: take the local rows.
+            let proj_local = &proj[self.first_layer * ple_dim * hidden
+                ..(self.first_layer * ple_dim + local_span) * hidden];
+            let ctx = f32_matvec(proj_local, hidden, local_span, &h0);
             let proj_scale = (hidden as f32).powf(-0.5);
             let ple_embed_scale = (ple_dim as f32).sqrt();
-            (0..n_layers)
-                .map(|l| {
+            (0..n_local)
+                .map(|li| {
                     let ctx_l: Vec<f32> = (0..ple_dim)
-                        .map(|d| ctx[l * ple_dim + d] * proj_scale)
+                        .map(|d| ctx[li * ple_dim + d] * proj_scale)
                         .collect();
                     let ctx_n = rms_norm(&ctx_l, Some(pn), eps);
                     (0..ple_dim)
                         .map(|d| {
-                            (ctx_n[d] + ti[l * ple_dim + d] * ple_embed_scale)
+                            (ctx_n[d] + ti[li * ple_dim + d] * ple_embed_scale)
                                 * std::f32::consts::FRAC_1_SQRT_2
                         })
                         .collect()
@@ -359,8 +554,13 @@ impl Gemma4Runtime {
             Vec::new()
         };
 
-        for l in 0..n_layers {
-            let lw = &self.layers[l];
+        let mut embed_us = t_start.elapsed().as_micros() as u64;
+        let (mut attn_us, mut ffn_us) = (0u64, 0u64);
+
+        for li in 0..n_local {
+            let t_layer = std::time::Instant::now();
+            let l = self.first_layer + li; // global layer index
+            let lw = &self.layers[li];
             let sliding = self.g.is_sliding_layer(l);
             let head_dim = self.g.head_dim_at(l) as usize;
             let theta = self.g.rope_freq_base_at(l);
@@ -391,19 +591,22 @@ impl Gemma4Runtime {
                     sv.copy_from_slice(&rms_norm(sv, None, eps));
                 }
                 apply_rope(&mut k, kv_heads, head_dim, pos, theta);
-                kc[l].push(k);
-                vc[l].push(v);
+                kc[li].push(k);
+                vc[li].push(v);
             }
-            let src = if l < self.first_kv_shared {
+            // Global source layer, then LOCAL cache index (the load-time range
+            // check guarantees the source lives on this shard).
+            let src_global = if l < self.first_kv_shared {
                 l
             } else if sliding {
                 self.last_sliding_layer
             } else {
                 self.last_full_layer
             };
+            let src = src_global - self.first_layer;
             // GQA group against the cache actually read — the SOURCE layer's
             // geometry when KV is shared.
-            let group = heads / self.g.kv_heads_at(src) as usize;
+            let group = heads / self.g.kv_heads_at(src_global) as usize;
             let lo = if sliding {
                 (pos + 1).saturating_sub(win)
             } else {
@@ -439,6 +642,8 @@ impl Gemma4Runtime {
             for (a, b) in h.iter_mut().zip(&on) {
                 *a += b;
             }
+            attn_us += t_layer.elapsed().as_micros() as u64;
+            let t_ffn = std::time::Instant::now();
             let xn = rms_norm(&h, Some(&lw.ffn_norm), eps);
             // gate and up both project the same normed input — quantize it once.
             let xnq = quantize_q8_0_blocks(&xn);
@@ -460,7 +665,7 @@ impl Gemma4Runtime {
                 lw.post_norm.as_ref(),
             ) {
                 let mut gated = f32_matvec(ig, hidden, ple_dim, &h);
-                for (gv, pv) in gated.iter_mut().zip(&pli[l]) {
+                for (gv, pv) in gated.iter_mut().zip(&pli[li]) {
                     *gv = gelu_tanh(*gv) * pv;
                 }
                 let proj = f32_matvec(pj, ple_dim, hidden, &gated);
@@ -472,8 +677,14 @@ impl Gemma4Runtime {
                     *v *= lw.ple_output_scale;
                 }
             }
+            ffn_us += t_ffn.elapsed().as_micros() as u64;
         }
 
+        if !is_tail {
+            return Ok(Gemma4StepOutput::Hidden(h));
+        }
+
+        let t_out = std::time::Instant::now();
         let last = rms_norm(&h, Some(&self.output_norm), eps);
         let vocab = self.config.vocab_size.unwrap() as usize;
         // token_embd is vocab-major (row v = the v-th embedding), so the tied
@@ -483,7 +694,19 @@ impl Gemma4Runtime {
         if let Some(cap) = self.g.final_logit_softcapping {
             soft_cap_in_place(&mut logits, cap);
         }
-        Ok(logits)
+        if timing {
+            use std::sync::atomic::Ordering::Relaxed;
+            // The PLE prep ran inside the embed window; attention/ffn windows
+            // bracket the per-layer work; everything after the last layer is
+            // the output projection (norm + 262K-vocab GEMV + soft-cap).
+            embed_us = embed_us.min(t_start.elapsed().as_micros() as u64);
+            CPU_EMBED_US.fetch_add(embed_us, Relaxed);
+            CPU_ATTN_US.fetch_add(attn_us, Relaxed);
+            CPU_FFN_US.fetch_add(ffn_us, Relaxed);
+            CPU_OUTPROJ_US.fetch_add(t_out.elapsed().as_micros() as u64, Relaxed);
+            CPU_STEP_N.fetch_add(1, Relaxed);
+        }
+        Ok(Gemma4StepOutput::Logits(logits))
     }
 
     /// Greedily generate up to `max_new` tokens from `prompt`, with an incremental
@@ -495,13 +718,7 @@ impl Gemma4Runtime {
         let mut kc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let mut vc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let prompt_tokens = self.tokenizer.encode(prompt, true, true)?;
-        let eot: Vec<u32> = self
-            .tokenizer
-            .encode("<end_of_turn>", false, true)
-            .ok()
-            .into_iter()
-            .flatten()
-            .collect();
+        let eot = gemma4_stop_token_ids(&self.tokenizer);
 
         let mut logits = Vec::new();
         for (pos, &tok) in prompt_tokens.iter().enumerate() {
@@ -523,6 +740,9 @@ impl Gemma4Runtime {
             logits = self.step(next, pos, &mut kc, &mut vc)?;
             pos += 1;
         }
+        if cpu_timing_enabled() {
+            report_cpu_timing();
+        }
         let text = self.tokenizer.decode(&generated, true)?;
         Ok((text, generated))
     }
@@ -543,13 +763,7 @@ impl Gemma4Runtime {
         let mut kc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let mut vc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let prompt_tokens = self.tokenizer.encode(prompt, true, true)?;
-        let eot: Vec<u32> = self
-            .tokenizer
-            .encode("<end_of_turn>", false, true)
-            .ok()
-            .into_iter()
-            .flatten()
-            .collect();
+        let eot = gemma4_stop_token_ids(&self.tokenizer);
 
         let mut logits = Vec::new();
         for (pos, &tok) in prompt_tokens.iter().enumerate() {
@@ -835,13 +1049,7 @@ impl Gemma4GpuRuntime {
     #[allow(clippy::explicit_counter_loop)] // `pos` is an absolute sequence index
     pub fn generate_greedy(&self, prompt: &str, max_new: usize) -> Result<(String, Vec<u32>)> {
         let prompt_tokens = self.tokenizer.encode(prompt, true, true)?;
-        let eot: Vec<u32> = self
-            .tokenizer
-            .encode("<end_of_turn>", false, true)
-            .ok()
-            .into_iter()
-            .flatten()
-            .collect();
+        let eot = gemma4_stop_token_ids(&self.tokenizer);
         let mut logits = Vec::new();
         for (pos, &tok) in prompt_tokens.iter().enumerate() {
             logits = self.forward(tok, pos)?;

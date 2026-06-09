@@ -117,6 +117,21 @@ impl AppState {
             ..Self::default()
         }
     }
+
+    /// Register a loaded gemma4 runtime under a model id, exactly as the
+    /// `CAMELID_GEMMA4_SERVE` load path would. For integration tests that drive
+    /// the live chat routes against a real runtime without the full
+    /// model-install flow.
+    pub async fn insert_gemma4_runtime_for_tests(
+        &self,
+        id: &str,
+        runtime: crate::gemma4_runtime::Gemma4Runtime,
+    ) {
+        self.gemma4_runtimes
+            .write()
+            .await
+            .insert(id.to_string(), Arc::new(runtime));
+    }
 }
 
 #[derive(Clone)]
@@ -2135,6 +2150,47 @@ fn capabilities_response_with_plan(execution_plan: Option<ExecutionPlan>) -> Cap
                 latest_checked_result: "pass",
                 latest_checked_output: "Paris",
                 evidence: "the exact tracked gemma-4-E4B-it-Q8_0 GGUF (8,192,951,456 bytes, general.architecture=gemma4, gemma4 SPM tokenizer) loads through the mmap wire-backed Q8 lane (no eager decode; ~instant load) and generates greedily with token IDs identical to the reference llama.cpp b9430 greedy decode ([9079, 236761, 108, 1018, 14977, 53121, 2900, 563, 506, 5279, 529, 7001] for 'The capital of France is'). Served live through /v1/chat/completions both non-streaming and streaming (OpenAI chat.completion.chunk shape) behind CAMELID_GEMMA4_SERVE; non-streaming returns 'Paris' with finish_reason stop and no prompt echo, streaming yields incremental token deltas then [DONE], /v1/health reports backend=gemma4-runtime/model_family=gemma4/gemma4_available=true, and the CLI greedy output matches the API for the same templated prompt. See docs/gemma4-engine-status.md. Camelid supports exact-row generation + serve smoke for this row only; no bounded-context, performance, portability, or full support is implied",
+                next_step: "promote bounded context packs, add performance/RSS gates and durable current-head QA bundles, and broaden template coverage before any wider gemma4 claim",
+            },
+            ModelCompatibilityTarget {
+                id: "gemma4_e2b_it_q8_0",
+                family: "gemma4_ple_matformer_decoder",
+                quantization: "Q8_0",
+                status: "supported_exact_row_smoke",
+                support_scope: "exact_row_smoke_only",
+                full_support_status: "blocked_pending_normalized_full_support",
+                full_support_blockers: "bounded context packs, performance/RSS gates, portability, arbitrary/Jinja template coverage beyond the gemma4 marker template, and durable current-head QA bundles remain missing; multimodal input is fail-closed (text-token generation only)",
+                metadata_parses: "validated_including_4to1_sliding_pattern_and_per_layer_ffn_widths",
+                tokenizer_works: "validated_for_gemma4_spm",
+                tensors_load: "validated_mmap_wire_backed_q8_instant_load",
+                generation_runs: "api_nonstreaming_and_streaming_chat_smoke_plus_cli_greedy",
+                parity_audited: "greedy_prompt_generated_token_and_text_identical_to_reference_llama_cpp_5d56eff_basic_v1_pack",
+                performance_measured: "functional_milestone_only_not_perf_validated",
+                frontend_load_path_verified: "served_via_gemma4_runtime_flag",
+                frontend_readiness_gate: "green only when this exact gemma4 GGUF row plus Q8_0 quant match /api/capabilities and the runtime reports loaded_now=true, generation_ready=true, and matching active_model_id (serve requires CAMELID_GEMMA4_SERVE=1)",
+                tested_context: "five_prompt_basic_v1_pack_greedy_parity_plus_api_webui_chat_smoke",
+                chat_template_renderer: "gemma4_marker",
+                chat_template_shape_pack: "not_promoted",
+                chat_template_shape_pack_id: "not_selected",
+                bounded_context_512_pack: "not_promoted",
+                bounded_context_512_pack_id: "not_selected",
+                bounded_context_window: 512,
+                bounded_context_1024_pack: "not_promoted",
+                bounded_context_1024_pack_id: "not_selected",
+                bounded_context_1024_window: 1024,
+                bounded_context_2048_pack: "not_promoted",
+                bounded_context_2048_pack_id: "not_selected",
+                bounded_context_2048_window: 2048,
+                bounded_context_4096_pack: "not_promoted",
+                bounded_context_4096_pack_id: "not_selected",
+                bounded_context_4096_window: 4096,
+                bounded_context_8192_pack: "not_promoted",
+                bounded_context_8192_pack_id: "not_selected",
+                bounded_context_8192_window: 8192,
+                latest_checked_bucket: "gemma4-basic-v1",
+                latest_checked_result: "pass",
+                latest_checked_output: "Paris",
+                evidence: "the exact tracked gemma-4-E2B-it-Q8_0 GGUF (5,048,350,848 bytes, general.architecture=gemma4, 35 layers with the 4:1 sliding_window_pattern and per-layer feed_forward_length array parsed from the GGUF, gemma4 SPM tokenizer) loads through the mmap wire-backed Q8 lane and generates greedily with prompt token ids, generated token ids, and generated text identical to the pinned reference llama.cpp 5d56eff for every prompt in qa/gemma4/prompt_packs/basic_v1.json (oracle at qa/gemma4/oracle/gemma-4-E2B-it-Q8_0.basic_v1.json). Served through /v1/chat/completions (streaming + non-streaming) behind CAMELID_GEMMA4_SERVE. Camelid supports exact-row text-token generation + serve smoke for this row only; no bounded-context, performance, portability, multimodal, or full support is implied",
                 next_step: "promote bounded context packs, add performance/RSS gates and durable current-head QA bundles, and broaden template coverage before any wider gemma4 claim",
             },
             ModelCompatibilityTarget {
@@ -7847,9 +7903,12 @@ mod tests {
         assert_eq!(
             supported_row_ids,
             BTreeSet::from([
-                // `gemma4_e4b_it_q8_0` is `supported_exact_row_smoke`: exact-row
+                // The gemma4 rows are `supported_exact_row_smoke`: exact-row
                 // generation + serve smoke only (token-identical to the reference),
                 // not bounded-context/perf/full support. Deliberately allowlisted.
+                // E2B additionally has committed basic_v1 pack parity vs the
+                // pinned llama.cpp 5d56eff oracle.
+                "gemma4_e2b_it_q8_0",
                 "gemma4_e4b_it_q8_0",
                 "llama32_1b_instruct_q8_0",
                 "llama32_3b_instruct_q8_0",
@@ -10069,6 +10128,17 @@ fn curated_catalog() -> Vec<CatalogItem> {
             repo_id: "unsloth/gemma-4-E4B-it-GGUF",
             filename: "gemma-4-E4B-it-Q8_0.gguf",
             size_bytes: 8192951456,
+            downloads: 0,
+            likes: 0,
+            quant: "Q8_0",
+            license: "gemma",
+        },
+        CatalogItem {
+            catalog_id: "gemma4_e2b_it_q8_0",
+            name: "Gemma 4 E2B-It Q8_0",
+            repo_id: "unsloth/gemma-4-E2B-it-GGUF",
+            filename: "gemma-4-E2B-it-Q8_0.gguf",
+            size_bytes: 5048350848,
             downloads: 0,
             likes: 0,
             quant: "Q8_0",
