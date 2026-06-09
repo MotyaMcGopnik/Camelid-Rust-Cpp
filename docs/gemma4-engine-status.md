@@ -39,11 +39,36 @@ by cold mmap faults on an unwarmed 16GB box; do not describe it as "fast."
 
 ## What does NOT work yet
 
-- **Decode is ~6.75 tok/s warm** — usable but not yet bandwidth-bound (~54 GB/s
-  of the ~120 GB/s M4 wall). The remaining gap is per-matvec rayon dispatch over
-  ~245 small matvecs/token and memory-level parallelism, not the i8 dot. Cold
-  runs are dominated by faulting the 8GB wire map from disk, which the 16GB box
-  cannot durably cache between runs.
+- **Decode is ~6 tok/s warm** — usable but not at the ~120 GB/s M4 wall (decode
+  reads the full 8GB of Q8 weights per token at ~54 GB/s). On CPU this is close
+  to the practical ceiling: the matvecs are already large enough to saturate all
+  10 cores, so the limit is unified-memory throughput, not dispatch — quantizing
+  the shared activation once (`matvec_q`) was measurably perf-neutral. Cold runs
+  are dominated by faulting the 8GB wire map from disk, which the 16GB box cannot
+  durably cache between runs.
+
+### GPU port: scoped, not yet done
+
+The only lever that reaches the bandwidth wall (~13–15 tok/s) is running decode
+on the GPU. Two findings from scoping it:
+
+- **The fit problem is solved.** `metal::q8_wire_nocopy_buffer` wraps a
+  page-aligned wire allocation with `new_buffer_with_bytes_no_copy`, so the GPU
+  reads our 34-byte wire bytes in place — no second resident copy, fits in 16GB.
+  (Weights would move from the `GgufWireMmap` to `wire_mmap::WirePages`, which is
+  anonymous host memory and so adds memory-pressure the file-backed mmap avoids.)
+- **A hybrid (GPU matvecs + CPU glue) is the wrong shape.** The fast GPU path is
+  the *fully resident* Llama graph (`prepare_token`/`encode_attention_block`: one
+  command buffer per token, KV on-GPU, zero round-trips). Gemma's forward can't
+  reuse it — it needs new Metal kernels for QK-norm, the dual-θ / per-layer-type
+  RoPE + head_dim, sliding-window masking, cross-layer KV, the 7-step PLE
+  injection, GeGLU, and the final soft-cap. Offloading only the Q8 matvecs while
+  keeping the glue on CPU pays ~140 commit/wait round-trips per token
+  (`start_inference_session`/`synchronize_active_session` batches independent
+  matvecs, but the norm→matvec→norm dependency chain forces a sync between most),
+  and a non-resident per-dispatch GEMV is unlikely to hit the wall — so it risks
+  a net regression. The real win is the resident-graph port, which is a multi-step
+  effort (gemma-specific kernels + parity re-validation), not a single change.
 
 ## Recently fixed
 
