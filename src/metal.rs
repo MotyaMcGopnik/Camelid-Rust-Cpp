@@ -5165,6 +5165,82 @@ pub fn try_gemma4_q8_matmul_f32y(
     Some(out)
 }
 
+/// Standalone gemma4 FFN sub-block: builds buffers, runs the whole
+/// [`encode_gemma4_ffn`] chain in one command buffer, reads back the hidden output.
+/// `gate`/`up` are `ffn_dim` rows over `hidden` in; `down` is `hidden` rows over
+/// `ffn_dim` in; weights are row-major 34-byte Q8 wire blocks. For validating the
+/// FFN sub-graph against CPU. None if Metal unavailable or shapes are invalid.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_ffn(
+    h_in: &[f32],
+    ffn_norm: &[f32],
+    post_ffw_norm: &[f32],
+    eps: f32,
+    gate_wire: &[u8],
+    up_wire: &[u8],
+    down_wire: &[u8],
+    ffn_dim: usize,
+) -> Option<Vec<f32>> {
+    const WIRE: usize = 34;
+    let hidden = h_in.len();
+    if hidden == 0
+        || ffn_dim == 0
+        || !hidden.is_multiple_of(32)
+        || !ffn_dim.is_multiple_of(32)
+        || ffn_norm.len() != hidden
+        || post_ffw_norm.len() != hidden
+    {
+        return None;
+    }
+    let bpr_hidden = hidden / 32;
+    let bpr_ffn = ffn_dim / 32;
+    if gate_wire.len() != ffn_dim * bpr_hidden * WIRE
+        || up_wire.len() != ffn_dim * bpr_hidden * WIRE
+        || down_wire.len() != hidden * bpr_ffn * WIRE
+    {
+        return None;
+    }
+    let k = metal_linear_kernel()?;
+    let mkbuf = |bytes: usize| {
+        k.device
+            .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared)
+    };
+    let in_buf = mkbuf(hidden * 4);
+    let out_buf = mkbuf(hidden * 4);
+    let gate_buf = mkbuf(gate_wire.len());
+    let up_buf = mkbuf(up_wire.len());
+    let down_buf = mkbuf(down_wire.len());
+    write_buffer_f32(&in_buf, h_in);
+    write_buffer_u8(&gate_buf, gate_wire);
+    write_buffer_u8(&up_buf, up_wire);
+    write_buffer_u8(&down_buf, down_wire);
+    let mut keep = Vec::new();
+    let cb = k.queue.new_command_buffer();
+    let e = cb.new_compute_command_encoder();
+    encode_gemma4_ffn(
+        e,
+        k,
+        &mut keep,
+        &in_buf,
+        &out_buf,
+        ffn_norm,
+        post_ffw_norm,
+        eps,
+        &gate_buf,
+        &up_buf,
+        &down_buf,
+        ffn_dim,
+    );
+    e.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let mut out = vec![0.0f32; hidden];
+    read_buffer_f32(&out_buf, &mut out);
+    drop(keep);
+    Some(out)
+}
+
 /// GPU elementwise binary op helper for residual add / silu-mul (same buffer shape).
 #[cfg(target_os = "macos")]
 fn try_binary_elementwise_f32(
@@ -6048,6 +6124,109 @@ fn encode_gemma4_q8_matmul(
             depth: 1,
         },
     );
+}
+
+/// Encode the gemma4 FFN sub-block into the (serial) encoder with no commit/readback:
+/// reads `in_buf` (hidden), writes the residual sum into `out_buf` (hidden):
+///   normf = rms_norm(in_buf, ffn_norm)
+///   gate  = normf · gate_w   (ffn_dim rows)
+///   up    = normf · up_w     (ffn_dim rows)
+///   act   = gelu_tanh(gate) * up            (GeGLU)
+///   down  = act · down_w     (hidden rows)
+///   dn    = rms_norm(down, post_ffw_norm)
+///   out   = in_buf + dn
+/// vs Llama's FFN this swaps SwiGLU→GeGLU and adds the extra `post_ffw_norm` before
+/// the residual. Scratch buffers are pushed into `keep` so they outlive the command
+/// buffer. The encoder is serial, so the dependent dispatches need no manual barriers.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn encode_gemma4_ffn(
+    e: &metal::ComputeCommandEncoderRef,
+    k: &MetalLinearKernel,
+    keep: &mut Vec<Buffer>,
+    in_buf: &Buffer,
+    out_buf: &Buffer,
+    ffn_norm: &[f32],
+    post_ffw_norm: &[f32],
+    eps: f32,
+    gate_w: &Buffer,
+    up_w: &Buffer,
+    down_w: &Buffer,
+    ffn_dim: usize,
+) {
+    let hidden = ffn_norm.len();
+    let bpr_hidden = hidden / 32;
+    let bpr_ffn = ffn_dim / 32;
+    let nb = |bytes: u64| pool_get(k, bytes);
+    let norm_w = nb((hidden * 4) as u64);
+    let postnorm_w = nb((hidden * 4) as u64);
+    let rms_scalar = nb(8);
+    let gateup_scalar = nb(8);
+    let down_scalar = nb(8);
+    let geglu_n = nb(4);
+    let resid_n = nb(4);
+    let normf = nb((hidden * 4) as u64);
+    let gate_buf = nb((ffn_dim * 4) as u64);
+    let up_buf = nb((ffn_dim * 4) as u64);
+    let act_buf = nb((ffn_dim * 4) as u64);
+    let down_buf = nb((hidden * 4) as u64);
+    let dn_buf = nb((hidden * 4) as u64);
+
+    write_buffer_f32(&norm_w, ffn_norm);
+    write_buffer_f32(&postnorm_w, post_ffw_norm);
+    unsafe {
+        let p = rms_scalar.contents() as *mut u8;
+        *(p as *mut u32) = hidden as u32;
+        *(p.add(4) as *mut f32) = eps;
+        let g = gateup_scalar.contents() as *mut u32;
+        *g = bpr_hidden as u32;
+        *g.add(1) = ffn_dim as u32;
+        let d = down_scalar.contents() as *mut u32;
+        *d = bpr_ffn as u32;
+        *d.add(1) = hidden as u32;
+        *(geglu_n.contents() as *mut u32) = ffn_dim as u32;
+        *(resid_n.contents() as *mut u32) = hidden as u32;
+    }
+
+    encode_rms_norm_f32(e, k, in_buf, &norm_w, &normf, &rms_scalar);
+    encode_gemma4_q8_matmul(e, k, &normf, gate_w, &gate_buf, &gateup_scalar, ffn_dim);
+    encode_gemma4_q8_matmul(e, k, &normf, up_w, &up_buf, &gateup_scalar, ffn_dim);
+    encode_binary(
+        e,
+        &k.gelu_mul_pipeline,
+        &gate_buf,
+        &up_buf,
+        &act_buf,
+        &geglu_n,
+        ffn_dim,
+    );
+    encode_gemma4_q8_matmul(e, k, &act_buf, down_w, &down_buf, &down_scalar, hidden);
+    encode_rms_norm_f32(e, k, &down_buf, &postnorm_w, &dn_buf, &rms_scalar);
+    encode_binary(
+        e,
+        &k.residual_add_pipeline,
+        in_buf,
+        &dn_buf,
+        out_buf,
+        &resid_n,
+        hidden,
+    );
+
+    keep.extend([
+        norm_w,
+        postnorm_w,
+        rms_scalar,
+        gateup_scalar,
+        down_scalar,
+        geglu_n,
+        resid_n,
+        normf,
+        gate_buf,
+        up_buf,
+        act_buf,
+        down_buf,
+        dn_buf,
+    ]);
 }
 
 /// Opt-in: store the resident KV cache in f16 (half the KV bytes read per token at
@@ -9729,6 +9908,21 @@ pub fn try_gemma4_q8_matmul_f32y(
 
 #[cfg(not(target_os = "macos"))]
 #[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_ffn(
+    _h_in: &[f32],
+    _ffn_norm: &[f32],
+    _post_ffw_norm: &[f32],
+    _eps: f32,
+    _gate_wire: &[u8],
+    _up_wire: &[u8],
+    _down_wire: &[u8],
+    _ffn_dim: usize,
+) -> Option<Vec<f32>> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
 pub fn try_attention_decode_f32(
     _query: &[f32],
     _keys: &[f32],
@@ -10737,6 +10931,81 @@ mod tests {
         assert!(
             try_gemma4_q8_matmul_f32y(&y, &wire[..wire.len() - 1], rows, blocks_per_row).is_none()
         );
+    }
+
+    // The gemma4 FFN sub-block run as one GPU command buffer (rms_norm -> gate/up
+    // GEMV -> GeGLU -> down GEMV -> post_ffw_norm -> residual) must match the same
+    // chain on CPU. Proves dependent dispatches compose correctly in one serial
+    // encoder with no readback between ops.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_ffn_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize; // bpr_hidden = 4
+        let ffn_dim = 256usize; // bpr_ffn = 8
+        let eps = 1.0e-6f32;
+        // Build a weight as (wire bytes, dequantized f32 rows) so the CPU reference
+        // dots the SAME values the GPU's f32×dequant GEMV reads.
+        let make_weight = |rows: usize, in_dim: usize, seed: usize| -> (Vec<u8>, Vec<Vec<f32>>) {
+            let mut wire = Vec::new();
+            let mut deq = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.04)
+                    .collect();
+                let mut drow = vec![0.0f32; in_dim];
+                for (b, blk) in quantize_q8_0_blocks(&row).iter().enumerate() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for (j, &q) in blk.quants.iter().enumerate() {
+                        wire.push(q as u8);
+                        drow[b * 32 + j] = blk.scale * q as f32;
+                    }
+                }
+                deq.push(drow);
+            }
+            (wire, deq)
+        };
+        let (gate_wire, gate_deq) = make_weight(ffn_dim, hidden, 1);
+        let (up_wire, up_deq) = make_weight(ffn_dim, hidden, 7);
+        let (down_wire, down_deq) = make_weight(hidden, ffn_dim, 3);
+        let h_in: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let ffn_norm: Vec<f32> = (0..hidden).map(|i| 0.8 + (i as f32 % 5.0) * 0.05).collect();
+        let post_norm: Vec<f32> = (0..hidden).map(|i| 0.9 + (i as f32 % 3.0) * 0.03).collect();
+
+        let rms = |x: &[f32], w: &[f32]| -> Vec<f32> {
+            let mss = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
+            let inv = (mss + eps).powf(-0.5);
+            x.iter().zip(w).map(|(v, wv)| v * inv * wv).collect()
+        };
+        let matmul = |deq: &[Vec<f32>], x: &[f32]| -> Vec<f32> {
+            deq.iter()
+                .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
+                .collect()
+        };
+        let normf = rms(&h_in, &ffn_norm);
+        let gate = matmul(&gate_deq, &normf);
+        let up = matmul(&up_deq, &normf);
+        let act: Vec<f32> = gate
+            .iter()
+            .zip(&up)
+            .map(|(g, u)| crate::inference::gemma4::gelu_tanh(*g) * u)
+            .collect();
+        let down = matmul(&down_deq, &act);
+        let dn = rms(&down, &post_norm);
+        let want: Vec<f32> = h_in.iter().zip(&dn).map(|(a, b)| a + b).collect();
+
+        let got = try_gemma4_ffn(
+            &h_in, &ffn_norm, &post_norm, eps, &gate_wire, &up_wire, &down_wire, ffn_dim,
+        )
+        .expect("gemma4 ffn");
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 1.0e-2, "{a} != {b}");
+        }
     }
 
     #[cfg(target_os = "macos")]
