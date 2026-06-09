@@ -744,6 +744,7 @@ impl Gemma4GpuRuntime {
 
     /// Run one token's forward on the GPU and return the next-token logits.
     fn forward(&self, token: u32, position: usize) -> Result<Vec<f32>> {
+        let t_prep = std::time::Instant::now();
         let hidden = self.hidden;
         let ple_dim = self.ple_dim;
         let ple_total = self.n_layers * ple_dim;
@@ -809,9 +810,23 @@ impl Gemma4GpuRuntime {
                 }
             })
             .collect();
-        self.model
+        let prep_us = t_prep.elapsed().as_micros();
+        let t_gpu = std::time::Instant::now();
+        let logits = self
+            .model
             .forward_token(&h0, &inputs, position)
-            .ok_or_else(|| BackendError::UnsupportedModelArchitecture("gpu forward failed".into()))
+            .ok_or_else(|| {
+                BackendError::UnsupportedModelArchitecture("gpu forward failed".into())
+            })?;
+        if std::env::var("CAMELID_GEMMA4_GPU_TIMING").is_ok() {
+            PREP_US.fetch_add(prep_us as u64, std::sync::atomic::Ordering::Relaxed);
+            GPU_US.fetch_add(
+                t_gpu.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            FWD_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(logits)
     }
 
     /// Greedy generate up to `max_new` tokens from `prompt` on the GPU.
@@ -844,7 +859,28 @@ impl Gemma4GpuRuntime {
             logits = self.forward(next, pos)?;
             pos += 1;
         }
+        if std::env::var("CAMELID_GEMMA4_GPU_TIMING").is_ok() {
+            use std::sync::atomic::Ordering::Relaxed;
+            let (n, prep, gpu) = (
+                FWD_N.load(Relaxed).max(1),
+                PREP_US.load(Relaxed),
+                GPU_US.load(Relaxed),
+            );
+            eprintln!(
+                "[gpu-timing] {n} forwards: prep avg {}us, gpu avg {}us (total {}us/fwd)",
+                prep / n,
+                gpu / n,
+                (prep + gpu) / n
+            );
+        }
         let text = self.tokenizer.decode(&generated, true)?;
         Ok((text, generated))
     }
 }
+
+#[cfg(target_os = "macos")]
+static PREP_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static GPU_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static FWD_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

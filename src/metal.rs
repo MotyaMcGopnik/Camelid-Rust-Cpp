@@ -5421,10 +5421,17 @@ pub fn try_gemma4_ple(
         return None;
     }
     let k = metal_linear_kernel()?;
-    let h_buf = k
-        .device
-        .new_buffer((hidden * 4) as u64, MTLResourceOptions::StorageModeShared);
-    write_buffer_f32(&h_buf, h_in);
+    let mkf = |v: &[f32]| {
+        let b = k
+            .device
+            .new_buffer((v.len() * 4) as u64, MTLResourceOptions::StorageModeShared);
+        write_buffer_f32(&b, v);
+        b
+    };
+    let h_buf = mkf(h_in);
+    let ig = mkf(ple_inp_gate);
+    let pj = mkf(ple_proj);
+    let pn = mkf(post_norm);
     let mut keep = Vec::new();
     let cb = k.queue.new_command_buffer();
     let e = cb.new_compute_command_encoder();
@@ -5434,9 +5441,9 @@ pub fn try_gemma4_ple(
         &mut keep,
         &h_buf,
         pli_l,
-        ple_inp_gate,
-        ple_proj,
-        post_norm,
+        &ig,
+        &pj,
+        &pn,
         output_scale,
         eps,
         hidden,
@@ -5520,6 +5527,9 @@ pub fn try_gemma4_head(
 pub struct Gemma4ResidentModel {
     layers: Vec<Gemma4ResidentLayer>,
     ple: Vec<Option<Gemma4ResidentPle>>,
+    /// Per-layer resident PLE matrix buffers (inp_gate, proj, post_norm), uploaded
+    /// once so forward_token doesn't re-copy ~220MB of f32 matrices every token.
+    ple_bufs: Vec<Option<(Buffer, Buffer, Buffer)>>,
     owns_kv: Vec<bool>,
     kv_source: Vec<usize>,
     caches: Vec<Option<(Buffer, Buffer)>>,
@@ -5585,9 +5595,23 @@ impl Gemma4ResidentModel {
         }
         let token_embd = mkbuf(token_embd_wire.len());
         write_buffer_u8(&token_embd, token_embd_wire);
+        // Upload each layer's PLE matrices once into resident buffers.
+        let upload = |v: &[f32]| {
+            let b = mkbuf(v.len() * 4);
+            write_buffer_f32(&b, v);
+            b
+        };
+        let ple_bufs: Vec<Option<(Buffer, Buffer, Buffer)>> = ple
+            .iter()
+            .map(|p| {
+                p.as_ref()
+                    .map(|p| (upload(&p.inp_gate), upload(&p.proj), upload(&p.post_norm)))
+            })
+            .collect();
         Some(Self {
             layers,
             ple,
+            ple_bufs,
             owns_kv,
             kv_source,
             caches,
@@ -5660,16 +5684,16 @@ impl Gemma4ResidentModel {
                 self.scale,
                 self.owns_kv[l],
             );
-            if let Some(p) = &self.ple[l] {
+            if let (Some(p), Some((ig, pj, pn))) = (&self.ple[l], &self.ple_bufs[l]) {
                 encode_gemma4_ple(
                     e,
                     k,
                     &mut keep,
                     out_buf,
                     &inp.pli,
-                    &p.inp_gate,
-                    &p.proj,
-                    &p.post_norm,
+                    ig,
+                    pj,
+                    pn,
                     p.output_scale,
                     self.eps,
                     self.hidden,
@@ -5696,7 +5720,10 @@ impl Gemma4ResidentModel {
         cb.wait_until_completed();
         let mut out = vec![0.0f32; self.vocab];
         read_buffer_f32(&self.logits, &mut out);
-        drop(keep);
+        // Return the per-token scratch to the pool so the next token reuses it instead
+        // of allocating ~hundreds of fresh Metal buffers (safe: the command buffer has
+        // completed). Persistent weights/caches/token_embd are NOT in `keep`.
+        pool_recycle(k, keep);
         Some(out)
     }
 
@@ -5749,16 +5776,16 @@ impl Gemma4ResidentModel {
                 self.scale,
                 self.owns_kv[l],
             );
-            if let Some(p) = &self.ple[l] {
+            if let (Some(p), Some((ig, pj, pn))) = (&self.ple[l], &self.ple_bufs[l]) {
                 encode_gemma4_ple(
                     e,
                     k,
                     &mut keep,
                     out_buf,
                     &inp.pli,
-                    &p.inp_gate,
-                    &p.proj,
-                    &p.post_norm,
+                    ig,
+                    pj,
+                    pn,
                     p.output_scale,
                     self.eps,
                     self.hidden,
@@ -5906,20 +5933,29 @@ pub fn try_gemma4_forward(
             owns_kv[l],
         );
         if let Some(p) = &ple[l] {
+            let mkf = |v: &[f32]| {
+                let b = k
+                    .device
+                    .new_buffer((v.len() * 4) as u64, MTLResourceOptions::StorageModeShared);
+                write_buffer_f32(&b, v);
+                b
+            };
+            let (ig, pj, pn) = (mkf(&p.inp_gate), mkf(&p.proj), mkf(&p.post_norm));
             encode_gemma4_ple(
                 e,
                 k,
                 &mut keep,
                 out_buf,
                 &inp.pli,
-                &p.inp_gate,
-                &p.proj,
-                &p.post_norm,
+                &ig,
+                &pj,
+                &pn,
                 p.output_scale,
                 eps,
                 hidden,
                 inp.pli.len(),
             );
+            keep.extend([ig, pj, pn]);
         }
         from_a = !from_a;
     }
@@ -7543,9 +7579,9 @@ fn encode_gemma4_ple(
     keep: &mut Vec<Buffer>,
     h_buf: &Buffer,
     pli_l: &[f32],
-    ple_inp_gate: &[f32],
-    ple_proj: &[f32],
-    post_norm: &[f32],
+    inp_gate_w: &Buffer,
+    proj_w: &Buffer,
+    postnorm_w: &Buffer,
     output_scale: f32,
     eps: f32,
     hidden: usize,
@@ -7553,13 +7589,12 @@ fn encode_gemma4_ple(
 ) {
     let nb = |bytes: u64| pool_get(k, bytes);
     let f32b = |n: usize| nb((n * 4) as u64);
-    let inp_gate_buf = f32b(ple_inp_gate.len());
-    let proj_w_buf = f32b(ple_proj.len());
-    let postnorm_buf = f32b(hidden);
+    // inp_gate_w / proj_w / postnorm_w are RESIDENT (uploaded once); only pli changes
+    // per token. Re-uploading the ~2.6MB PLE matrices every token was ~220MB/token.
     let pli_buf = f32b(ple_dim);
     let gate_buf = f32b(ple_dim);
     let gated_buf = f32b(ple_dim);
-    let proj_buf = f32b(hidden);
+    let proj_out = f32b(hidden);
     let pnv_buf = f32b(hidden);
     let summed_buf = f32b(hidden);
     let ig_scalar = nb(8);
@@ -7569,9 +7604,6 @@ fn encode_gemma4_ple(
     let resid_n = nb(4);
     let scale_scalar = nb(8);
 
-    write_buffer_f32(&inp_gate_buf, ple_inp_gate);
-    write_buffer_f32(&proj_w_buf, ple_proj);
-    write_buffer_f32(&postnorm_buf, post_norm);
     write_buffer_f32(&pli_buf, pli_l);
     unsafe {
         let set2 = |buf: &Buffer, a: u32, b: u32| {
@@ -7591,7 +7623,7 @@ fn encode_gemma4_ple(
         *(s.add(4) as *mut f32) = output_scale;
     }
 
-    encode_linear_transposed_f32(e, k, h_buf, &inp_gate_buf, &gate_buf, &ig_scalar, ple_dim);
+    encode_linear_transposed_f32(e, k, h_buf, inp_gate_w, &gate_buf, &ig_scalar, ple_dim);
     encode_binary(
         e,
         &k.gelu_mul_pipeline,
@@ -7601,8 +7633,8 @@ fn encode_gemma4_ple(
         &geglu_n,
         ple_dim,
     );
-    encode_linear_transposed_f32(e, k, &gated_buf, &proj_w_buf, &proj_buf, &pj_scalar, hidden);
-    encode_rms_norm_f32(e, k, &proj_buf, &postnorm_buf, &pnv_buf, &rms_scalar);
+    encode_linear_transposed_f32(e, k, &gated_buf, proj_w, &proj_out, &pj_scalar, hidden);
+    encode_rms_norm_f32(e, k, &proj_out, postnorm_w, &pnv_buf, &rms_scalar);
     encode_binary(
         e,
         &k.residual_add_pipeline,
@@ -7615,13 +7647,10 @@ fn encode_gemma4_ple(
     encode_scale_f32(e, k, &summed_buf, h_buf, &scale_scalar, hidden);
 
     keep.extend([
-        inp_gate_buf,
-        proj_w_buf,
-        postnorm_buf,
         pli_buf,
         gate_buf,
         gated_buf,
-        proj_buf,
+        proj_out,
         pnv_buf,
         summed_buf,
         ig_scalar,
