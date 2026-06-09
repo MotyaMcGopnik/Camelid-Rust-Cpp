@@ -3471,7 +3471,7 @@ fn decode_q8_0_blocks(
     Ok(blocks)
 }
 
-fn f16_bits_to_f32(bits: u16) -> f32 {
+pub(crate) fn f16_bits_to_f32(bits: u16) -> f32 {
     let sign = (u32::from(bits & 0x8000)) << 16;
     let exp = (bits & 0x7c00) >> 10;
     let frac = u32::from(bits & 0x03ff);

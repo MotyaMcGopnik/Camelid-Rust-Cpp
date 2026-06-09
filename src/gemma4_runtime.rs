@@ -10,39 +10,146 @@
 //! 16GB box); matmuls dequantize on the fly via [`q8_matvec`]. Cross-layer KV
 //! sharing: layers >= `first_kv_shared` reuse the last same-type layer's cache.
 
-use crate::gguf::read_metadata;
+use crate::gguf::{read_metadata, GgufTensorType};
 use crate::inference::gemma4::{gelu_tanh, soft_cap_in_place};
 use crate::model::{Gemma4Binding, Gemma4Metadata, LlamaModelConfig};
-use crate::tensor::{Q8_0TensorBlocks, TensorStore};
+use crate::tensor::{f16_bits_to_f32, TensorStore};
 use crate::tokenizer::Tokenizer;
+use crate::wire_mmap::GgufWireMmap;
 use crate::{BackendError, Result};
 use rayon::prelude::*;
 use std::path::Path;
+use std::sync::Arc;
 
-/// y[o] = sum_i dequant(W[o*in + i]) * x[i]. Q8 blocks store the tensor in raw
-/// GGUF order (out-major, `in` contiguous); rows are block-aligned (in % 32 == 0),
-/// so we walk blocks: one scale multiply per 32 quants, contiguous + vectorizable.
-fn q8_matvec(w: &Q8_0TensorBlocks, in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
-    const BV: usize = 32;
-    debug_assert_eq!(x.len(), in_dim);
-    debug_assert_eq!(in_dim % BV, 0, "q8_matvec assumes block-aligned rows");
-    let blocks_per_row = in_dim / BV;
-    (0..out_dim)
-        .into_par_iter()
-        .map(|o| {
-            let row_blocks = &w.blocks[o * blocks_per_row..(o + 1) * blocks_per_row];
-            let mut sum = 0.0f32;
-            for (b, block) in row_blocks.iter().enumerate() {
-                let xb = &x[b * BV..b * BV + BV];
-                let mut bsum = 0.0f32;
-                for j in 0..BV {
-                    bsum += f32::from(block.quants[j]) * xb[j];
-                }
-                sum += block.scale * bsum;
-            }
-            sum
+/// Q8_0 wire-block geometry (GGUF on-disk format): 32 quantized values per block,
+/// stored as a 2-byte little-endian f16 scale followed by 32 i8 quants = 34 bytes.
+const Q8_VALUES_PER_BLOCK: usize = 32;
+const Q8_WIRE_BYTES_PER_BLOCK: usize = 34;
+
+/// A Q8_0 weight read straight from the memory-mapped GGUF — no eager decode and
+/// no second resident copy. The mmap pages fault in on first touch (during the
+/// first generation) and stay in the OS page cache after, so `load()` is ~instant
+/// instead of spending ~240s materializing 8GB of `Q8_0Block` structs up front.
+/// Dequant happens inline in the matmul, exactly where it happened before — only
+/// the f16 scale is now decoded per block per pass (negligible next to the 32
+/// mul-adds it scales).
+struct WireQ8 {
+    mmap: Arc<GgufWireMmap>,
+    offset: u64,
+    element_count: usize,
+}
+
+impl WireQ8 {
+    fn new(store: &TensorStore, mmap: &Arc<GgufWireMmap>, name: &str) -> Result<Self> {
+        let desc = store.descriptor(name)?;
+        if desc.tensor_type != GgufTensorType::Q8_0 {
+            return Err(BackendError::UnsupportedTensorType(format!(
+                "tensor {name} is {:?}; gemma4 wire load requires Q8_0",
+                desc.tensor_type
+            )));
+        }
+        let element_count = desc.dimensions.iter().product::<u64>() as usize;
+        if element_count % Q8_VALUES_PER_BLOCK != 0 {
+            return Err(BackendError::InvalidTensorData(format!(
+                "tensor {name} element count {element_count} is not block-aligned"
+            )));
+        }
+        let byte_len = element_count / Q8_VALUES_PER_BLOCK * Q8_WIRE_BYTES_PER_BLOCK;
+        if desc.n_bytes as usize != byte_len {
+            return Err(BackendError::InvalidTensorData(format!(
+                "tensor {name} q8_0 byte size {} != expected {byte_len}",
+                desc.n_bytes
+            )));
+        }
+        // Validate the whole tensor range lies inside the mapping once, so the
+        // hot-path `bytes()` can index without re-checking.
+        mmap.bytes(desc.absolute_offset, byte_len)?;
+        Ok(Self {
+            mmap: mmap.clone(),
+            offset: desc.absolute_offset,
+            element_count,
         })
-        .collect()
+    }
+
+    /// The tensor's full wire-byte slice. Bounds were validated in `new`.
+    #[inline]
+    fn bytes(&self) -> &[u8] {
+        let byte_len = self.element_count / Q8_VALUES_PER_BLOCK * Q8_WIRE_BYTES_PER_BLOCK;
+        self.mmap
+            .bytes(self.offset, byte_len)
+            .expect("wire q8 range validated at load")
+    }
+
+    #[inline]
+    fn block_scale(bytes: &[u8], block: usize) -> f32 {
+        let b = block * Q8_WIRE_BYTES_PER_BLOCK;
+        f16_bits_to_f32(u16::from_le_bytes([bytes[b], bytes[b + 1]]))
+    }
+
+    /// Dot one 32-value Q8 block's quants with 32 inputs. Both operands are bound
+    /// to fixed `[_; 32]` arrays so the compiler proves the bounds and emits a
+    /// vectorized scalar-product (the wire bytes are read in place, no decode copy).
+    #[inline(always)]
+    fn block_dot(qbytes: &[u8], xb: &[f32]) -> f32 {
+        let q: &[u8; Q8_VALUES_PER_BLOCK] = qbytes.try_into().expect("32 quant bytes");
+        let x: &[f32; Q8_VALUES_PER_BLOCK] = xb.try_into().expect("32 inputs");
+        let mut s = 0.0f32;
+        for j in 0..Q8_VALUES_PER_BLOCK {
+            s += (q[j] as i8) as f32 * x[j];
+        }
+        s
+    }
+
+    /// y[o] = sum_i dequant(W[o*in + i]) * x[i]. Rows are block-aligned
+    /// (in % 32 == 0); we walk blocks: one f16 scale + a 32-lane mul-add per block.
+    fn matvec(&self, in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
+        const BV: usize = Q8_VALUES_PER_BLOCK;
+        const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
+        debug_assert_eq!(x.len(), in_dim);
+        debug_assert_eq!(in_dim % BV, 0, "matvec assumes block-aligned rows");
+        let blocks_per_row = in_dim / BV;
+        let bytes = self.bytes();
+        (0..out_dim)
+            .into_par_iter()
+            .map(|o| {
+                let row_block0 = o * blocks_per_row;
+                let mut sum = 0.0f32;
+                for b in 0..blocks_per_row {
+                    let block = row_block0 + b;
+                    let scale = Self::block_scale(bytes, block);
+                    let qs = block * BB + 2;
+                    sum += scale * Self::block_dot(&bytes[qs..qs + BV], &x[b * BV..b * BV + BV]);
+                }
+                sum
+            })
+            .collect()
+    }
+
+    /// Dequantize a contiguous element range [start, start+len) — used for
+    /// row-major embedding lookups into vocab-major Q8 tables.
+    fn dequantize_elements(&self, start: usize, len: usize) -> Result<Vec<f32>> {
+        const BV: usize = Q8_VALUES_PER_BLOCK;
+        const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
+        let end = start.checked_add(len).ok_or_else(|| {
+            BackendError::InvalidTensorData("q8_0 dequant range overflows usize".into())
+        })?;
+        if end > self.element_count {
+            return Err(BackendError::RuntimeShapeMismatch(format!(
+                "q8_0 dequant range {start}..{end} exceeds element count {}",
+                self.element_count
+            )));
+        }
+        let bytes = self.bytes();
+        let mut out = Vec::with_capacity(len);
+        for e in start..end {
+            let block = e / BV;
+            let within = e % BV;
+            let scale = Self::block_scale(bytes, block);
+            let q = bytes[block * BB + 2 + within] as i8;
+            out.push(scale * q as f32);
+        }
+        Ok(out)
+    }
 }
 
 fn f32_matvec(w: &[f32], in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
@@ -77,17 +184,17 @@ fn apply_rope(vec: &mut [f32], heads: usize, head_dim: usize, position: usize, t
 
 struct LayerWeights {
     attn_norm: Vec<f32>,
-    attn_q: Q8_0TensorBlocks,
-    attn_k: Q8_0TensorBlocks,
-    attn_v: Q8_0TensorBlocks,
-    attn_output: Q8_0TensorBlocks,
+    attn_q: WireQ8,
+    attn_k: WireQ8,
+    attn_v: WireQ8,
+    attn_output: WireQ8,
     q_norm: Vec<f32>,
     k_norm: Vec<f32>,
     post_attn_norm: Vec<f32>,
     ffn_norm: Vec<f32>,
-    ffn_gate: Q8_0TensorBlocks,
-    ffn_up: Q8_0TensorBlocks,
-    ffn_down: Q8_0TensorBlocks,
+    ffn_gate: WireQ8,
+    ffn_up: WireQ8,
+    ffn_down: WireQ8,
     post_ffw_norm: Vec<f32>,
     // PLE (E-series); inp_gate/proj are small F32 matrices in the GGUF.
     post_norm: Option<Vec<f32>>,
@@ -102,8 +209,8 @@ pub struct Gemma4Runtime {
     g: Gemma4Metadata,
     tokenizer: Tokenizer,
     layers: Vec<LayerWeights>,
-    token_embd: Q8_0TensorBlocks,
-    per_layer_token_embd: Option<Q8_0TensorBlocks>,
+    token_embd: WireQ8,
+    per_layer_token_embd: Option<WireQ8>,
     per_layer_model_proj: Option<Vec<f32>>, // BF16 -> f32
     per_layer_proj_norm: Option<Vec<f32>>,
     output_norm: Vec<f32>,
@@ -124,7 +231,12 @@ impl Gemma4Runtime {
         let store = TensorStore::open(path, &gguf);
         let tokenizer = Tokenizer::from_gguf(&gguf)?;
 
-        let q8 = |name: &str| store.load_q8_0_blocks(name);
+        // Memory-map the GGUF once. Q8 weights are referenced in place (no eager
+        // decode); kick off background readahead so the first generation does not
+        // pay the whole cold-fault cost serially.
+        let mmap = GgufWireMmap::map(path)?;
+        mmap.advise_willneed();
+        let q8 = |name: &str| WireQ8::new(&store, &mmap, name);
         let f32t = |name: &str| -> Result<Vec<f32>> { Ok(store.load_cpu_f32(name)?.data) };
 
         let mut layers = Vec::with_capacity(binding.layers.len());
@@ -244,7 +356,7 @@ impl Gemma4Runtime {
             let kv_dim = kv_heads * head_dim;
 
             let xn = rms_norm(&h, Some(&lw.attn_norm), eps);
-            let mut q = q8_matvec(&lw.attn_q, hidden, q_dim, &xn);
+            let mut q = lw.attn_q.matvec(hidden, q_dim, &xn);
             for hh in 0..heads {
                 let s = &mut q[hh * head_dim..(hh + 1) * head_dim];
                 s.copy_from_slice(&rms_norm(s, Some(&lw.q_norm), eps));
@@ -252,8 +364,8 @@ impl Gemma4Runtime {
             apply_rope(&mut q, heads, head_dim, pos, theta);
 
             if l < self.first_kv_shared {
-                let mut k = q8_matvec(&lw.attn_k, hidden, kv_dim, &xn);
-                let mut v = q8_matvec(&lw.attn_v, hidden, kv_dim, &xn);
+                let mut k = lw.attn_k.matvec(hidden, kv_dim, &xn);
+                let mut v = lw.attn_v.matvec(hidden, kv_dim, &xn);
                 for hh in 0..kv_heads {
                     let s = &mut k[hh * head_dim..(hh + 1) * head_dim];
                     s.copy_from_slice(&rms_norm(s, Some(&lw.k_norm), eps));
@@ -297,16 +409,16 @@ impl Gemma4Runtime {
                     }
                 }
             }
-            let o = q8_matvec(&lw.attn_output, q_dim, hidden, &attn);
+            let o = lw.attn_output.matvec(q_dim, hidden, &attn);
             let on = rms_norm(&o, Some(&lw.post_attn_norm), eps);
             for (a, b) in h.iter_mut().zip(&on) {
                 *a += b;
             }
             let xn = rms_norm(&h, Some(&lw.ffn_norm), eps);
-            let gate = q8_matvec(&lw.ffn_gate, hidden, ffn_dim, &xn);
-            let up = q8_matvec(&lw.ffn_up, hidden, ffn_dim, &xn);
+            let gate = lw.ffn_gate.matvec(hidden, ffn_dim, &xn);
+            let up = lw.ffn_up.matvec(hidden, ffn_dim, &xn);
             let act: Vec<f32> = gate.iter().zip(&up).map(|(g, u)| gelu_tanh(*g) * u).collect();
-            let down = q8_matvec(&lw.ffn_down, ffn_dim, hidden, &act);
+            let down = lw.ffn_down.matvec(ffn_dim, hidden, &act);
             let dn = rms_norm(&down, Some(&lw.post_ffw_norm), eps);
             for (a, b) in h.iter_mut().zip(&dn) {
                 *a += b;
@@ -334,7 +446,7 @@ impl Gemma4Runtime {
         // token_embd is vocab-major (row v = the v-th embedding), so the tied
         // logits are a single block-wise Q8 matvec — far faster than per-row
         // dequantize_elements over the whole 262k vocab.
-        let mut logits = q8_matvec(&self.token_embd, hidden, vocab, &last);
+        let mut logits = self.token_embd.matvec(hidden, vocab, &last);
         if let Some(cap) = self.g.final_logit_softcapping {
             soft_cap_in_place(&mut logits, cap);
         }

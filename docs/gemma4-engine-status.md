@@ -3,9 +3,10 @@
 **Status (correctness milestone): Gemma 4 runs correctly inside Camelid's
 from-scratch engine and produces output token-identical to llama.cpp.** It is now
 also served through the HTTP API (`/v1/chat/completions`, streaming and
-non-streaming, behind the `CAMELID_GEMMA4_SERVE` flag), but is not yet wired into
-the UI, and it is not yet fast — load-time optimization is the next step.
-Performance work comes after correctness; do not describe the current speed as
+non-streaming, behind the `CAMELID_GEMMA4_SERVE` flag) and surfaced in the UI as a
+supported + downloadable model. The one-time load is ~11x faster (mmap wire-backed
+weights, no eager decode). Generation is still ~1.2 tok/s — a functional
+milestone, not a performance one; do not describe the current decode speed as
 "fast."
 
 ## What works
@@ -38,12 +39,26 @@ Performance work comes after correctness; do not describe the current speed as
 
 ## What does NOT work yet
 
-- **Not wired into the UI** (the serve API works; the frontend does not surface
-  Gemma 4 as a selectable/served model yet).
-- **Slow one-time load (~238s, ~420s under memory pressure).** Weights are eagerly decoded into Q8 block
-  structs. The engine's mmap / instant-start lane should replace this — but only
-  after the serve path passes.
-- **Generation is ~1–2 tok/s** — a functional milestone, not a performance one.
+- **Slow generation (~1.2 tok/s)** — a functional milestone, not a performance
+  one. Decode is the next optimization target.
+
+## Recently fixed
+
+- **Runtime load time: ~238s → ~21s (~11x).** Weights are no longer eagerly
+  decoded into 8GB of `Q8_0Block` structs. The runtime memory-maps the GGUF once
+  (`wire_mmap::GgufWireMmap`) and reads Q8 wire blocks in place, decoding the f16
+  scale + 32 i8 quants inline in the matmul (vectorized 32-lane dot). Load is now
+  bounded by streaming the 8GB from disk (`MADV_WILLNEED` prefetch) instead of the
+  per-block decode; when the page cache still holds the file a reload skips the
+  read. Generation speed and the exact greedy token IDs are unchanged. (Note: the
+  `serve` path additionally hashes the full 8GB GGUF once for the receipt lane, so
+  serve startup is slower than the bare `gemma4-generate` runtime load, and on a
+  16GB box the page cache does not durably hold an 8GB model between runs.)
+- **Wired into the UI.** Gemma 4 E4B-It is a supported + downloadable model in
+  the frontend catalog and a `/api/capabilities` compatibility row.
+
+## Still limited
+
 - **Only E4B (Q8_0) exercised.** The dense (12B/31B) and MoE (26B-A4B) variants
   share the code but are untested; Camelid is Q8_0-only (no K-quants).
 - **RAM:** Gemma 4 (~8GB) and the 3B backend (~3.4GB) together thrash a 17GB box.
@@ -64,7 +79,7 @@ Performance work comes after correctness; do not describe the current speed as
 | **llama.cpp greedy IDs** | `[9079, 236761, 108, 1018, 14977, 53121, 2900, 563, 506, 5279, 529, 7001]` |
 | **Camelid greedy IDs** | `[9079, 236761, 108, 1018, 14977, 53121, 2900, 563, 506, 5279, 529, 7001]` — **identical** |
 | Decoded text | `The capital of France is Paris.\n\n**Question:** What is the capital of France` |
-| Load time | ~237.8 s (one-time) |
+| Load time | ~21 s (mmap wire-backed, ~11x faster than the original ~238 s eager decode; `serve` adds a one-time 8GB receipt hash on top) |
 | Generation speed | ~1.16 tok/s @ 12 tokens (~2.26 tok/s @ 20) |
 
 The oracle was captured with `llama-server` (llama.cpp b9430) on the same GGUF,
