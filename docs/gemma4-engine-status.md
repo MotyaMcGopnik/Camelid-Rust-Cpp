@@ -1,10 +1,12 @@
 # Gemma 4 in Camelid — engine status
 
 **Status (correctness milestone): Gemma 4 runs correctly inside Camelid's
-from-scratch engine and produces output token-identical to llama.cpp.** It is not
-yet served through the HTTP API or wired into the UI, and it is not yet fast — a
-serve integration and load-time optimization are the next steps. Performance work
-comes after correctness; do not describe the current speed as "fast."
+from-scratch engine and produces output token-identical to llama.cpp.** It is now
+also served through the HTTP API (`/v1/chat/completions`, streaming and
+non-streaming, behind the `CAMELID_GEMMA4_SERVE` flag), but is not yet wired into
+the UI, and it is not yet fast — load-time optimization is the next step.
+Performance work comes after correctness; do not describe the current speed as
+"fast."
 
 ## What works
 
@@ -23,13 +25,22 @@ comes after correctness; do not describe the current speed as "fast."
   via the CLI (token IDs identical — see proof below).
 - **In-engine runtime + CLI.** `Gemma4Runtime::load()` + `generate_greedy()`,
   driven by `camelid gemma4-generate`. Incremental KV cache (O(n) decode).
+- **HTTP serve (behind a flag).** With `CAMELID_GEMMA4_SERVE=1`, `camelid serve
+  --model <gemma4.gguf>` loads the runtime and serves `/v1/chat/completions`
+  both non-streaming and streaming (SSE, OpenAI `chat.completion.chunk` shape).
+  The Gemma chat template lives in one place (`gemma4_chat_prompt`). `/v1/health`
+  reports `backend`, `model_family`, and `gemma4_available`. The existing
+  Llama/3B serve path is untouched, and a gemma4 request with no loaded runtime
+  fails clearly (503 `model_not_ready`) — never a silent fallthrough. Verified
+  live: health correct; non-streaming returns `Paris` (finish_reason `stop`, no
+  prompt echo); streaming yields incremental token deltas then `[DONE]`; unknown
+  model id returns a clear `model_not_found` error.
 
 ## What does NOT work yet
 
-- **Not served through the API / UI.** No `/v1/chat/completions` or `/v1/health`
-  path for Gemma 4 yet. (Serve wiring is the next task, behind a flag, without
-  touching the existing Llama/3B path.)
-- **Slow one-time load (~238s).** Weights are eagerly decoded into Q8 block
+- **Not wired into the UI** (the serve API works; the frontend does not surface
+  Gemma 4 as a selectable/served model yet).
+- **Slow one-time load (~238s, ~420s under memory pressure).** Weights are eagerly decoded into Q8 block
   structs. The engine's mmap / instant-start lane should replace this — but only
   after the serve path passes.
 - **Generation is ~1–2 tok/s** — a functional milestone, not a performance one.
@@ -78,12 +89,24 @@ CARGO_TARGET_DIR=/Volumes/Untitled/cargo-targets/Camelid-push \
 llama-server -m /Volumes/Untitled/models/gemma-4-E4B-it-Q8_0.gguf -ngl 99 -c 512 &
 curl -s localhost:8080/completion -d \
   '{"prompt":"The capital of France is","n_predict":12,"temperature":0,"top_k":1}'
+
+# 4. HTTP serve (behind the flag) — non-streaming and streaming chat:
+CAMELID_GEMMA4_SERVE=1 camelid serve \
+  --model /Volumes/Untitled/models/gemma-4-E4B-it-Q8_0.gguf --addr 127.0.0.1:8231
+curl -s 127.0.0.1:8231/v1/health            # backend=gemma4-runtime, gemma4_available=true
+curl -s 127.0.0.1:8231/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"Gemma-4-E4B-It","messages":[{"role":"user","content":"What is the capital of France? Answer in one word."}],"max_tokens":16,"temperature":0}'
+# add "stream":true for SSE (chat.completion.chunk deltas + [DONE]).
 ```
 
 ## Where the code lives
 
 - `src/model.rs` — `gemma4` arch recognition, `Gemma4Metadata`, `Gemma4Binding`.
 - `src/inference/gemma4.rs` — forward-pass primitives (embed scale, GeGLU, softcap).
-- `src/gemma4_runtime.rs` — the runtime (load + incremental decode + generate).
+- `src/gemma4_runtime.rs` — the runtime (load + incremental decode +
+  `generate_greedy` / `generate_greedy_streaming`).
+- `src/api/mod.rs` — serve integration: `gemma4_serve_enabled`, `model_family`,
+  `gemma4_chat_prompt`, `resolve_gemma4_runtime`, `gemma4_chat_nonstreaming`,
+  `gemma4_chat_streaming`, the gated runtime load, and the `/v1/health` fields.
 - `src/main.rs` — `gemma4-generate` CLI subcommand.
 - `tests/gemma4_forward.rs` — the bit-against-llama.cpp parity tests.
