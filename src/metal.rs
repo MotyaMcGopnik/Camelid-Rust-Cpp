@@ -5505,6 +5505,197 @@ pub fn try_gemma4_head(
     Some(out)
 }
 
+/// A resident gemma4 model ready to decode: all weights (layers + tied `token_embd`)
+/// stay GPU-resident, the per-owning-layer KV caches PERSIST across tokens (allocated
+/// once, scattered one slot per token), and the hidden/logits buffers are reused. Each
+/// [`Gemma4ResidentModel::forward_token`] runs the whole token graph in ONE command
+/// buffer with no per-token weight copy — unlike [`try_gemma4_forward`] (a stateless
+/// test helper that rebuilds the cache and re-copies the 0.7GB embedding every call).
+#[cfg(target_os = "macos")]
+pub struct Gemma4ResidentModel {
+    layers: Vec<Gemma4ResidentLayer>,
+    ple: Vec<Option<Gemma4ResidentPle>>,
+    owns_kv: Vec<bool>,
+    kv_source: Vec<usize>,
+    caches: Vec<Option<(Buffer, Buffer)>>,
+    token_embd: Buffer,
+    output_norm: Vec<f32>,
+    buf_a: Buffer,
+    buf_b: Buffer,
+    mid: Buffer,
+    logits: Buffer,
+    hidden: usize,
+    vocab: usize,
+    softcap: f32,
+    eps: f32,
+    max_positions: usize,
+    scale: f32,
+}
+
+#[cfg(target_os = "macos")]
+impl Gemma4ResidentModel {
+    /// Build the resident model. `token_embd_wire` is the vocab-major Q8 table in
+    /// 34-byte wire blocks (copied once into a resident buffer; in the production
+    /// runtime pass a nocopy WirePages buffer instead). KV caches are allocated for
+    /// owning layers (`owns_kv[l]`) sized to that layer's head_dim. None on bad shapes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        layers: Vec<Gemma4ResidentLayer>,
+        ple: Vec<Option<Gemma4ResidentPle>>,
+        owns_kv: Vec<bool>,
+        kv_source: Vec<usize>,
+        token_embd_wire: &[u8],
+        output_norm: Vec<f32>,
+        hidden: usize,
+        vocab: usize,
+        softcap: f32,
+        eps: f32,
+        max_positions: usize,
+        scale: f32,
+    ) -> Option<Self> {
+        let n = layers.len();
+        if n == 0
+            || ple.len() != n
+            || owns_kv.len() != n
+            || kv_source.len() != n
+            || output_norm.len() != hidden
+            || vocab == 0
+            || max_positions == 0
+        {
+            return None;
+        }
+        let k = metal_linear_kernel()?;
+        let mkbuf = |bytes: usize| {
+            k.device
+                .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared)
+        };
+        let mut caches = Vec::with_capacity(n);
+        for (l, layer) in layers.iter().enumerate() {
+            if owns_kv[l] {
+                let len = layer.n_kv_heads * max_positions * layer.head_dim;
+                caches.push(Some((mkbuf(len * 4), mkbuf(len * 4))));
+            } else {
+                caches.push(None);
+            }
+        }
+        let token_embd = mkbuf(token_embd_wire.len());
+        write_buffer_u8(&token_embd, token_embd_wire);
+        Some(Self {
+            layers,
+            ple,
+            owns_kv,
+            kv_source,
+            caches,
+            token_embd,
+            output_norm,
+            buf_a: mkbuf(hidden * 4),
+            buf_b: mkbuf(hidden * 4),
+            mid: mkbuf(hidden * 4),
+            logits: mkbuf(vocab * 4),
+            hidden,
+            vocab,
+            softcap,
+            eps,
+            max_positions,
+            scale,
+        })
+    }
+
+    /// Decode one token at absolute `position`: writes `h0` (the position's scaled
+    /// input embedding) into the resident hidden buffer, runs all layers (each scatters
+    /// its K/V into the PERSISTENT cache at `position`) + PLE + head in ONE command
+    /// buffer, and returns the `vocab` soft-capped logits. `inputs[l]` carries this
+    /// layer's RoPE tables, `pli`, and window start (CPU-computed for `position`).
+    pub fn forward_token(
+        &self,
+        h0: &[f32],
+        inputs: &[Gemma4TokenLayerInput],
+        position: usize,
+    ) -> Option<Vec<f32>> {
+        let n = self.layers.len();
+        if h0.len() != self.hidden || inputs.len() != n || position >= self.max_positions {
+            return None;
+        }
+        let k = metal_linear_kernel()?;
+        let filled = position + 1;
+        write_buffer_f32(&self.buf_a, h0);
+        let mut keep = Vec::new();
+        let cb = k.queue.new_command_buffer();
+        let e = cb.new_compute_command_encoder();
+        let mut from_a = true;
+        for l in 0..n {
+            let (in_buf, out_buf) = if from_a {
+                (&self.buf_a, &self.buf_b)
+            } else {
+                (&self.buf_b, &self.buf_a)
+            };
+            let src = if self.owns_kv[l] {
+                l
+            } else {
+                self.kv_source[l]
+            };
+            let (ck, cv) = self.caches[src].as_ref()?;
+            let inp = &inputs[l];
+            encode_gemma4_layer(
+                e,
+                k,
+                &mut keep,
+                &self.layers[l],
+                in_buf,
+                &self.mid,
+                out_buf,
+                &inp.cos_t,
+                &inp.sin_t,
+                ck,
+                cv,
+                self.max_positions,
+                position,
+                filled,
+                inp.window_start,
+                self.scale,
+                self.owns_kv[l],
+            );
+            if let Some(p) = &self.ple[l] {
+                encode_gemma4_ple(
+                    e,
+                    k,
+                    &mut keep,
+                    out_buf,
+                    &inp.pli,
+                    &p.inp_gate,
+                    &p.proj,
+                    &p.post_norm,
+                    p.output_scale,
+                    self.eps,
+                    self.hidden,
+                    inp.pli.len(),
+                );
+            }
+            from_a = !from_a;
+        }
+        let final_buf = if from_a { &self.buf_a } else { &self.buf_b };
+        encode_gemma4_head(
+            e,
+            k,
+            &mut keep,
+            final_buf,
+            &self.logits,
+            &self.output_norm,
+            &self.token_embd,
+            self.vocab,
+            self.softcap,
+            self.eps,
+        );
+        e.end_encoding();
+        cb.commit();
+        cb.wait_until_completed();
+        let mut out = vec![0.0f32; self.vocab];
+        read_buffer_f32(&self.logits, &mut out);
+        drop(keep);
+        Some(out)
+    }
+}
+
 /// One layer's f32 PLE matrices (E-series only; `None` per layer for dense models).
 /// Output-major like the CPU `f32_matvec`: `inp_gate` is `[ple_dim][hidden]`, `proj`
 /// is `[hidden][ple_dim]`, `post_norm` is `[hidden]`.
@@ -11033,6 +11224,39 @@ pub fn try_gemma4_forward(
 }
 
 #[cfg(not(target_os = "macos"))]
+pub struct Gemma4ResidentModel;
+
+#[cfg(not(target_os = "macos"))]
+impl Gemma4ResidentModel {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        _layers: Vec<Gemma4ResidentLayer>,
+        _ple: Vec<Option<Gemma4ResidentPle>>,
+        _owns_kv: Vec<bool>,
+        _kv_source: Vec<usize>,
+        _token_embd_wire: &[u8],
+        _output_norm: Vec<f32>,
+        _hidden: usize,
+        _vocab: usize,
+        _softcap: f32,
+        _eps: f32,
+        _max_positions: usize,
+        _scale: f32,
+    ) -> Option<Self> {
+        None
+    }
+
+    pub fn forward_token(
+        &self,
+        _h0: &[f32],
+        _inputs: &[Gemma4TokenLayerInput],
+        _position: usize,
+    ) -> Option<Vec<f32>> {
+        None
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 pub struct ResidentDecodeState;
 
 #[cfg(not(target_os = "macos"))]
@@ -13665,6 +13889,181 @@ mod tests {
         for (x, y) in a.iter().zip(&b) {
             assert!((x - y).abs() < 1.0e-4, "{x} != {y}");
         }
+    }
+
+    // The stateful Gemma4ResidentModel::forward_token (resident weights + token_embd +
+    // persistent caches) must match the stateless try_gemma4_forward for one token at
+    // position 0 — same layers/PLE/head, so the only difference is statefulness.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_resident_model_forward_token_matches_stateless() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 256usize;
+        let ffn_dim = 256usize;
+        let ple_dim = 64usize;
+        let vocab = 160usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let half = head_dim / 2;
+        let max_positions = 8usize;
+        let eps = 1.0e-6f32;
+        let softcap = 30.0f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let mw = |rows: usize, in_dim: usize, seed: usize| -> Vec<u8> {
+            let mut wire = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                for blk in quantize_q8_0_blocks(&row).iter() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for &q in blk.quants.iter() {
+                        wire.push(q as u8);
+                    }
+                }
+            }
+            wire
+        };
+        let mk_norms = |off: usize| {
+            (
+                (0..hidden)
+                    .map(|i| 0.8 + ((i + off) as f32 % 5.0) * 0.05)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.9 + ((i + off) as f32 % 3.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.85 + ((i + off) as f32 % 4.0) * 0.04)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.95 + ((i + off) as f32 % 6.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.7 + ((i + off) as f32 % 11.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.6 + ((i + off) as f32 % 7.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+            )
+        };
+        let build_layer = |off: usize| {
+            let (an, pa, fnw, pf, qn, kn) = mk_norms(off);
+            Gemma4ResidentLayer::from_wire(
+                an,
+                qn,
+                kn,
+                pa,
+                fnw,
+                pf,
+                &mw(q_dim, hidden, off + 1),
+                &mw(kv_dim, hidden, off + 5),
+                &mw(kv_dim, hidden, off + 9),
+                &mw(hidden, q_dim, off + 13),
+                &mw(ffn_dim, hidden, off + 17),
+                &mw(ffn_dim, hidden, off + 21),
+                &mw(hidden, ffn_dim, off + 25),
+                n_heads,
+                n_kv_heads,
+                head_dim,
+                ffn_dim,
+                eps,
+            )
+            .expect("layer")
+        };
+        let mk_ple = |off: usize| Gemma4ResidentPle {
+            inp_gate: (0..ple_dim * hidden)
+                .map(|n| (((n + off) % 29) as f32 - 14.0) * 0.02)
+                .collect(),
+            proj: (0..hidden * ple_dim)
+                .map(|n| (((n + off) % 23) as f32 - 11.0) * 0.03)
+                .collect(),
+            post_norm: (0..hidden)
+                .map(|i| 0.9 + ((i + off) as f32 % 5.0) * 0.04)
+                .collect(),
+            output_scale: 0.061,
+        };
+        let mk_input = |off: usize| Gemma4TokenLayerInput {
+            cos_t: (0..half)
+                .map(|i| (0.3 + (i + off) as f32 * 0.01).cos())
+                .collect(),
+            sin_t: (0..half)
+                .map(|i| (0.3 + (i + off) as f32 * 0.01).sin())
+                .collect(),
+            pli: (0..ple_dim)
+                .map(|i| ((i + off) as f32 % 9.0 - 4.0) * 0.2)
+                .collect(),
+            window_start: 0,
+        };
+        let h0: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let output_norm: Vec<f32> = (0..hidden)
+            .map(|i| 0.88 + (i as f32 % 5.0) * 0.03)
+            .collect();
+        let embd_wire = mw(vocab, hidden, 99);
+        let cache_len = n_kv_heads * max_positions * head_dim;
+        let zeros = vec![0.0f32; cache_len];
+
+        // Stateless oracle (validated): position 0, filled 1, fresh cache.
+        let want = try_gemma4_forward(
+            &[build_layer(0), build_layer(50)],
+            &[Some(mk_ple(2)), Some(mk_ple(7))],
+            &[true, true],
+            &[0, 1],
+            &[mk_input(0), mk_input(4)],
+            &[Some(zeros.clone()), Some(zeros.clone())],
+            &[Some(zeros.clone()), Some(zeros.clone())],
+            &h0,
+            &output_norm,
+            &embd_wire,
+            vocab,
+            softcap,
+            eps,
+            max_positions,
+            0,
+            1,
+            scale,
+        )
+        .expect("stateless");
+
+        // Stateful model (fresh layers from the same bytes), token at position 0.
+        let model = Gemma4ResidentModel::new(
+            vec![build_layer(0), build_layer(50)],
+            vec![Some(mk_ple(2)), Some(mk_ple(7))],
+            vec![true, true],
+            vec![0, 1],
+            &embd_wire,
+            output_norm.clone(),
+            hidden,
+            vocab,
+            softcap,
+            eps,
+            max_positions,
+            scale,
+        )
+        .expect("model");
+        let got = model
+            .forward_token(&h0, &[mk_input(0), mk_input(4)], 0)
+            .expect("forward_token");
+
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 5.0e-3, "{a} != {b}");
+        }
+        let amax = |v: &[f32]| {
+            v.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i)
+                .unwrap()
+        };
+        assert_eq!(amax(&got), amax(&want));
     }
 
     #[cfg(target_os = "macos")]
