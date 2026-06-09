@@ -7091,6 +7091,58 @@ impl Gemma4ResidentLayer {
             eps,
         })
     }
+
+    /// Build a layer's resident weights from per-tensor page-aligned `WirePages`: the
+    /// GPU reads them in place via `new_buffer_with_bytes_no_copy` — NO 8GB copy. This
+    /// is the production path on a 16GB box (the wire bytes are the single resident
+    /// copy). The nocopy cache pins each `WirePages` Arc for the buffer's lifetime.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire_pages(
+        attn_norm: Vec<f32>,
+        q_norm: Vec<f32>,
+        k_norm: Vec<f32>,
+        post_attn_norm: Vec<f32>,
+        ffn_norm: Vec<f32>,
+        post_ffw_norm: Vec<f32>,
+        q_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        k_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        v_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        o_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        gate_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        up_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        down_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        n_heads: usize,
+        n_kv_heads: usize,
+        head_dim: usize,
+        ffn_dim: usize,
+        eps: f32,
+    ) -> Option<Self> {
+        let k = metal_linear_kernel()?;
+        let mut cache = metal_linear_cache().lock().ok()?;
+        let mut buf = |pages: &std::sync::Arc<crate::wire_mmap::WirePages>| {
+            cache.q8_wire_nocopy_buffer(&k.device, pages)
+        };
+        Some(Self {
+            attn_norm,
+            q_norm,
+            k_norm,
+            post_attn_norm,
+            ffn_norm,
+            post_ffw_norm,
+            q_w: buf(q_pages),
+            k_w: buf(k_pages),
+            v_w: buf(v_pages),
+            o_w: buf(o_pages),
+            gate_w: buf(gate_pages),
+            up_w: buf(up_pages),
+            down_w: buf(down_pages),
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            ffn_dim,
+            eps,
+        })
+    }
 }
 
 /// Encode one full gemma4 decoder layer into the (serial) encoder, no readback:
@@ -10884,6 +10936,30 @@ impl Gemma4ResidentLayer {
     ) -> Option<Self> {
         None
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire_pages(
+        _attn_norm: Vec<f32>,
+        _q_norm: Vec<f32>,
+        _k_norm: Vec<f32>,
+        _post_attn_norm: Vec<f32>,
+        _ffn_norm: Vec<f32>,
+        _post_ffw_norm: Vec<f32>,
+        _q_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _k_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _v_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _o_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _gate_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _up_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _down_pages: &std::sync::Arc<crate::wire_mmap::WirePages>,
+        _n_heads: usize,
+        _n_kv_heads: usize,
+        _head_dim: usize,
+        _ffn_dim: usize,
+        _eps: f32,
+    ) -> Option<Self> {
+        None
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -13451,6 +13527,144 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(amax(&got), amax(&want));
+    }
+
+    // from_wire_pages (nocopy, the production 16GB-fit path) must produce a layer
+    // identical to from_wire (copy) on the same wire bytes: the GPU reads the same
+    // bytes either way. Writes the 7 weights to a temp file and maps each as WirePages.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_layer_from_wire_pages_matches_copy() {
+        use crate::inference::quantize_q8_0_blocks;
+        use crate::wire_mmap::WirePages;
+        use std::fs::File;
+        use std::io::Write;
+        if !detect_metal_device().available {
+            return;
+        }
+        let hidden = 64usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 64usize;
+        let ffn_dim = 64usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let eps = 1.0e-6f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+        let mw = |rows: usize, in_dim: usize, seed: usize| -> Vec<u8> {
+            let mut wire = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                for blk in quantize_q8_0_blocks(&row).iter() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for &q in blk.quants.iter() {
+                        wire.push(q as u8);
+                    }
+                }
+            }
+            wire
+        };
+        let weights = [
+            mw(q_dim, hidden, 1),
+            mw(kv_dim, hidden, 5),
+            mw(kv_dim, hidden, 9),
+            mw(hidden, q_dim, 13),
+            mw(ffn_dim, hidden, 17),
+            mw(ffn_dim, hidden, 21),
+            mw(hidden, ffn_dim, 25),
+        ];
+        // Concatenate into a temp file; record each tensor's (offset, len).
+        let mut blob = Vec::new();
+        let mut spans = Vec::new();
+        for w in &weights {
+            spans.push((blob.len() as u64, w.len()));
+            blob.extend_from_slice(w);
+        }
+        let path = std::env::temp_dir().join(format!("gemma4_wp_test_{}.bin", std::process::id()));
+        File::create(&path).unwrap().write_all(&blob).unwrap();
+        let file = File::open(&path).unwrap();
+        let pages: Vec<_> = spans
+            .iter()
+            .map(|&(off, len)| WirePages::read_from_file(&file, off, len).unwrap())
+            .collect();
+
+        let norms = || {
+            (
+                (0..hidden)
+                    .map(|i| 0.8 + (i as f32 % 5.0) * 0.05)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.9 + (i as f32 % 3.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.85 + (i as f32 % 4.0) * 0.04)
+                    .collect::<Vec<f32>>(),
+                (0..hidden)
+                    .map(|i| 0.95 + (i as f32 % 6.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.7 + (i as f32 % 11.0) * 0.02)
+                    .collect::<Vec<f32>>(),
+                (0..head_dim)
+                    .map(|i| 0.6 + (i as f32 % 7.0) * 0.03)
+                    .collect::<Vec<f32>>(),
+            )
+        };
+        let (an, pa, fnw, pf, qn, kn) = norms();
+        let copy = Gemma4ResidentLayer::from_wire(
+            an.clone(),
+            qn.clone(),
+            kn.clone(),
+            pa.clone(),
+            fnw.clone(),
+            pf.clone(),
+            &weights[0],
+            &weights[1],
+            &weights[2],
+            &weights[3],
+            &weights[4],
+            &weights[5],
+            &weights[6],
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            ffn_dim,
+            eps,
+        )
+        .expect("copy");
+        let nocopy = Gemma4ResidentLayer::from_wire_pages(
+            an, qn, kn, pa, fnw, pf, &pages[0], &pages[1], &pages[2], &pages[3], &pages[4],
+            &pages[5], &pages[6], n_heads, n_kv_heads, head_dim, ffn_dim, eps,
+        )
+        .expect("nocopy");
+
+        let h_in: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let half = head_dim / 2;
+        let cos_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).cos()).collect();
+        let sin_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).sin()).collect();
+        let cache_len = n_kv_heads * 8 * head_dim;
+        let ck: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.05)
+            .collect();
+        let cv: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 23) as f32 - 11.0) * 0.04)
+            .collect();
+        let run = |layer: &Gemma4ResidentLayer| {
+            try_gemma4_layer(
+                layer, &h_in, &cos_t, &sin_t, &ck, &cv, 8, 3, 4, 0, scale, true,
+            )
+            .expect("layer")
+        };
+        let a = run(&copy);
+        let b = run(&nocopy);
+        let _ = std::fs::remove_file(&path);
+        for (x, y) in a.iter().zip(&b) {
+            assert!((x - y).abs() < 1.0e-4, "{x} != {y}");
+        }
     }
 
     #[cfg(target_os = "macos")]
