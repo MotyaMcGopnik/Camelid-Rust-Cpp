@@ -5366,6 +5366,73 @@ pub fn try_gemma4_attention(
     Some(out)
 }
 
+/// Standalone full gemma4 layer: builds buffers (incl. a prefilled cache), runs
+/// [`encode_gemma4_layer`] (attention → FFN) in one command buffer, reads back the
+/// hidden output. For validating the full-layer chain against CPU. None if Metal
+/// unavailable or shapes invalid.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_layer(
+    layer: &Gemma4ResidentLayer,
+    h_in: &[f32],
+    cos_t: &[f32],
+    sin_t: &[f32],
+    cache_k_init: &[f32],
+    cache_v_init: &[f32],
+    max_positions: usize,
+    write_position: usize,
+    filled: usize,
+    window_start: usize,
+    scale: f32,
+) -> Option<Vec<f32>> {
+    let hidden = h_in.len();
+    let cache_len = layer.n_kv_heads * max_positions * layer.head_dim;
+    if hidden == 0 || cache_k_init.len() != cache_len || cache_v_init.len() != cache_len {
+        return None;
+    }
+    let k = metal_linear_kernel()?;
+    let mkbuf = |bytes: usize| {
+        k.device
+            .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared)
+    };
+    let in_buf = mkbuf(hidden * 4);
+    let mid_buf = mkbuf(hidden * 4);
+    let out_buf = mkbuf(hidden * 4);
+    let cache_k = mkbuf(cache_len * 4);
+    let cache_v = mkbuf(cache_len * 4);
+    write_buffer_f32(&in_buf, h_in);
+    write_buffer_f32(&cache_k, cache_k_init);
+    write_buffer_f32(&cache_v, cache_v_init);
+    let mut keep = Vec::new();
+    let cb = k.queue.new_command_buffer();
+    let e = cb.new_compute_command_encoder();
+    encode_gemma4_layer(
+        e,
+        k,
+        &mut keep,
+        layer,
+        &in_buf,
+        &mid_buf,
+        &out_buf,
+        cos_t,
+        sin_t,
+        &cache_k,
+        &cache_v,
+        max_positions,
+        write_position,
+        filled,
+        window_start,
+        scale,
+    );
+    e.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let mut out = vec![0.0f32; hidden];
+    read_buffer_f32(&out_buf, &mut out);
+    drop(keep);
+    Some(out)
+}
+
 /// GPU elementwise binary op helper for residual add / silu-mul (same buffer shape).
 #[cfg(target_os = "macos")]
 fn try_binary_elementwise_f32(
@@ -6625,6 +6692,158 @@ fn encode_gemma4_attention(
         o_buf,
         on_buf,
     ]);
+}
+
+/// One gemma4 layer's resident weights: the six f32 norms plus the seven Q8 wire
+/// weight buffers (q/k/v/o/gate/up/down) and the layer's dims. Bundling them keeps
+/// [`encode_gemma4_layer`] from being a 40-argument call. The weight buffers are
+/// built once and reused across tokens. (`from_wire` copies the wire bytes into
+/// shared buffers; the production runtime will swap in `q8_wire_nocopy_buffer` over
+/// `WirePages` so the 8GB stays single-copy.)
+#[cfg(target_os = "macos")]
+pub struct Gemma4ResidentLayer {
+    pub attn_norm: Vec<f32>,
+    pub q_norm: Vec<f32>,
+    pub k_norm: Vec<f32>,
+    pub post_attn_norm: Vec<f32>,
+    pub ffn_norm: Vec<f32>,
+    pub post_ffw_norm: Vec<f32>,
+    q_w: Buffer,
+    k_w: Buffer,
+    v_w: Buffer,
+    o_w: Buffer,
+    gate_w: Buffer,
+    up_w: Buffer,
+    down_w: Buffer,
+    pub n_heads: usize,
+    pub n_kv_heads: usize,
+    pub head_dim: usize,
+    pub ffn_dim: usize,
+    pub eps: f32,
+}
+
+#[cfg(target_os = "macos")]
+impl Gemma4ResidentLayer {
+    /// Build a layer's resident weights from row-major 34-byte Q8 wire bytes and the
+    /// f32 norms. None if Metal is unavailable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire(
+        attn_norm: Vec<f32>,
+        q_norm: Vec<f32>,
+        k_norm: Vec<f32>,
+        post_attn_norm: Vec<f32>,
+        ffn_norm: Vec<f32>,
+        post_ffw_norm: Vec<f32>,
+        q_wire: &[u8],
+        k_wire: &[u8],
+        v_wire: &[u8],
+        o_wire: &[u8],
+        gate_wire: &[u8],
+        up_wire: &[u8],
+        down_wire: &[u8],
+        n_heads: usize,
+        n_kv_heads: usize,
+        head_dim: usize,
+        ffn_dim: usize,
+        eps: f32,
+    ) -> Option<Self> {
+        let k = metal_linear_kernel()?;
+        let buf = |bytes: &[u8]| {
+            let b = k
+                .device
+                .new_buffer(bytes.len() as u64, MTLResourceOptions::StorageModeShared);
+            write_buffer_u8(&b, bytes);
+            b
+        };
+        Some(Self {
+            attn_norm,
+            q_norm,
+            k_norm,
+            post_attn_norm,
+            ffn_norm,
+            post_ffw_norm,
+            q_w: buf(q_wire),
+            k_w: buf(k_wire),
+            v_w: buf(v_wire),
+            o_w: buf(o_wire),
+            gate_w: buf(gate_wire),
+            up_w: buf(up_wire),
+            down_w: buf(down_wire),
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            ffn_dim,
+            eps,
+        })
+    }
+}
+
+/// Encode one full gemma4 decoder layer into the (serial) encoder, no readback:
+/// `in_buf` --attention--> `mid_buf` --FFN--> `out_buf` (each sub-block adds its own
+/// residual). `cos_t`/`sin_t` are this layer's per-θ RoPE tables for the current
+/// position; the cache + window params select owning vs (later) shared-KV behaviour.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn encode_gemma4_layer(
+    e: &metal::ComputeCommandEncoderRef,
+    k: &MetalLinearKernel,
+    keep: &mut Vec<Buffer>,
+    layer: &Gemma4ResidentLayer,
+    in_buf: &Buffer,
+    mid_buf: &Buffer,
+    out_buf: &Buffer,
+    cos_t: &[f32],
+    sin_t: &[f32],
+    cache_k: &Buffer,
+    cache_v: &Buffer,
+    max_positions: usize,
+    write_position: usize,
+    filled: usize,
+    window_start: usize,
+    scale: f32,
+) {
+    encode_gemma4_attention(
+        e,
+        k,
+        keep,
+        in_buf,
+        mid_buf,
+        &layer.attn_norm,
+        &layer.q_norm,
+        &layer.k_norm,
+        &layer.post_attn_norm,
+        layer.eps,
+        &layer.q_w,
+        &layer.k_w,
+        &layer.v_w,
+        &layer.o_w,
+        cos_t,
+        sin_t,
+        cache_k,
+        cache_v,
+        max_positions,
+        write_position,
+        layer.n_heads,
+        layer.n_kv_heads,
+        layer.head_dim,
+        filled,
+        window_start,
+        scale,
+    );
+    encode_gemma4_ffn(
+        e,
+        k,
+        keep,
+        mid_buf,
+        out_buf,
+        &layer.ffn_norm,
+        &layer.post_ffw_norm,
+        layer.eps,
+        &layer.gate_w,
+        &layer.up_w,
+        &layer.down_w,
+        layer.ffn_dim,
+    );
 }
 
 /// Opt-in: store the resident KV cache in f16 (half the KV bytes read per token at
@@ -10110,6 +10329,54 @@ impl Gemma4ResidentState {
 }
 
 #[cfg(not(target_os = "macos"))]
+pub struct Gemma4ResidentLayer;
+
+#[cfg(not(target_os = "macos"))]
+impl Gemma4ResidentLayer {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire(
+        _attn_norm: Vec<f32>,
+        _q_norm: Vec<f32>,
+        _k_norm: Vec<f32>,
+        _post_attn_norm: Vec<f32>,
+        _ffn_norm: Vec<f32>,
+        _post_ffw_norm: Vec<f32>,
+        _q_wire: &[u8],
+        _k_wire: &[u8],
+        _v_wire: &[u8],
+        _o_wire: &[u8],
+        _gate_wire: &[u8],
+        _up_wire: &[u8],
+        _down_wire: &[u8],
+        _n_heads: usize,
+        _n_kv_heads: usize,
+        _head_dim: usize,
+        _ffn_dim: usize,
+        _eps: f32,
+    ) -> Option<Self> {
+        None
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_layer(
+    _layer: &Gemma4ResidentLayer,
+    _h_in: &[f32],
+    _cos_t: &[f32],
+    _sin_t: &[f32],
+    _cache_k_init: &[f32],
+    _cache_v_init: &[f32],
+    _max_positions: usize,
+    _write_position: usize,
+    _filled: usize,
+    _window_start: usize,
+    _scale: f32,
+) -> Option<Vec<f32>> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
 pub struct ResidentDecodeState;
 
 #[cfg(not(target_os = "macos"))]
@@ -11605,6 +11872,192 @@ mod tests {
         .expect("gemma4 attention");
         for (a, b) in got.iter().zip(&want) {
             assert!((a - b).abs() < 2.0e-2, "{a} != {b}");
+        }
+    }
+
+    // A full gemma4 layer (attention sub-block then FFN sub-block, chained in one GPU
+    // command buffer via Gemma4ResidentLayer) must match the same two-stage chain on
+    // CPU: h_mid = h_in + attention(h_in); h_out = h_mid + ffn(h_mid).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_layer_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 256usize;
+        let ffn_dim = 256usize;
+        let group = n_heads / n_kv_heads;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let half = head_dim / 2;
+        let max_positions = 8usize;
+        let write_position = 3usize;
+        let filled = 4usize;
+        let window_start = 0usize;
+        let eps = 1.0e-6f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let make_weight = |rows: usize, in_dim: usize, seed: usize| -> (Vec<u8>, Vec<Vec<f32>>) {
+            let mut wire = Vec::new();
+            let mut deq = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                let mut drow = vec![0.0f32; in_dim];
+                for (b, blk) in quantize_q8_0_blocks(&row).iter().enumerate() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for (j, &q) in blk.quants.iter().enumerate() {
+                        wire.push(q as u8);
+                        drow[b * 32 + j] = blk.scale * q as f32;
+                    }
+                }
+                deq.push(drow);
+            }
+            (wire, deq)
+        };
+        let (q_wire, q_deq) = make_weight(q_dim, hidden, 1);
+        let (k_wire, k_deq) = make_weight(kv_dim, hidden, 5);
+        let (v_wire, v_deq) = make_weight(kv_dim, hidden, 9);
+        let (o_wire, o_deq) = make_weight(hidden, q_dim, 13);
+        let (gate_wire, gate_deq) = make_weight(ffn_dim, hidden, 17);
+        let (up_wire, up_deq) = make_weight(ffn_dim, hidden, 21);
+        let (down_wire, down_deq) = make_weight(hidden, ffn_dim, 25);
+        let h_in: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let attn_norm: Vec<f32> = (0..hidden).map(|i| 0.8 + (i as f32 % 5.0) * 0.05).collect();
+        let post_attn: Vec<f32> = (0..hidden).map(|i| 0.9 + (i as f32 % 3.0) * 0.03).collect();
+        let ffn_norm: Vec<f32> = (0..hidden)
+            .map(|i| 0.85 + (i as f32 % 4.0) * 0.04)
+            .collect();
+        let post_ffw: Vec<f32> = (0..hidden)
+            .map(|i| 0.95 + (i as f32 % 6.0) * 0.02)
+            .collect();
+        let q_norm: Vec<f32> = (0..head_dim)
+            .map(|i| 0.7 + (i as f32 % 11.0) * 0.02)
+            .collect();
+        let k_norm: Vec<f32> = (0..head_dim)
+            .map(|i| 0.6 + (i as f32 % 7.0) * 0.03)
+            .collect();
+        let cos_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).cos()).collect();
+        let sin_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).sin()).collect();
+        let cache_len = n_kv_heads * max_positions * head_dim;
+        let cache_k_init: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.05)
+            .collect();
+        let cache_v_init: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 23) as f32 - 11.0) * 0.04)
+            .collect();
+
+        // ---- CPU reference: attention(h_in) -> h_mid, then ffn(h_mid) -> h_out ----
+        let rms = |x: &[f32], w: Option<&[f32]>| -> Vec<f32> {
+            let mss = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
+            let inv = (mss + eps).powf(-0.5);
+            (0..x.len())
+                .map(|i| x[i] * inv * w.map_or(1.0, |w| w[i]))
+                .collect()
+        };
+        let matmul = |deq: &[Vec<f32>], x: &[f32]| -> Vec<f32> {
+            deq.iter()
+                .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
+                .collect()
+        };
+        let per_head = |x: &[f32], heads: usize, w: Option<&[f32]>| -> Vec<f32> {
+            let mut out = vec![0.0f32; x.len()];
+            for h in 0..heads {
+                let n = rms(&x[h * head_dim..(h + 1) * head_dim], w);
+                out[h * head_dim..(h + 1) * head_dim].copy_from_slice(&n);
+            }
+            out
+        };
+        let rope = |x: &mut [f32], heads: usize| {
+            for h in 0..heads {
+                let base = h * head_dim;
+                for i in 0..half {
+                    let (x0, x1) = (x[base + i], x[base + half + i]);
+                    x[base + i] = x0 * cos_t[i] - x1 * sin_t[i];
+                    x[base + half + i] = x0 * sin_t[i] + x1 * cos_t[i];
+                }
+            }
+        };
+        // attention
+        let normf = rms(&h_in, Some(&attn_norm));
+        let mut q = per_head(&matmul(&q_deq, &normf), n_heads, Some(&q_norm));
+        let mut kk = per_head(&matmul(&k_deq, &normf), n_kv_heads, Some(&k_norm));
+        let vv = per_head(&matmul(&v_deq, &normf), n_kv_heads, None);
+        rope(&mut q, n_heads);
+        rope(&mut kk, n_kv_heads);
+        let kv_at = |init: &[f32], cur: &[f32], kvh: usize, p: usize| -> Vec<f32> {
+            if p == write_position {
+                cur[kvh * head_dim..(kvh + 1) * head_dim].to_vec()
+            } else {
+                let base = kvh * max_positions * head_dim + p * head_dim;
+                init[base..base + head_dim].to_vec()
+            }
+        };
+        let mut ctx = vec![0.0f32; q_dim];
+        for h in 0..n_heads {
+            let kvh = h / group;
+            let qh = &q[h * head_dim..(h + 1) * head_dim];
+            let mut scores = Vec::new();
+            for p in window_start..filled {
+                let kp = kv_at(&cache_k_init, &kk, kvh, p);
+                scores.push(scale * qh.iter().zip(&kp).map(|(a, b)| a * b).sum::<f32>());
+            }
+            let m = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut den = 0.0f32;
+            for s in &mut scores {
+                *s = (*s - m).exp();
+                den += *s;
+            }
+            for (idx, p) in (window_start..filled).enumerate() {
+                let vp = kv_at(&cache_v_init, &vv, kvh, p);
+                let w = scores[idx] / den;
+                for d in 0..head_dim {
+                    ctx[h * head_dim + d] += w * vp[d];
+                }
+            }
+        }
+        let attn_out = rms(&matmul(&o_deq, &ctx), Some(&post_attn));
+        let h_mid: Vec<f32> = h_in.iter().zip(&attn_out).map(|(a, b)| a + b).collect();
+        // ffn
+        let fnormf = rms(&h_mid, Some(&ffn_norm));
+        let gate = matmul(&gate_deq, &fnormf);
+        let up = matmul(&up_deq, &fnormf);
+        let act: Vec<f32> = gate
+            .iter()
+            .zip(&up)
+            .map(|(g, u)| crate::inference::gemma4::gelu_tanh(*g) * u)
+            .collect();
+        let dn = rms(&matmul(&down_deq, &act), Some(&post_ffw));
+        let want: Vec<f32> = h_mid.iter().zip(&dn).map(|(a, b)| a + b).collect();
+
+        let layer = Gemma4ResidentLayer::from_wire(
+            attn_norm, q_norm, k_norm, post_attn, ffn_norm, post_ffw, &q_wire, &k_wire, &v_wire,
+            &o_wire, &gate_wire, &up_wire, &down_wire, n_heads, n_kv_heads, head_dim, ffn_dim, eps,
+        )
+        .expect("layer weights");
+        let got = try_gemma4_layer(
+            &layer,
+            &h_in,
+            &cos_t,
+            &sin_t,
+            &cache_k_init,
+            &cache_v_init,
+            max_positions,
+            write_position,
+            filled,
+            window_start,
+            scale,
+        )
+        .expect("gemma4 layer");
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 3.0e-2, "{a} != {b}");
         }
     }
 
