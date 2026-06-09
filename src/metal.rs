@@ -5241,6 +5241,131 @@ pub fn try_gemma4_ffn(
     Some(out)
 }
 
+/// Standalone gemma4 attention sub-block: builds buffers (incl. a caller-prefilled
+/// KV cache laid out `[kv_head][max_positions][head_dim]`), runs the whole
+/// [`encode_gemma4_attention`] chain in one command buffer, reads back the hidden
+/// output. For validating the attention sub-graph against CPU. The current token's
+/// K/V are scattered into the cache at `write_position`; attention covers the window
+/// `[window_start .. filled)`. None if Metal unavailable or shapes invalid.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_attention(
+    h_in: &[f32],
+    attn_norm: &[f32],
+    q_norm: &[f32],
+    k_norm: &[f32],
+    post_attn_norm: &[f32],
+    eps: f32,
+    q_wire: &[u8],
+    k_wire: &[u8],
+    v_wire: &[u8],
+    o_wire: &[u8],
+    cos_t: &[f32],
+    sin_t: &[f32],
+    cache_k_init: &[f32],
+    cache_v_init: &[f32],
+    max_positions: usize,
+    write_position: usize,
+    n_heads: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    filled: usize,
+    window_start: usize,
+    scale: f32,
+) -> Option<Vec<f32>> {
+    const WIRE: usize = 34;
+    let hidden = h_in.len();
+    let q_dim = n_heads * head_dim;
+    let kv_dim = n_kv_heads * head_dim;
+    let cache_len = n_kv_heads * max_positions * head_dim;
+    if hidden == 0
+        || !hidden.is_multiple_of(32)
+        || !head_dim.is_multiple_of(2)
+        || n_kv_heads == 0
+        || !n_heads.is_multiple_of(n_kv_heads)
+        || attn_norm.len() != hidden
+        || post_attn_norm.len() != hidden
+        || q_norm.len() != head_dim
+        || k_norm.len() != head_dim
+        || cos_t.len() != head_dim / 2
+        || sin_t.len() != head_dim / 2
+        || write_position >= filled
+        || filled > max_positions
+        || window_start >= filled
+        || cache_k_init.len() != cache_len
+        || cache_v_init.len() != cache_len
+    {
+        return None;
+    }
+    let bpr_hidden = hidden / 32;
+    let bpr_q = q_dim / 32;
+    if q_wire.len() != q_dim * bpr_hidden * WIRE
+        || k_wire.len() != kv_dim * bpr_hidden * WIRE
+        || v_wire.len() != kv_dim * bpr_hidden * WIRE
+        || o_wire.len() != hidden * bpr_q * WIRE
+    {
+        return None;
+    }
+    let k = metal_linear_kernel()?;
+    let mkbuf = |bytes: usize| {
+        k.device
+            .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared)
+    };
+    let in_buf = mkbuf(hidden * 4);
+    let out_buf = mkbuf(hidden * 4);
+    let q_buf = mkbuf(q_wire.len());
+    let kw_buf = mkbuf(k_wire.len());
+    let vw_buf = mkbuf(v_wire.len());
+    let o_buf = mkbuf(o_wire.len());
+    let cache_k = mkbuf(cache_len * 4);
+    let cache_v = mkbuf(cache_len * 4);
+    write_buffer_f32(&in_buf, h_in);
+    write_buffer_u8(&q_buf, q_wire);
+    write_buffer_u8(&kw_buf, k_wire);
+    write_buffer_u8(&vw_buf, v_wire);
+    write_buffer_u8(&o_buf, o_wire);
+    write_buffer_f32(&cache_k, cache_k_init);
+    write_buffer_f32(&cache_v, cache_v_init);
+    let mut keep = Vec::new();
+    let cb = k.queue.new_command_buffer();
+    let e = cb.new_compute_command_encoder();
+    encode_gemma4_attention(
+        e,
+        k,
+        &mut keep,
+        &in_buf,
+        &out_buf,
+        attn_norm,
+        q_norm,
+        k_norm,
+        post_attn_norm,
+        eps,
+        &q_buf,
+        &kw_buf,
+        &vw_buf,
+        &o_buf,
+        cos_t,
+        sin_t,
+        &cache_k,
+        &cache_v,
+        max_positions,
+        write_position,
+        n_heads,
+        n_kv_heads,
+        head_dim,
+        filled,
+        window_start,
+        scale,
+    );
+    e.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let mut out = vec![0.0f32; hidden];
+    read_buffer_f32(&out_buf, &mut out);
+    drop(keep);
+    Some(out)
+}
+
 /// GPU elementwise binary op helper for residual add / silu-mul (same buffer shape).
 #[cfg(target_os = "macos")]
 fn try_binary_elementwise_f32(
@@ -6226,6 +6351,279 @@ fn encode_gemma4_ffn(
         act_buf,
         down_buf,
         dn_buf,
+    ]);
+}
+
+/// Encode a per-head RMSNorm (Gemma QK-norm / weightless V-norm) into the encoder:
+/// one threadgroup per head normalizes that head's `head_dim` chunk. `scalar` is
+/// [head_dim: u32 @0, eps: f32 @4, use_weight: u32 @8]; `weight` may be a dummy when
+/// use_weight is 0.
+#[cfg(target_os = "macos")]
+fn encode_rms_norm_per_head(
+    e: &metal::ComputeCommandEncoderRef,
+    k: &MetalLinearKernel,
+    input: &Buffer,
+    weight: &Buffer,
+    output: &Buffer,
+    scalar: &Buffer,
+    head_count: usize,
+) {
+    e.set_compute_pipeline_state(&k.rms_norm_per_head_pipeline);
+    e.set_buffer(0, Some(input), 0);
+    e.set_buffer(1, Some(weight), 0);
+    e.set_buffer(2, Some(output), 0);
+    e.set_buffer(3, Some(scalar), 0);
+    e.set_buffer(4, Some(scalar), 4);
+    e.set_buffer(5, Some(scalar), 8);
+    e.dispatch_thread_groups(
+        metal::MTLSize {
+            width: head_count as u64,
+            height: 1,
+            depth: 1,
+        },
+        metal::MTLSize {
+            width: 256,
+            height: 1,
+            depth: 1,
+        },
+    );
+}
+
+/// Encode the gemma4 attention sub-block into the (serial) encoder, no readback:
+/// reads `in_buf` (hidden), writes the residual sum into `out_buf`:
+///   normf = rms_norm(in_buf, attn_norm)
+///   q/k/v = normf · {q,k,v}_w
+///   per-head QK-norm (q_norm/k_norm) + weightless per-head V-norm
+///   RoPE(q), RoPE(k)   (split-half pairing; cos/sin precomputed on CPU for this θ+pos)
+///   scatter (roped) k + (normed) v into the cache at `write_position`
+///   ctx = decode_attention(q, cache) over the window [window_start .. filled)
+///   o   = ctx · o_w
+///   out = in_buf + rms_norm(o, post_attn_norm)
+/// vs Llama's attention this adds the QK/V per-head norms and the post-attn norm, is
+/// always f32y, and windows via `window_start` (sliding layers; 0 = global). The
+/// caller owns the weight + cache buffers; scratch goes into `keep`. The basic
+/// one-simdgroup-per-head decode kernel is used (gemma head_dim 256/512 > the v2 cap).
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn encode_gemma4_attention(
+    e: &metal::ComputeCommandEncoderRef,
+    k: &MetalLinearKernel,
+    keep: &mut Vec<Buffer>,
+    in_buf: &Buffer,
+    out_buf: &Buffer,
+    attn_norm: &[f32],
+    q_norm: &[f32],
+    k_norm: &[f32],
+    post_attn_norm: &[f32],
+    eps: f32,
+    q_w: &Buffer,
+    k_w: &Buffer,
+    v_w: &Buffer,
+    o_w: &Buffer,
+    cos_t: &[f32],
+    sin_t: &[f32],
+    cache_k_buf: &Buffer,
+    cache_v_buf: &Buffer,
+    max_positions: usize,
+    write_position: usize,
+    n_heads: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    filled: usize,
+    window_start: usize,
+    scale: f32,
+) {
+    let hidden = attn_norm.len();
+    let q_dim = n_heads * head_dim;
+    let kv_dim = n_kv_heads * head_dim;
+    let half_rope = cos_t.len();
+    let bpr_hidden = hidden / 32;
+    let bpr_q = q_dim / 32;
+    let group = (n_heads / n_kv_heads) as u32;
+    let position_count = filled - window_start;
+    let kv_base_offset = window_start * head_dim;
+
+    let nb = |bytes: u64| pool_get(k, bytes);
+    let f32b = |n: usize| nb((n * 4) as u64);
+    let norm_w = f32b(hidden);
+    let qnorm_w = f32b(head_dim);
+    let knorm_w = f32b(head_dim);
+    let postnorm_w = f32b(hidden);
+    let rms_scalar = nb(8);
+    let post_rms_scalar = nb(8);
+    let perhead_q = nb(12);
+    let perhead_k = nb(12);
+    let perhead_v = nb(12);
+    let q_mm = nb(8);
+    let kv_mm = nb(8);
+    let o_mm = nb(8);
+    let rope_q = nb(16);
+    let rope_k = nb(16);
+    let attn_scalar = nb(32);
+    let scatter_scalar = nb(16);
+    let kv16_write = nb(4);
+    let resid_n = nb(4);
+    let cos_buf = f32b(half_rope);
+    let sin_buf = f32b(half_rope);
+    let normf = f32b(hidden);
+    let query_buf = f32b(q_dim);
+    let key_buf = f32b(kv_dim);
+    let val_buf = f32b(kv_dim);
+    let qn_buf = f32b(q_dim);
+    let kn_buf = f32b(kv_dim);
+    let vn_buf = f32b(kv_dim);
+    let scores_buf = f32b(n_heads * position_count);
+    let ctx_buf = f32b(q_dim);
+    let o_buf = f32b(hidden);
+    let on_buf = f32b(hidden);
+
+    write_buffer_f32(&norm_w, attn_norm);
+    write_buffer_f32(&qnorm_w, q_norm);
+    write_buffer_f32(&knorm_w, k_norm);
+    write_buffer_f32(&postnorm_w, post_attn_norm);
+    write_buffer_f32(&cos_buf, cos_t);
+    write_buffer_f32(&sin_buf, sin_t);
+    unsafe {
+        let set_rms = |buf: &Buffer| {
+            let p = buf.contents() as *mut u8;
+            *(p as *mut u32) = hidden as u32;
+            *(p.add(4) as *mut f32) = eps;
+        };
+        set_rms(&rms_scalar);
+        set_rms(&post_rms_scalar);
+        let set_perhead = |buf: &Buffer, use_w: u32| {
+            let p = buf.contents() as *mut u8;
+            *(p as *mut u32) = head_dim as u32;
+            *(p.add(4) as *mut f32) = eps;
+            *(p.add(8) as *mut u32) = use_w;
+        };
+        set_perhead(&perhead_q, 1);
+        set_perhead(&perhead_k, 1);
+        set_perhead(&perhead_v, 0);
+        let set_mm = |buf: &Buffer, bpr: usize, rows: usize| {
+            let p = buf.contents() as *mut u32;
+            *p = bpr as u32;
+            *p.add(1) = rows as u32;
+        };
+        set_mm(&q_mm, bpr_hidden, q_dim);
+        set_mm(&kv_mm, bpr_hidden, kv_dim);
+        set_mm(&o_mm, bpr_q, hidden);
+        let set_rope = |buf: &Buffer, hc: usize| {
+            let r = buf.contents() as *mut u32;
+            *r = hc as u32;
+            *r.add(1) = head_dim as u32;
+            *r.add(2) = half_rope as u32;
+            *r.add(3) = 1; // gemma uses split-half pairing
+        };
+        set_rope(&rope_q, n_heads);
+        set_rope(&rope_k, n_kv_heads);
+        let a = attn_scalar.contents() as *mut u8;
+        *(a as *mut u32) = n_heads as u32;
+        *(a.add(4) as *mut u32) = head_dim as u32;
+        *(a.add(8) as *mut u32) = position_count as u32;
+        *(a.add(12) as *mut u32) = group;
+        *(a.add(16) as *mut f32) = scale;
+        *(a.add(20) as *mut u32) = head_dim as u32; // position stride
+        *(a.add(24) as *mut u32) = (max_positions * head_dim) as u32; // kv_head stride
+        *(a.add(28) as *mut u32) = kv_base_offset as u32; // window start offset
+        let s = scatter_scalar.contents() as *mut u32;
+        *s = head_dim as u32;
+        *s.add(1) = max_positions as u32;
+        *s.add(2) = write_position as u32;
+        *s.add(3) = kv_dim as u32;
+        *(kv16_write.contents() as *mut u32) = 0; // gemma keeps the f32 cache
+        *(resid_n.contents() as *mut u32) = hidden as u32;
+    }
+
+    encode_rms_norm_f32(e, k, in_buf, &norm_w, &normf, &rms_scalar);
+    encode_gemma4_q8_matmul(e, k, &normf, q_w, &query_buf, &q_mm, q_dim);
+    encode_gemma4_q8_matmul(e, k, &normf, k_w, &key_buf, &kv_mm, kv_dim);
+    encode_gemma4_q8_matmul(e, k, &normf, v_w, &val_buf, &kv_mm, kv_dim);
+    encode_rms_norm_per_head(e, k, &query_buf, &qnorm_w, &qn_buf, &perhead_q, n_heads);
+    encode_rms_norm_per_head(e, k, &key_buf, &knorm_w, &kn_buf, &perhead_k, n_kv_heads);
+    // Weightless V-norm: qnorm_w is bound as a dummy (use_weight = 0, never read).
+    encode_rms_norm_per_head(e, k, &val_buf, &qnorm_w, &vn_buf, &perhead_v, n_kv_heads);
+    encode_rope(
+        e, k, &qn_buf, &cos_buf, &sin_buf, &rope_q, n_heads, half_rope,
+    );
+    encode_rope(
+        e, k, &kn_buf, &cos_buf, &sin_buf, &rope_k, n_kv_heads, half_rope,
+    );
+    // Scatter the roped K and normed V into the cache at write_position. f32 cache
+    // only: bind the kv16 mirror slots to a placeholder with the write flag at 0.
+    e.set_compute_pipeline_state(&k.kv_scatter_pipeline);
+    e.set_buffer(0, Some(&kn_buf), 0);
+    e.set_buffer(1, Some(&vn_buf), 0);
+    e.set_buffer(2, Some(cache_k_buf), 0);
+    e.set_buffer(3, Some(cache_v_buf), 0);
+    e.set_buffer(4, Some(&scatter_scalar), 0);
+    e.set_buffer(5, Some(&scatter_scalar), 4);
+    e.set_buffer(6, Some(&scatter_scalar), 8);
+    e.set_buffer(7, Some(&scatter_scalar), 12);
+    e.set_buffer(8, Some(&scatter_scalar), 0);
+    e.set_buffer(9, Some(&scatter_scalar), 0);
+    e.set_buffer(10, Some(&kv16_write), 0);
+    dispatch_1d(e, &k.kv_scatter_pipeline, kv_dim);
+    encode_attention(
+        e,
+        k,
+        keep,
+        &qn_buf,
+        cache_k_buf,
+        cache_v_buf,
+        None,
+        &scores_buf,
+        &ctx_buf,
+        &attn_scalar,
+        n_heads,
+        n_kv_heads,
+        head_dim,
+        position_count,
+    );
+    encode_gemma4_q8_matmul(e, k, &ctx_buf, o_w, &o_buf, &o_mm, hidden);
+    encode_rms_norm_f32(e, k, &o_buf, &postnorm_w, &on_buf, &post_rms_scalar);
+    encode_binary(
+        e,
+        &k.residual_add_pipeline,
+        in_buf,
+        &on_buf,
+        out_buf,
+        &resid_n,
+        hidden,
+    );
+
+    keep.extend([
+        norm_w,
+        qnorm_w,
+        knorm_w,
+        postnorm_w,
+        rms_scalar,
+        post_rms_scalar,
+        perhead_q,
+        perhead_k,
+        perhead_v,
+        q_mm,
+        kv_mm,
+        o_mm,
+        rope_q,
+        rope_k,
+        attn_scalar,
+        scatter_scalar,
+        kv16_write,
+        resid_n,
+        cos_buf,
+        sin_buf,
+        normf,
+        query_buf,
+        key_buf,
+        val_buf,
+        qn_buf,
+        kn_buf,
+        vn_buf,
+        scores_buf,
+        ctx_buf,
+        o_buf,
+        on_buf,
     ]);
 }
 
@@ -9923,6 +10321,35 @@ pub fn try_gemma4_ffn(
 
 #[cfg(not(target_os = "macos"))]
 #[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_attention(
+    _h_in: &[f32],
+    _attn_norm: &[f32],
+    _q_norm: &[f32],
+    _k_norm: &[f32],
+    _post_attn_norm: &[f32],
+    _eps: f32,
+    _q_wire: &[u8],
+    _k_wire: &[u8],
+    _v_wire: &[u8],
+    _o_wire: &[u8],
+    _cos_t: &[f32],
+    _sin_t: &[f32],
+    _cache_k_init: &[f32],
+    _cache_v_init: &[f32],
+    _max_positions: usize,
+    _write_position: usize,
+    _n_heads: usize,
+    _n_kv_heads: usize,
+    _head_dim: usize,
+    _filled: usize,
+    _window_start: usize,
+    _scale: f32,
+) -> Option<Vec<f32>> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
 pub fn try_attention_decode_f32(
     _query: &[f32],
     _keys: &[f32],
@@ -11005,6 +11432,179 @@ mod tests {
         .expect("gemma4 ffn");
         for (a, b) in got.iter().zip(&want) {
             assert!((a - b).abs() < 1.0e-2, "{a} != {b}");
+        }
+    }
+
+    // The gemma4 attention sub-block run as one GPU command buffer (rms_norm -> qkv
+    // GEMV -> per-head QK/V norm -> RoPE -> KV scatter -> windowed decode attention ->
+    // o GEMV -> post_attn_norm -> residual) must match the same chain on CPU. Uses
+    // head_dim 256 (gemma's dim, forces the basic decode kernel) and a prefilled cache.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_attention_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 256usize;
+        let group = n_heads / n_kv_heads;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let half = head_dim / 2;
+        let max_positions = 8usize;
+        let write_position = 3usize;
+        let filled = 4usize;
+        let window_start = 0usize;
+        let eps = 1.0e-6f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let make_weight = |rows: usize, in_dim: usize, seed: usize| -> (Vec<u8>, Vec<Vec<f32>>) {
+            let mut wire = Vec::new();
+            let mut deq = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                let mut drow = vec![0.0f32; in_dim];
+                for (b, blk) in quantize_q8_0_blocks(&row).iter().enumerate() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for (j, &q) in blk.quants.iter().enumerate() {
+                        wire.push(q as u8);
+                        drow[b * 32 + j] = blk.scale * q as f32;
+                    }
+                }
+                deq.push(drow);
+            }
+            (wire, deq)
+        };
+        let (q_wire, q_deq) = make_weight(q_dim, hidden, 1);
+        let (k_wire, k_deq) = make_weight(kv_dim, hidden, 5);
+        let (v_wire, v_deq) = make_weight(kv_dim, hidden, 9);
+        let (o_wire, o_deq) = make_weight(hidden, q_dim, 13);
+        let h_in: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let attn_norm: Vec<f32> = (0..hidden).map(|i| 0.8 + (i as f32 % 5.0) * 0.05).collect();
+        let post_norm: Vec<f32> = (0..hidden).map(|i| 0.9 + (i as f32 % 3.0) * 0.03).collect();
+        let q_norm: Vec<f32> = (0..head_dim)
+            .map(|i| 0.7 + (i as f32 % 11.0) * 0.02)
+            .collect();
+        let k_norm: Vec<f32> = (0..head_dim)
+            .map(|i| 0.6 + (i as f32 % 7.0) * 0.03)
+            .collect();
+        let cos_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).cos()).collect();
+        let sin_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).sin()).collect();
+        let cache_len = n_kv_heads * max_positions * head_dim;
+        let cache_k_init: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.05)
+            .collect();
+        let cache_v_init: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 23) as f32 - 11.0) * 0.04)
+            .collect();
+
+        // ---- CPU reference ----
+        let rms = |x: &[f32], w: Option<&[f32]>| -> Vec<f32> {
+            let mss = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
+            let inv = (mss + eps).powf(-0.5);
+            (0..x.len())
+                .map(|i| x[i] * inv * w.map_or(1.0, |w| w[i]))
+                .collect()
+        };
+        let matmul = |deq: &[Vec<f32>], x: &[f32]| -> Vec<f32> {
+            deq.iter()
+                .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
+                .collect()
+        };
+        let per_head = |x: &[f32], heads: usize, w: Option<&[f32]>| -> Vec<f32> {
+            let mut out = vec![0.0f32; x.len()];
+            for h in 0..heads {
+                let n = rms(&x[h * head_dim..(h + 1) * head_dim], w);
+                out[h * head_dim..(h + 1) * head_dim].copy_from_slice(&n);
+            }
+            out
+        };
+        let rope = |x: &mut [f32], heads: usize| {
+            for h in 0..heads {
+                let base = h * head_dim;
+                for i in 0..half {
+                    let (x0, x1) = (x[base + i], x[base + half + i]);
+                    x[base + i] = x0 * cos_t[i] - x1 * sin_t[i];
+                    x[base + half + i] = x0 * sin_t[i] + x1 * cos_t[i];
+                }
+            }
+        };
+        let normf = rms(&h_in, Some(&attn_norm));
+        let mut q = per_head(&matmul(&q_deq, &normf), n_heads, Some(&q_norm));
+        let mut kk = per_head(&matmul(&k_deq, &normf), n_kv_heads, Some(&k_norm));
+        let vv = per_head(&matmul(&v_deq, &normf), n_kv_heads, None);
+        rope(&mut q, n_heads);
+        rope(&mut kk, n_kv_heads);
+        // Effective cache: prefilled positions, current token's k/v at write_position.
+        let kv_at = |init: &[f32], cur: &[f32], kvh: usize, p: usize| -> Vec<f32> {
+            if p == write_position {
+                cur[kvh * head_dim..(kvh + 1) * head_dim].to_vec()
+            } else {
+                let base = kvh * max_positions * head_dim + p * head_dim;
+                init[base..base + head_dim].to_vec()
+            }
+        };
+        let mut ctx = vec![0.0f32; q_dim];
+        for h in 0..n_heads {
+            let kvh = h / group;
+            let qh = &q[h * head_dim..(h + 1) * head_dim];
+            let mut scores = Vec::new();
+            for p in window_start..filled {
+                let kp = kv_at(&cache_k_init, &kk, kvh, p);
+                scores.push(scale * qh.iter().zip(&kp).map(|(a, b)| a * b).sum::<f32>());
+            }
+            let m = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut den = 0.0f32;
+            for s in &mut scores {
+                *s = (*s - m).exp();
+                den += *s;
+            }
+            for (idx, p) in (window_start..filled).enumerate() {
+                let vp = kv_at(&cache_v_init, &vv, kvh, p);
+                let w = scores[idx] / den;
+                for d in 0..head_dim {
+                    ctx[h * head_dim + d] += w * vp[d];
+                }
+            }
+        }
+        let o = matmul(&o_deq, &ctx);
+        let on = rms(&o, Some(&post_norm));
+        let want: Vec<f32> = h_in.iter().zip(&on).map(|(a, b)| a + b).collect();
+
+        let got = try_gemma4_attention(
+            &h_in,
+            &attn_norm,
+            &q_norm,
+            &k_norm,
+            &post_norm,
+            eps,
+            &q_wire,
+            &k_wire,
+            &v_wire,
+            &o_wire,
+            &cos_t,
+            &sin_t,
+            &cache_k_init,
+            &cache_v_init,
+            max_positions,
+            write_position,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            filled,
+            window_start,
+            scale,
+        )
+        .expect("gemma4 attention");
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 2.0e-2, "{a} != {b}");
         }
     }
 
