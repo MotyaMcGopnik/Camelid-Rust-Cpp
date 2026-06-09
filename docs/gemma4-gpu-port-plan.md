@@ -67,8 +67,11 @@ New kernels required:
   the add-a-gemma-kernel loop. Validate `try_gelu_mul`/`try_soft_cap` vs the CPU
   primitives over random vectors. ← start here
 - **STEP 2 — per-head QK/V norm kernel.** Validate vs per-head CPU rms_norm.
-- **STEP 3 — sliding-window decode attention.** Validate masked attention vs CPU
-  for both window-clipped and full ranges, head_dim 256 and 512.
+- **STEP 3 — sliding-window decode attention. DONE — no new kernel needed.**
+  The existing `attention_decode_f32` already windows: attending to `[lo..=pos]`
+  is `kv_base_offset += lo*position_stride` with `position_count = pos-lo+1`
+  (sliding `lo = max(0, pos+1-512)`, global `lo = 0`). Locked in by
+  `metal_sliding_window_attention_matches_cpu` (head_dim 256 windowed + 512 full).
 - **STEP 4 — Gemma4ResidentState scaffolding.** New struct (do NOT extend the
   Llama `ResidentDecodeState` — gemma's per-layer head_dim, cross-layer KV, and
   PLE diverge too far). Holds: per-tensor wire nocopy buffers (weights resident),

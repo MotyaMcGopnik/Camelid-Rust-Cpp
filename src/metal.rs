@@ -10329,6 +10329,106 @@ mod tests {
         }
     }
 
+    // Gemma's sliding-window attention needs no dedicated kernel: attending to the
+    // window [lo..=pos] is the existing decode kernel with kv_base_offset shifted by
+    // lo*position_stride and position_count = window length. This locks that property
+    // in so a future attention-kernel refactor can't silently break gemma windowing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_sliding_window_attention_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        // CPU reference: per head, softmax over the contiguous window [lo..lo+win)
+        // of a [n_kv_heads][total][head_dim] cache, then the prob-weighted V sum.
+        #[allow(clippy::too_many_arguments)]
+        fn cpu_windowed(
+            query: &[f32],
+            keys: &[f32],
+            values: &[f32],
+            n_heads: usize,
+            n_kv_heads: usize,
+            head_dim: usize,
+            total: usize,
+            lo: usize,
+            win: usize,
+            scale: f32,
+        ) -> Vec<f32> {
+            let group = n_heads / n_kv_heads;
+            let kv_head_stride = total * head_dim;
+            let mut out = vec![0.0f32; n_heads * head_dim];
+            for h in 0..n_heads {
+                let kvh = h / group;
+                let q = &query[h * head_dim..(h + 1) * head_dim];
+                let mut scores = vec![0.0f32; win];
+                let mut m = f32::NEG_INFINITY;
+                for (i, s) in scores.iter_mut().enumerate() {
+                    let p = lo + i;
+                    let k = &keys[kvh * kv_head_stride + p * head_dim..][..head_dim];
+                    *s = scale * q.iter().zip(k).map(|(a, b)| a * b).sum::<f32>();
+                    m = m.max(*s);
+                }
+                let mut den = 0.0f32;
+                for s in &mut scores {
+                    *s = (*s - m).exp();
+                    den += *s;
+                }
+                let o = &mut out[h * head_dim..(h + 1) * head_dim];
+                for (i, &sc) in scores.iter().enumerate() {
+                    let p = lo + i;
+                    let v = &values[kvh * kv_head_stride + p * head_dim..][..head_dim];
+                    let w = sc / den;
+                    for d in 0..head_dim {
+                        o[d] += w * v[d];
+                    }
+                }
+            }
+            out
+        }
+
+        let n_heads = 8usize;
+        let n_kv_heads = 2usize;
+        let total = 10usize; // positions 0..9 in the cache
+                             // (head_dim, lo, win): a true sliding window and a full range (global, lo=0).
+        for (head_dim, lo, win) in [(256usize, 3usize, 7usize), (512, 0, total)] {
+            let kv_head_stride = total * head_dim;
+            let query: Vec<f32> = (0..n_heads * head_dim)
+                .map(|i| ((i as f32 % 23.0) - 11.0) * 0.05)
+                .collect();
+            let keys: Vec<f32> = (0..n_kv_heads * kv_head_stride)
+                .map(|i| ((i as f32 % 31.0) - 15.0) * 0.03)
+                .collect();
+            let values: Vec<f32> = (0..n_kv_heads * kv_head_stride)
+                .map(|i| ((i as f32 % 19.0) - 9.0) * 0.04)
+                .collect();
+            let scale = 1.0 / (head_dim as f32).sqrt();
+            let want = cpu_windowed(
+                &query, &keys, &values, n_heads, n_kv_heads, head_dim, total, lo, win, scale,
+            );
+            // Window = shift base by lo*position_stride, count = win.
+            let got = try_attention_decode_strided_f32(
+                &query,
+                &keys,
+                &values,
+                n_heads,
+                n_kv_heads,
+                head_dim,
+                win, // position_count = window length
+                scale,
+                head_dim,       // position_stride
+                kv_head_stride, // kv_head_stride
+                lo * head_dim,  // kv_base_offset = lo * position_stride
+            )
+            .expect("metal windowed attention");
+            for (a, b) in got.iter().zip(&want) {
+                assert!(
+                    (a - b).abs() < 1.0e-3,
+                    "windowed {a} != {b} (hd={head_dim} lo={lo})"
+                );
+            }
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn metal_attention_block_resident_matches_standalone() {
