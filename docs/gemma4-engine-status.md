@@ -5,9 +5,9 @@ from-scratch engine and produces output token-identical to llama.cpp.** It is no
 also served through the HTTP API (`/v1/chat/completions`, streaming and
 non-streaming, behind the `CAMELID_GEMMA4_SERVE` flag) and surfaced in the UI as a
 supported + downloadable model. The one-time load is ~11x faster (mmap wire-backed
-weights, no eager decode). Generation is still ~1.2 tok/s — a functional
-milestone, not a performance one; do not describe the current decode speed as
-"fast."
+weights, no eager decode). Warm decode is now ~6.75 tok/s (up from ~1.84 after the
+Q8×Q8 `sdot` matvec) — usable, but still bounded by the per-token weight read and
+by cold mmap faults on an unwarmed 16GB box; do not describe it as "fast."
 
 ## What works
 
@@ -39,10 +39,24 @@ milestone, not a performance one; do not describe the current decode speed as
 
 ## What does NOT work yet
 
-- **Slow generation (~1.2 tok/s)** — a functional milestone, not a performance
-  one. Decode is the next optimization target.
+- **Decode is ~6.75 tok/s warm** — usable but not yet bandwidth-bound (~54 GB/s
+  of the ~120 GB/s M4 wall). The remaining gap is per-matvec rayon dispatch over
+  ~245 small matvecs/token and memory-level parallelism, not the i8 dot. Cold
+  runs are dominated by faulting the 8GB wire map from disk, which the 16GB box
+  cannot durably cache between runs.
 
 ## Recently fixed
+
+- **Decode matvec: scalar f32 mul-add → Q8×Q8 `sdot` (~1.84 → ~6.75 tok/s warm,
+  ~3.7x).** The wire-mmap matvec quantizes the activation row to Q8 once
+  (`quantize_q8_0_blocks`), then dots each weight row read in place from the
+  34-byte wire blocks against it via the NEON `sdot` kernel the Llama path uses
+  (`q8_0_wire_row_dot` in `src/inference.rs`, runtime-gated on `dotprod` with a
+  portable scalar fallback). Quantizing the activation mirrors llama.cpp's own
+  Q8_0 matmul inputs, so the parity tests still pass (teacher-forced continuation
+  matches every position; greedy decode emits the identical token ids).
+
+## Recently fixed (earlier)
 
 - **Runtime load time: ~238s → ~21s (~11x).** Weights are no longer eagerly
   decoded into 8GB of `Q8_0Block` structs. The runtime memory-maps the GGUF once
