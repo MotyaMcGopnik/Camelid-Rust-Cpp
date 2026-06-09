@@ -658,7 +658,8 @@ impl Gemma4Binding {
 
         let mut layers = Vec::with_capacity(config.block_count as usize);
         for layer_idx in 0..config.block_count {
-            let req = |suffix: &str| required_tensor(gguf, &format!("blk.{layer_idx}.{suffix}.weight"));
+            let req =
+                |suffix: &str| required_tensor(gguf, &format!("blk.{layer_idx}.{suffix}.weight"));
             let opt = |suffix: &str| {
                 find_tensor(gguf, &format!("blk.{layer_idx}.{suffix}.weight")).cloned()
             };
@@ -701,8 +702,7 @@ impl Gemma4Binding {
     /// `true` when this is an elastic "E" variant carrying a Per-Layer-Embedding
     /// stream (E2B/E4B); `false` for the dense 12B/31B.
     pub fn has_per_layer_embeddings(&self) -> bool {
-        self.per_layer_token_embd.is_some()
-            && self.layers.iter().all(|l| l.ple_proj.is_some())
+        self.per_layer_token_embd.is_some() && self.layers.iter().all(|l| l.ple_proj.is_some())
     }
 
     fn validate(&self, config: &LlamaModelConfig, gemma4: &Gemma4Metadata) -> Result<()> {

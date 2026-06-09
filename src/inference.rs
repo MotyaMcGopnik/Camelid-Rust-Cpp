@@ -13019,7 +13019,10 @@ pub(crate) fn q8_0_wire_row_dot_scalar(weight_wire: &[u8], input: &[Q8_0Block]) 
     let mut total = 0.0_f32;
     for (b, i_block) in input.iter().enumerate() {
         let base = b * WIRE;
-        let scale = f16_bits_to_f32(u16::from_le_bytes([weight_wire[base], weight_wire[base + 1]]));
+        let scale = f16_bits_to_f32(u16::from_le_bytes([
+            weight_wire[base],
+            weight_wire[base + 1],
+        ]));
         let mut isum = 0i32;
         for j in 0..32 {
             isum += (weight_wire[base + 2 + j] as i8 as i32) * (i_block.quants[j] as i32);
@@ -13039,7 +13042,10 @@ unsafe fn q8_0_wire_row_dot_neon_dotprod(weight_wire: &[u8], input: &[Q8_0Block]
     let mut total = 0.0_f32;
     for (b, i_block) in input.iter().enumerate() {
         let base = b * WIRE;
-        let scale = f16_bits_to_f32(u16::from_le_bytes([weight_wire[base], weight_wire[base + 1]]));
+        let scale = f16_bits_to_f32(u16::from_le_bytes([
+            weight_wire[base],
+            weight_wire[base + 1],
+        ]));
         let qptr = weight_wire.as_ptr().add(base + 2) as *const i8;
 
         if let Some(next) = input.get(b + 2) {

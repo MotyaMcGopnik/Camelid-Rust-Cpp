@@ -16,9 +16,9 @@ use camelid::model::{Gemma4Binding, LlamaModelConfig};
 use camelid::tensor::TensorStore;
 
 const ORACLE_FIRST_TOKEN: u32 = 9079; // " Paris"
-// Prompt "The capital of France is" (6 tokens) + llama.cpp's greedy continuation.
-// Teacher-forcing this sequence proves multi-token generation: each position's
-// argmax must predict the next token (positions >= 5, the generated region).
+                                      // Prompt "The capital of France is" (6 tokens) + llama.cpp's greedy continuation.
+                                      // Teacher-forcing this sequence proves multi-token generation: each position's
+                                      // argmax must predict the next token (positions >= 5, the generated region).
 const PROMPT_TOKENS: &[u32] = &[2, 818, 5279, 529, 7001, 563];
 const FULL_SEQ: &[u32] = &[
     2, 818, 5279, 529, 7001, 563, // prompt
@@ -186,7 +186,10 @@ fn gemma4_prefill_matches_oracle() {
 
     // --- decoder layers ----------------------------------------------------
     let sum_last = |hs: &[Vec<f32>]| hs.iter().map(|r| r.iter().sum::<f32>()).sum::<f32>();
-    eprintln!("inp_scaled sum (all tokens) = {:.4}  (llama.cpp ref ~ -90.71 for last row)", sum_last(&hs));
+    eprintln!(
+        "inp_scaled sum (all tokens) = {:.4}  (llama.cpp ref ~ -90.71 for last row)",
+        sum_last(&hs)
+    );
 
     // Gemma 4 passes scaling=1.0 to the softmax; the query scale is baked into the
     // learned q_norm/k_norm weights (no extra 1/sqrt(head_dim)).
@@ -359,7 +362,8 @@ fn gemma4_prefill_matches_oracle() {
                 let proj = matvec(&proj_w, &gated, ple_dim, hidden);
                 let pn = rms_norm(&proj, Some(&postn_w), eps);
                 if l == 0 && t == seq - 1 {
-                    let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+                    let rms =
+                        |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
                     eprintln!(
                         "  PLE[0]: per_layer_input_rms={:.4} post_norm_w_rms={:.4} pn_rms={:.4} h_rms={:.4}",
                         rms(&per_layer_input[t][l]), rms(&postn_w), rms(&pn), rms(&hs[t])
@@ -375,8 +379,18 @@ fn gemma4_prefill_matches_oracle() {
         }
         if matches!(l, 0 | 4 | 5 | 11 | 41) {
             let tot: f32 = hs.iter().map(|r| r.iter().sum::<f32>()).sum();
-            let refs = [(0, -23.41), (4, 528.32), (5, 696.44), (11, -743.48), (41, 54.93)];
-            let r = refs.iter().find(|(i, _)| *i == l).map(|(_, v)| *v).unwrap_or(0.0);
+            let refs = [
+                (0, -23.41),
+                (4, 528.32),
+                (5, 696.44),
+                (11, -743.48),
+                (41, 54.93),
+            ];
+            let r = refs
+                .iter()
+                .find(|(i, _)| *i == l)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
             eprintln!("  l_out-{l} sum = {tot:.4}  (llama.cpp ref = {r})");
         }
     }
@@ -413,11 +427,18 @@ fn gemma4_prefill_matches_oracle() {
         let want = FULL_SEQ[pos + 1];
         let ok = pred == want;
         all_match &= ok;
-        eprintln!("  pos {pos}: pred {pred} want {want} {}", if ok { "✅" } else { "❌" });
+        eprintln!(
+            "  pos {pos}: pred {pred} want {want} {}",
+            if ok { "✅" } else { "❌" }
+        );
     }
     eprintln!(
         "RESULT: {}",
-        if all_match { "ALL MATCH ✅ — Gemma 4 greedy generation reproduces llama.cpp" } else { "MISMATCH ❌" }
+        if all_match {
+            "ALL MATCH ✅ — Gemma 4 greedy generation reproduces llama.cpp"
+        } else {
+            "MISMATCH ❌"
+        }
     );
     if std::env::var("LAYERS").is_err()
         && std::env::var("NO_PLE").is_err()

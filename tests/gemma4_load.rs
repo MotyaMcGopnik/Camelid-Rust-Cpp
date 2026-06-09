@@ -64,7 +64,11 @@ fn gemma4_load_stages() {
                     eprintln!("  oracle -> {ORACLE:?}");
                     eprintln!(
                         "  tokenizer parity: {}",
-                        if ids == ORACLE { "MATCH ✅" } else { "MISMATCH ❌" }
+                        if ids == ORACLE {
+                            "MATCH ✅"
+                        } else {
+                            "MISMATCH ❌"
+                        }
                     );
                 }
                 Err(e) => eprintln!("  encode ERR -> {e}"),

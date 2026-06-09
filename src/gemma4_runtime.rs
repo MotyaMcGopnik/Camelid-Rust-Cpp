@@ -96,7 +96,11 @@ impl WireQ8 {
     /// bit-against-llama.cpp parity in `tests/gemma4_forward.rs` is preserved.
     fn matvec(&self, in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
         debug_assert_eq!(x.len(), in_dim);
-        debug_assert_eq!(in_dim % Q8_VALUES_PER_BLOCK, 0, "matvec assumes block-aligned rows");
+        debug_assert_eq!(
+            in_dim % Q8_VALUES_PER_BLOCK,
+            0,
+            "matvec assumes block-aligned rows"
+        );
         self.matvec_q(out_dim, &quantize_q8_0_blocks(x))
     }
 
@@ -144,7 +148,13 @@ impl WireQ8 {
 fn f32_matvec(w: &[f32], in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
     (0..out_dim)
         .into_par_iter()
-        .map(|o| w[o * in_dim..(o + 1) * in_dim].iter().zip(x).map(|(a, b)| a * b).sum())
+        .map(|o| {
+            w[o * in_dim..(o + 1) * in_dim]
+                .iter()
+                .zip(x)
+                .map(|(a, b)| a * b)
+                .sum()
+        })
         .collect()
 }
 
@@ -212,10 +222,9 @@ impl Gemma4Runtime {
     pub fn load(path: &Path) -> Result<Self> {
         let gguf = read_metadata(path)?;
         let config = LlamaModelConfig::from_gguf(&gguf)?;
-        let g = config
-            .gemma4
-            .clone()
-            .ok_or_else(|| BackendError::UnsupportedModelArchitecture("not a gemma4 model".into()))?;
+        let g = config.gemma4.clone().ok_or_else(|| {
+            BackendError::UnsupportedModelArchitecture("not a gemma4 model".into())
+        })?;
         let binding = Gemma4Binding::bind(&gguf, &config)?;
         let store = TensorStore::open(path, &gguf);
         let tokenizer = Tokenizer::from_gguf(&gguf)?;
@@ -278,8 +287,14 @@ impl Gemma4Runtime {
                 .transpose()?,
             output_norm: f32t(&binding.output_norm.name)?,
             first_kv_shared,
-            last_sliding_layer: (0..first_kv_shared).rev().find(|&l| g.is_sliding_layer(l)).unwrap_or(0),
-            last_full_layer: (0..first_kv_shared).rev().find(|&l| !g.is_sliding_layer(l)).unwrap_or(0),
+            last_sliding_layer: (0..first_kv_shared)
+                .rev()
+                .find(|&l| g.is_sliding_layer(l))
+                .unwrap_or(0),
+            last_full_layer: (0..first_kv_shared)
+                .rev()
+                .find(|&l| !g.is_sliding_layer(l))
+                .unwrap_or(0),
             layers,
             config,
             g,
@@ -294,7 +309,13 @@ impl Gemma4Runtime {
     /// caches (`kc`/`vc`; only non-shared layers store entries — shared layers read
     /// the last same-type layer's cache, already updated this step). Returns the
     /// next-token logits.
-    fn step(&self, token: u32, pos: usize, kc: &mut [Vec<Vec<f32>>], vc: &mut [Vec<Vec<f32>>]) -> Result<Vec<f32>> {
+    fn step(
+        &self,
+        token: u32,
+        pos: usize,
+        kc: &mut [Vec<Vec<f32>>],
+        vc: &mut [Vec<Vec<f32>>],
+    ) -> Result<Vec<f32>> {
         let hidden = self.config.embedding_length as usize;
         let heads = self.config.attention_head_count as usize;
         let kv_heads = self.config.attention_head_count_kv as usize;
@@ -325,10 +346,15 @@ impl Gemma4Runtime {
             let ple_embed_scale = (ple_dim as f32).sqrt();
             (0..n_layers)
                 .map(|l| {
-                    let ctx_l: Vec<f32> = (0..ple_dim).map(|d| ctx[l * ple_dim + d] * proj_scale).collect();
+                    let ctx_l: Vec<f32> = (0..ple_dim)
+                        .map(|d| ctx[l * ple_dim + d] * proj_scale)
+                        .collect();
                     let ctx_n = rms_norm(&ctx_l, Some(pn), eps);
                     (0..ple_dim)
-                        .map(|d| (ctx_n[d] + ti[l * ple_dim + d] * ple_embed_scale) * std::f32::consts::FRAC_1_SQRT_2)
+                        .map(|d| {
+                            (ctx_n[d] + ti[l * ple_dim + d] * ple_embed_scale)
+                                * std::f32::consts::FRAC_1_SQRT_2
+                        })
                         .collect()
                 })
                 .collect()
@@ -374,7 +400,11 @@ impl Gemma4Runtime {
             } else {
                 self.last_full_layer
             };
-            let lo = if sliding { (pos + 1).saturating_sub(win) } else { 0 };
+            let lo = if sliding {
+                (pos + 1).saturating_sub(win)
+            } else {
+                0
+            };
             let mut attn = vec![0f32; q_dim];
             for hh in 0..heads {
                 let kvh = hh / group;
@@ -410,15 +440,21 @@ impl Gemma4Runtime {
             let xnq = quantize_q8_0_blocks(&xn);
             let gate = lw.ffn_gate.matvec_q(ffn_dim, &xnq);
             let up = lw.ffn_up.matvec_q(ffn_dim, &xnq);
-            let act: Vec<f32> = gate.iter().zip(&up).map(|(g, u)| gelu_tanh(*g) * u).collect();
+            let act: Vec<f32> = gate
+                .iter()
+                .zip(&up)
+                .map(|(g, u)| gelu_tanh(*g) * u)
+                .collect();
             let down = lw.ffn_down.matvec(ffn_dim, hidden, &act);
             let dn = rms_norm(&down, Some(&lw.post_ffw_norm), eps);
             for (a, b) in h.iter_mut().zip(&dn) {
                 *a += b;
             }
-            if let (Some(ig), Some(pj), Some(pnn)) =
-                (lw.ple_inp_gate.as_ref(), lw.ple_proj.as_ref(), lw.post_norm.as_ref())
-            {
+            if let (Some(ig), Some(pj), Some(pnn)) = (
+                lw.ple_inp_gate.as_ref(),
+                lw.ple_proj.as_ref(),
+                lw.post_norm.as_ref(),
+            ) {
                 let mut gated = f32_matvec(ig, hidden, ple_dim, &h);
                 for (gv, pv) in gated.iter_mut().zip(&pli[l]) {
                     *gv = gelu_tanh(*gv) * pv;

@@ -1195,8 +1195,7 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     };
     // The gemma4 runtime (Q8-resident) is ready as soon as it is loaded; the Llama
     // f32-budget check does not apply to it.
-    let generation_ready =
-        gemma4_available || model.is_some_and(loaded_model_generation_ready);
+    let generation_ready = gemma4_available || model.is_some_and(loaded_model_generation_ready);
     let execution_plans = state.execution_plans.read().await;
     let execution_plan = active_id_lock
         .as_ref()
@@ -2396,9 +2395,9 @@ fn gemma4_serve_enabled() -> bool {
 fn model_family(gguf: &GgufFile) -> &'static str {
     match gguf.architecture() {
         Some("gemma4") => "gemma4",
-        Some(
-            "llama" | "mistral" | "qwen2" | "qwen3" | "smollm3" | "gemma3" | "phi3" | "lfm2",
-        ) => "llama-family",
+        Some("llama" | "mistral" | "qwen2" | "qwen3" | "smollm3" | "gemma3" | "phi3" | "lfm2") => {
+            "llama-family"
+        }
         Some(_) => "other",
         None => "unknown",
     }
