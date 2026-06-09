@@ -86,7 +86,19 @@ New kernels required:
 - **STEP 5 — single-layer resident forward** (no PLE, no KV sharing): norm → qkv →
   QK-norm → rope → scatter → attn → o → post-attn-norm → residual → ffn-norm →
   gate/up → geglu → down → post-ffw-norm → residual. Parity vs CPU `step()` for
-  layer 0 at position 0. The hardest correctness milestone.
+  layer 0 at position 0. The hardest correctness milestone — sliced:
+  - **5a DONE** — `encode_gemma4_q8_matmul` (f32 act × 34-byte wire Q8, always wire
+    f32y, NOT gated on CAMELID_METAL_WIRE) + `try_gemma4_q8_matmul_f32y`, validated
+    vs CPU f32×dequant. The 8×/layer GEMV workhorse. Reuse for the chain:
+    `encode_rms_norm_f32` (full norm), `encode_binary` (GeGLU via gelu_mul_pipeline
+    / residual via residual_add_pipeline). Metal's default compute encoder is
+    SERIAL, so dependent dispatches chain in one encoder with no manual barriers
+    (confirmed: `encode_ffn_block`).
+  - **5b NEXT** — `encode_gemma4_ffn` sub-block (rms_norm → gate/up GEMV → geglu →
+    down GEMV → post_ffw_norm → residual) in one command buffer, validated vs CPU.
+  - **5c** — attention sub-block (rms_norm → qkv GEMV → per-head QK/V norm → rope →
+    kv scatter → windowed attn → o GEMV → post_attn_norm → residual).
+  - **5d** — chain 5b+5c into the full single layer; parity vs CPU `step()`.
 - **STEP 6 — cross-layer KV sharing + sliding window across all 42 layers.**
 - **STEP 7 — PLE stream** (per-token `pli` at token start + per-layer 7-step
   injection on GPU with f32 GEMVs + geglu + norm + scale).
