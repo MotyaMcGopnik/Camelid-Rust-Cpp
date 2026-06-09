@@ -5,6 +5,8 @@ import { getChatGateState } from '../lib/chatGate'
 import { formatBytes, formatCompactNumber } from '../lib/formatters'
 import { canLoadIntoRuntime, describeModelState, getModelStatusLabel, hasLocalModelPath, isExternalModel, isHostedRoutingAvailable, isModelGenerationReady, isModelLoadedNow, modelRuntimeIdMatches } from '../lib/modelState'
 import { SupportedModels } from '../components/models/SupportedModels'
+import { StatusDot } from '../components/ui/StatusDot'
+import { IconModels } from '../components/ui/icons'
 
 const FILTERS = [
   { key: 'all', label: 'Everything' },
@@ -494,15 +496,23 @@ export default function ModelsView({
   )
 
   return (
-    <section className="view-stack models-view view-shell-wide">
-      <section className="panel models-hero-panel models-overview-hero" aria-label="Camelid model support overview">
-        <div className="models-hero-copy">
-          <p className="panel-kicker">Model support</p>
-          <h2>Exact rows, real readiness, no inflated claims.</h2>
-          <p className="model-summary">Camelid separates model discovery from inference support. A model can appear here, but chat only unlocks when the active local GGUF matches an exact supported /api/capabilities row and the runtime reports loaded_now=true plus generation_ready=true.</p>
+    <section className="models-view cxv">
+      <header className="cxv-head">
+        <div className="cxv-head__copy">
+          <p className="cxv-kicker"><IconModels size={14} /> Model support</p>
+          <h1>Exact rows, real readiness, no inflated claims.</h1>
+          <p className="cxv-sub">Camelid separates model discovery from inference support. A model can appear here, but chat only unlocks when the active local GGUF matches an exact supported /api/capabilities row and the runtime reports loaded_now=true plus generation_ready=true.</p>
         </div>
+        <div className="cxv-head__actions">
+          <StatusDot
+            tone={runtimeOnline ? (runtime?.generation_ready ? 'ready' : 'warn') : 'offline'}
+            pulse={runtime?.generation_ready}
+            label={runtimeOnline ? (runtime?.generation_ready ? 'Generation-ready' : 'Online · no ready model') : 'Runtime offline'}
+          />
+        </div>
+      </header>
 
-        <div className="models-hero-ledger" aria-label="Support contract summary">
+      <div className="models-hero-ledger" aria-label="Support contract summary">
           <div>
             <span>Supported rows</span>
             <strong>{supportedRowCount}</strong>
@@ -518,10 +528,9 @@ export default function ModelsView({
             <strong>{selectedRunnable ? 'Ready' : selectedContractBlocked ? 'Contract blocked' : 'Runtime gated'}</strong>
             <small>Requires active_model_id match, loaded_now, generation_ready, and exact supported row evidence.</small>
           </div>
-        </div>
-      </section>
+      </div>
 
-      <div className="panel models-toolbar-panel">
+      <div className="cxv-card cxv-panel">
         <div className="models-toolbar-top">
           <label className="models-search-field">
             <span>Search models</span>
@@ -622,8 +631,8 @@ export default function ModelsView({
       />
 
       <section className="models-status-grid" aria-label="Camelid runtime model readiness">
-        <div className="panel models-status-card">
-          <p className="panel-kicker">Loaded now</p>
+        <div className="cxv-card cxv-panel">
+          <p className="cxv-kicker">Loaded now</p>
           <h3>{runtime?.loaded_now ? activeLocalModel?.name || runtime?.active_model_id : 'Nothing loaded'}</h3>
           <p className="model-summary">
             {runtime?.loaded_now
@@ -644,8 +653,8 @@ export default function ModelsView({
             </div>
           )}
         </div>
-        <div className="panel models-status-card">
-          <p className="panel-kicker">Next chat</p>
+        <div className="cxv-card cxv-panel">
+          <p className="cxv-kicker">Next chat</p>
           <h3>{selectedLocalModel?.name || 'No model selected'}</h3>
           <p className="model-summary">
             {selectedRunnable
@@ -670,10 +679,10 @@ export default function ModelsView({
       </section>
 
       {showLlama32ThreeBAcceptanceTarget && (
-        <section className="panel models-section-panel" aria-label="Llama 3.2 3B Q8 exact supported row">
+        <section className="cxv-card cxv-panel" aria-label="Llama 3.2 3B Q8 exact supported row">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Exact supported row</p>
+              <p className="cxv-kicker">Exact supported row</p>
               <h3>Llama 3.2 3B Instruct Q8_0</h3>
             </div>
             <p className="model-summary">{LLAMA32_3B_ACCEPTANCE_SUMMARY}</p>
@@ -717,10 +726,10 @@ export default function ModelsView({
       )}
 
       {trackedCompatibilityRows.length > 0 && (
-        <section className="panel models-section-panel" aria-label="Tracked exact Q8 compatibility rows">
+        <section className="cxv-card cxv-panel" aria-label="Tracked exact Q8 compatibility rows">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Exact-row full-support hardening</p>
+              <p className="cxv-kicker">Exact-row full-support hardening</p>
               <h3>Current Q8 support rows</h3>
             </div>
             <p className="model-summary">These cards mirror the current exact Q8 rows from /api/capabilities. Each row gets credit only for its own evidence, with template/Jinja, checked context, and production-throughput shown as row-scoped readiness lanes instead of repeated generic caveats; chat still unlocks only when the active local GGUF is loaded_now=true, generation_ready=true, and matched to that exact supported row.</p>
@@ -862,10 +871,10 @@ export default function ModelsView({
         </section>
       )}
 
-      <section className="panel models-section-panel">
+      <section className="cxv-card cxv-panel">
         <div className="models-section-heading">
           <div>
-            <p className="panel-kicker">Local runtime</p>
+            <p className="cxv-kicker">Local runtime</p>
             <h3>{readyModels.length === 0 ? 'No local models listed yet' : `${readyModels.length} local ${readyModels.length === 1 ? 'model' : 'models'}`}</h3>
           </div>
           <p className="model-summary">These are loaded now or saved with a local GGUF path. The page keeps loadable-local separate from chat-ready: chat unlocks only when Camelid reports loaded_now=true, generation_ready=true, and an exact supported /api/capabilities row for the active model/quant.</p>
@@ -930,10 +939,10 @@ export default function ModelsView({
       </section>
 
       {catalogAvailable && (
-        <section className="panel models-section-panel models-catalog-panel-clean">
+        <section className="cxv-card cxv-panel models-catalog-panel-clean">
           <div className="models-section-heading models-section-heading-catalog">
           <div>
-            <p className="panel-kicker">Catalog preview</p>
+            <p className="cxv-kicker">Catalog preview</p>
             <h3>Public Hugging Face GGUF picks</h3>
           </div>
           <p className="model-summary">This area stays honest: it appears only if a catalog endpoint responds. Downloads stay disabled unless Camelid advertises a catalog-install capability; local GGUF loading remains the working path today.</p>
@@ -1031,10 +1040,10 @@ export default function ModelsView({
       )}
 
       <div className="models-setup-grid">
-        <div className="panel models-section-panel">
+        <div className="cxv-card cxv-panel">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Import a local GGUF</p>
+              <p className="cxv-kicker">Import a local GGUF</p>
               <h3>Bring in a model you already downloaded</h3>
             </div>
             <p className="model-summary">Keep the first step simple. Camelid can generate the internal ID, then confirm the file on first load. Support still comes from /api/capabilities, not filename optimism.</p>
@@ -1064,10 +1073,10 @@ export default function ModelsView({
           </div>
         </div>
 
-        <div className="panel models-section-panel">
+        <div className="cxv-card cxv-panel">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Hosted API setup</p>
+              <p className="cxv-kicker">Hosted API setup</p>
               <h3>Planned hosted /v1-compatible API link</h3>
             </div>
             <p className="model-summary">This form preserves the intended fields, but it stays disabled because the current Camelid API does not expose hosted-provider routing.</p>
@@ -1095,10 +1104,10 @@ export default function ModelsView({
       </div>
 
       {apiLinkModels.length > 0 && (
-        <section className="panel models-section-panel">
+        <section className="cxv-card cxv-panel">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">API links</p>
+              <p className="cxv-kicker">API links</p>
               <h3>{apiLinkModels.length} planned hosted link{apiLinkModels.length === 1 ? '' : 's'}</h3>
             </div>
             <p className="model-summary">Camelid is keeping these visible as planned connections, but hosted-provider chat routing is disabled until an API route exists.</p>
@@ -1127,10 +1136,10 @@ export default function ModelsView({
       )}
 
       {setupModels.length > 0 && (
-        <section className="panel models-section-panel">
+        <section className="cxv-card cxv-panel">
           <div className="models-section-heading">
             <div>
-              <p className="panel-kicker">Still needs setup</p>
+              <p className="cxv-kicker">Still needs setup</p>
               <h3>{setupModels.length} model{setupModels.length === 1 ? '' : 's'} still need attention</h3>
             </div>
             <p className="model-summary">This is the short list of models that are still importing, downloading, or need a fix before they can be used confidently.</p>
