@@ -342,8 +342,9 @@ impl Gemma4Runtime {
     }
 
     /// Greedily generate up to `max_new` tokens from `prompt`, with an incremental
-    /// KV cache (one forward step per token). Returns the decoded continuation.
-    pub fn generate_greedy(&self, prompt: &str, max_new: usize) -> Result<String> {
+    /// KV cache (one forward step per token). Returns (decoded continuation, the
+    /// generated token ids).
+    pub fn generate_greedy(&self, prompt: &str, max_new: usize) -> Result<(String, Vec<u32>)> {
         let n_layers = self.layers.len();
         let mut kc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let mut vc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
@@ -376,6 +377,7 @@ impl Gemma4Runtime {
             logits = self.step(next, pos, &mut kc, &mut vc)?;
             pos += 1;
         }
-        self.tokenizer.decode(&generated, true)
+        let text = self.tokenizer.decode(&generated, true)?;
+        Ok((text, generated))
     }
 }
