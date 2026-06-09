@@ -507,9 +507,13 @@ async fn main() -> anyhow::Result<()> {
             max_tokens,
         } => {
             eprintln!("[gemma4] loading {}...", path.display());
+            let t0 = std::time::Instant::now();
             let runtime = camelid::gemma4_runtime::Gemma4Runtime::load(&path)?;
-            eprintln!("[gemma4] generating (max {max_tokens} tokens)...");
+            eprintln!("[gemma4] loaded in {:.1}s; generating {max_tokens} tokens...", t0.elapsed().as_secs_f32());
+            let t1 = std::time::Instant::now();
             let out = runtime.generate_greedy(&prompt, max_tokens)?;
+            let gen = t1.elapsed().as_secs_f32();
+            eprintln!("[gemma4] generated in {gen:.1}s ({:.2} tok/s)", max_tokens as f32 / gen);
             println!("{prompt}{out}");
         }
         Command::TensorDump {
