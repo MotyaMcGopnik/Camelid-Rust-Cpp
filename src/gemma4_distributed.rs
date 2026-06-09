@@ -152,6 +152,9 @@ fn model_file_len(path: &Path) -> Result<u64> {
 /// connection at a time, forever. Each accepted connection is one generation
 /// session with fresh KV caches.
 pub fn run_worker(model: &Path, addr: &str, range: Range<usize>) -> Result<()> {
+    // Bind BEFORE the (slow) shard load so a master can connect immediately;
+    // its handshake waits in the accept backlog until the weights are ready.
+    let listener = TcpListener::bind(addr).map_err(|e| io_err("bind", e))?;
     let runtime = Gemma4Runtime::load_layer_range(model, Some(range.clone()))?;
     if runtime.local_layer_range().end != runtime.block_count() {
         return Err(BackendError::InvalidModelMetadata(format!(
@@ -161,7 +164,6 @@ pub fn run_worker(model: &Path, addr: &str, range: Range<usize>) -> Result<()> {
         )));
     }
     let file_len = model_file_len(model)?;
-    let listener = TcpListener::bind(addr).map_err(|e| io_err("bind", e))?;
     eprintln!(
         "[gemma4-worker] serving layers {:?} of {} on {addr}",
         runtime.local_layer_range(),

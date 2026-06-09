@@ -174,6 +174,19 @@ async fn live_gemma4_chat_serve_smoke() {
         content.contains("Paris"),
         "expected Paris in {content:?} (body {body})"
     );
+    // Turn markers and thinking channels must never leak into chat content.
+    for marker in [
+        "<turn|>",
+        "<|turn>",
+        "<|channel>",
+        "<channel|>",
+        "<end_of_turn>",
+    ] {
+        assert!(
+            !content.contains(marker),
+            "marker {marker} leaked into chat content: {content:?}"
+        );
+    }
 
     // Streaming chat: SSE chunks ending with [DONE].
     let response = app
@@ -215,4 +228,16 @@ async fn live_gemma4_chat_serve_smoke() {
     }
     eprintln!("streamed content: {streamed:?}");
     assert!(streamed.contains("Paris"), "streamed: {streamed:?}");
+    for marker in [
+        "<turn|>",
+        "<|turn>",
+        "<|channel>",
+        "<channel|>",
+        "<end_of_turn>",
+    ] {
+        assert!(
+            !streamed.contains(marker),
+            "marker {marker} leaked into streamed content: {streamed:?}"
+        );
+    }
 }

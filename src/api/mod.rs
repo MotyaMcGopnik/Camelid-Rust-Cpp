@@ -2551,6 +2551,69 @@ fn model_family(gguf: &GgufFile) -> &'static str {
 /// trailing `<start_of_turn>model\n`. The tokenizer prepends `<bos>`
 /// (add_special). Gemma has no system role, so system text is folded into the
 /// next user turn. This is the single place the Gemma chat template lives.
+/// Gemma 4 turn markers. Gemma 4 RENAMED them from Gemma 3's
+/// `<start_of_turn>`/`<end_of_turn>` to `<|turn>` (id 105) / `<turn|>` (id 106)
+/// — verified against the E2B/E4B/12B GGUF vocab and the GGUF-embedded Jinja
+/// chat template (`'<|turn>' + role + '\n'` … `'<turn|>\n'`). Using the old
+/// spellings tokenizes as PLAIN TEXT: the model mimics them back and the stop
+/// token never matches.
+pub(crate) const GEMMA4_TURN_START: &str = "<|turn>";
+pub(crate) const GEMMA4_TURN_END: &str = "<turn|>";
+/// Thinking-channel markers (ids 100/101): the model may wrap hidden reasoning
+/// in `<|channel>…<channel|>`. The GGUF template strips these spans from chat
+/// history; Camelid strips them from chat OUTPUT so hidden reasoning never
+/// leaks to the client.
+pub(crate) const GEMMA4_CHANNEL_START: &str = "<|channel>";
+pub(crate) const GEMMA4_CHANNEL_END: &str = "<channel|>";
+
+#[cfg(test)]
+mod gemma4_template_tests {
+    use super::*;
+
+    #[test]
+    fn chat_prompt_uses_gemma4_turn_markers() {
+        let messages = [ChatMessage {
+            unsupported_content_parts: Vec::new(),
+            role: "user".to_string(),
+            content: "hi".to_string(),
+        }];
+        let prompt = gemma4_chat_prompt(&messages);
+        assert_eq!(prompt, "<|turn>user\nhi<turn|>\n<|turn>model\n");
+        // Gemma 3 marker spellings tokenize as plain text on gemma4 vocabs and
+        // must never appear.
+        assert!(!prompt.contains("<start_of_turn>"));
+        assert!(!prompt.contains("<end_of_turn>"));
+    }
+
+    #[test]
+    fn strip_channels_removes_thinking_spans() {
+        assert_eq!(
+            gemma4_strip_channels("<|channel>secret plan<channel|>Paris"),
+            "Paris"
+        );
+        assert_eq!(
+            gemma4_strip_channels("a<|channel>x<channel|>b<|channel>y<channel|>c"),
+            "abc"
+        );
+        // Unterminated channel (token budget hit mid-thought): nothing leaks.
+        assert_eq!(gemma4_strip_channels("ok<|channel>still thinking"), "ok");
+        assert_eq!(gemma4_strip_channels("plain"), "plain");
+    }
+
+    #[test]
+    fn streaming_channel_filter_suppresses_thinking_deltas() {
+        let mut f = Gemma4ChannelFilter::new();
+        assert_eq!(f.filter("Hello "), "Hello ");
+        assert_eq!(f.filter("<|channel>"), "");
+        assert_eq!(f.filter("hidden reasoning"), "");
+        assert_eq!(f.filter("<channel|>"), "");
+        assert_eq!(f.filter("Paris"), "Paris");
+        // Markers and text inside one delta.
+        let mut g = Gemma4ChannelFilter::new();
+        assert_eq!(g.filter("A<|channel>h<channel|>B"), "AB");
+    }
+}
+
 fn gemma4_chat_prompt(messages: &[ChatMessage]) -> String {
     let mut out = String::new();
     let mut pending_system = String::new();
@@ -2563,29 +2626,95 @@ fn gemma4_chat_prompt(messages: &[ChatMessage]) -> String {
                 pending_system.push_str(&m.content);
             }
             "assistant" => {
-                out.push_str("<start_of_turn>model\n");
+                out.push_str(GEMMA4_TURN_START);
+                out.push_str("model\n");
                 out.push_str(&m.content);
-                out.push_str("<end_of_turn>\n");
+                out.push_str(GEMMA4_TURN_END);
+                out.push('\n');
             }
             _ => {
-                out.push_str("<start_of_turn>user\n");
+                out.push_str(GEMMA4_TURN_START);
+                out.push_str("user\n");
                 if !pending_system.is_empty() {
                     out.push_str(&pending_system);
                     out.push_str("\n\n");
                     pending_system.clear();
                 }
                 out.push_str(&m.content);
-                out.push_str("<end_of_turn>\n");
+                out.push_str(GEMMA4_TURN_END);
+                out.push('\n');
             }
         }
     }
     if !pending_system.is_empty() {
-        out.push_str("<start_of_turn>user\n");
+        out.push_str(GEMMA4_TURN_START);
+        out.push_str("user\n");
         out.push_str(&pending_system);
-        out.push_str("<end_of_turn>\n");
+        out.push_str(GEMMA4_TURN_END);
+        out.push('\n');
     }
-    out.push_str("<start_of_turn>model\n");
+    out.push_str(GEMMA4_TURN_START);
+    out.push_str("model\n");
     out
+}
+
+/// Strip `<|channel>…<channel|>` thinking spans from a complete gemma4 chat
+/// response. An unterminated span (generation hit the token budget inside the
+/// channel) is stripped to its start — hidden reasoning must never leak.
+fn gemma4_strip_channels(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(GEMMA4_CHANNEL_START) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + GEMMA4_CHANNEL_START.len()..];
+        match after.find(GEMMA4_CHANNEL_END) {
+            Some(end) => rest = &after[end + GEMMA4_CHANNEL_END.len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Streaming-side channel suppressor: feed decoded deltas in, get the
+/// client-visible portion out. Marker pieces decode atomically (single vocab
+/// tokens), so state flips on exact marker occurrences within a delta.
+struct Gemma4ChannelFilter {
+    in_channel: bool,
+}
+
+impl Gemma4ChannelFilter {
+    fn new() -> Self {
+        Self { in_channel: false }
+    }
+
+    fn filter(&mut self, delta: &str) -> String {
+        let mut out = String::new();
+        let mut rest = delta;
+        loop {
+            if self.in_channel {
+                match rest.find(GEMMA4_CHANNEL_END) {
+                    Some(end) => {
+                        self.in_channel = false;
+                        rest = &rest[end + GEMMA4_CHANNEL_END.len()..];
+                    }
+                    None => return out,
+                }
+            } else {
+                match rest.find(GEMMA4_CHANNEL_START) {
+                    Some(start) => {
+                        out.push_str(&rest[..start]);
+                        self.in_channel = true;
+                        rest = &rest[start + GEMMA4_CHANNEL_START.len()..];
+                    }
+                    None => {
+                        out.push_str(rest);
+                        return out;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Resolve the Gemma 4 runtime for a chat request, if this request targets one.
@@ -2596,7 +2725,14 @@ async fn resolve_gemma4_runtime(
     state: &AppState,
     req: &ChatCompletionRequest,
 ) -> std::result::Result<Option<(String, Arc<crate::gemma4_runtime::Gemma4Runtime>)>, Response> {
-    let id = match req.model.clone() {
+    resolve_gemma4_runtime_for_model(state, &req.model).await
+}
+
+async fn resolve_gemma4_runtime_for_model(
+    state: &AppState,
+    model: &Option<String>,
+) -> std::result::Result<Option<(String, Arc<crate::gemma4_runtime::Gemma4Runtime>)>, Response> {
+    let id = match model.clone() {
         Some(m) => m,
         None => match state.active_model_id.read().await.clone() {
             Some(m) => m,
@@ -2638,6 +2774,125 @@ fn unix_secs() -> u64 {
 
 /// Non-streaming Gemma 4 chat. Builds the gemma prompt, generates greedily on a
 /// blocking thread, and returns a minimal OpenAI-compatible response.
+/// Gemma 4 raw completion (non-streaming): BOS + plain prompt text through the
+/// greedy runtime — the same envelope the committed basic_v1 oracle pack checks.
+async fn gemma4_completion_nonstreaming(
+    id: String,
+    runtime: Arc<crate::gemma4_runtime::Gemma4Runtime>,
+    req: &CompletionRequest,
+) -> Response {
+    let Some(prompt) = req.prompt.clone() else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "prompt is required".to_string(),
+            Some("prompt"),
+        );
+    };
+    let max_tokens = req.max_tokens.unwrap_or(64).min(4096) as usize;
+    let result =
+        tokio::task::spawn_blocking(move || runtime.generate_greedy(&prompt, max_tokens)).await;
+    let (text, ids) = match result {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "generation_error",
+                e.to_string(),
+                None,
+            )
+        }
+        Err(e) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "generation_error",
+                format!("gemma4 generation task panicked: {e}"),
+                None,
+            )
+        }
+    };
+    let body = serde_json::json!({
+        "id": "cmpl-gemma4",
+        "object": "text_completion",
+        "created": unix_secs(),
+        "model": id,
+        "choices": [{
+            "index": 0,
+            "text": text,
+            "logprobs": null,
+            "finish_reason": "stop",
+        }],
+        "usage": { "prompt_tokens": 0, "completion_tokens": ids.len(), "total_tokens": ids.len() },
+        "camelid": { "generated_token_ids": ids },
+    });
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Gemma 4 raw completion, streaming (SSE `text_completion` chunks + [DONE]).
+async fn gemma4_completion_streaming(
+    id: String,
+    runtime: Arc<crate::gemma4_runtime::Gemma4Runtime>,
+    req: &CompletionRequest,
+) -> Response {
+    let Some(prompt) = req.prompt.clone() else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "prompt is required".to_string(),
+            Some("prompt"),
+        );
+    };
+    let max_tokens = req.max_tokens.unwrap_or(64).min(4096) as usize;
+    let created = unix_secs();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
+    tokio::task::spawn_blocking(move || {
+        let send_tx = tx.clone();
+        let result = runtime.generate_greedy_streaming(&prompt, max_tokens, |delta| {
+            let _ = send_tx.send(Ok(delta.to_string()));
+        });
+        if let Err(e) = result {
+            let _ = tx.send(Err(e.to_string()));
+        }
+    });
+
+    let events = async_stream::stream! {
+        let mut errored = false;
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(delta) => {
+                    let chunk = serde_json::json!({
+                        "id": "cmpl-gemma4",
+                        "object": "text_completion",
+                        "created": created,
+                        "model": id,
+                        "choices": [{ "index": 0, "text": delta, "logprobs": null, "finish_reason": null }],
+                    });
+                    yield Ok::<Event, std::convert::Infallible>(Event::default().data(chunk.to_string()));
+                }
+                Err(e) => {
+                    let err = serde_json::json!({ "error": { "message": e, "type": "generation_error" } });
+                    yield Ok(Event::default().data(err.to_string()));
+                    errored = true;
+                    break;
+                }
+            }
+        }
+        if !errored {
+            let done = serde_json::json!({
+                "id": "cmpl-gemma4",
+                "object": "text_completion",
+                "created": created,
+                "model": id,
+                "choices": [{ "index": 0, "text": "", "logprobs": null, "finish_reason": "stop" }],
+            });
+            yield Ok(Event::default().data(done.to_string()));
+        }
+        yield Ok(Event::default().data("[DONE]"));
+    };
+    Sse::new(events).into_response()
+}
+
 async fn gemma4_chat_nonstreaming(
     id: String,
     runtime: Arc<crate::gemma4_runtime::Gemma4Runtime>,
@@ -2674,7 +2929,9 @@ async fn gemma4_chat_nonstreaming(
         "model": id,
         "choices": [{
             "index": 0,
-            "message": { "role": "assistant", "content": text },
+            // Thinking channels are stripped: hidden reasoning never reaches
+            // the client or re-enters chat history.
+            "message": { "role": "assistant", "content": gemma4_strip_channels(&text) },
             "finish_reason": "stop",
         }],
         "usage": { "prompt_tokens": 0, "completion_tokens": ids.len(), "total_tokens": ids.len() },
@@ -2719,15 +2976,22 @@ async fn gemma4_chat_streaming(
         yield Ok::<Event, std::convert::Infallible>(Event::default().data(role.to_string()));
 
         let mut errored = false;
+        let mut channel_filter = Gemma4ChannelFilter::new();
         while let Some(item) = rx.recv().await {
             match item {
                 Ok(delta) => {
+                    // Suppress thinking-channel spans; an empty visible delta
+                    // emits nothing.
+                    let visible = channel_filter.filter(&delta);
+                    if visible.is_empty() {
+                        continue;
+                    }
                     let chunk = serde_json::json!({
                         "id": "chatcmpl-gemma4",
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": id,
-                        "choices": [{ "index": 0, "delta": { "content": delta }, "finish_reason": null }],
+                        "choices": [{ "index": 0, "delta": { "content": visible }, "finish_reason": null }],
                     });
                     yield Ok(Event::default().data(chunk.to_string()));
                 }
@@ -3671,6 +3935,19 @@ async fn completions(
         Ok(payload) => payload,
         Err(err) => return malformed_json_error(err),
     };
+    // Gemma 4 serve path (additive, gated by CAMELID_GEMMA4_SERVE): raw greedy
+    // completion against the gemma4 runtime, mirroring the chat short-circuit.
+    match resolve_gemma4_runtime_for_model(&state, &req.model).await {
+        Ok(Some((id, runtime))) => {
+            return if req.stream.unwrap_or(false) {
+                gemma4_completion_streaming(id, runtime, &req).await
+            } else {
+                gemma4_completion_nonstreaming(id, runtime, &req).await
+            };
+        }
+        Ok(None) => {}
+        Err(resp) => return resp,
+    }
     // Capture the receipt stamp before the request is consumed. Receipts are
     // strictly opt-in and never silently attached.
     let receipt_stamp = if req.camelid_receipt.unwrap_or(false) {

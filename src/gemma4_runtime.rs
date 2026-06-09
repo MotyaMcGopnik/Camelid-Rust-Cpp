@@ -160,17 +160,19 @@ impl WireQ8 {
 }
 
 /// Greedy-decode stop set: the tokenizer's metadata-declared end ids (EOS/EOT/
-/// EOM) plus `<end_of_turn>` when that literal piece exists in the vocab. Gemma 4
-/// rows do NOT agree on marker spelling — E4B's vocab carries `<end_of_turn>`,
-/// E2B/12B render id 106 as `<turn|>` — so a string round-trip alone misses the
-/// stop on some rows (the model then emits EOG ids forever). The metadata ids
-/// are the authoritative contract; llama.cpp stops on the same set.
+/// EOM) plus any end-of-turn marker piece present in the vocab. Gemma 4 renamed
+/// the marker from Gemma 3's `<end_of_turn>` to `<turn|>` (id 106; all of
+/// E2B/E4B/12B), so a single hardcoded spelling misses the stop and the model
+/// emits EOG ids forever. The metadata ids are the authoritative contract;
+/// llama.cpp stops on the same set.
 fn gemma4_stop_token_ids(tokenizer: &Tokenizer) -> Vec<u32> {
     let sp = &tokenizer.special;
     let mut ids: Vec<u32> = [sp.eos, sp.eot, sp.eom].iter().flatten().copied().collect();
-    if let Ok(tokens) = tokenizer.encode("<end_of_turn>", false, true) {
-        if tokens.len() == 1 {
-            ids.push(tokens[0]);
+    for marker in ["<turn|>", "<end_of_turn>"] {
+        if let Ok(tokens) = tokenizer.encode(marker, false, true) {
+            if tokens.len() == 1 {
+                ids.push(tokens[0]);
+            }
         }
     }
     ids.sort_unstable();
