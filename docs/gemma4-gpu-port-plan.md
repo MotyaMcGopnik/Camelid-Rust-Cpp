@@ -137,9 +137,29 @@ New kernels required:
   `metal_gemma4_head_matches_cpu` (logits + greedy-argmax agreement). Greedy
   sampling reads logits back + argmaxes on CPU (the one end-of-token readback);
   GPU `argmax_f32_greedy` is a later fast-path option.
-- **STEP 9 — end-to-end parity** (`tests/gemma4_forward.rs` greedy decode must
-  emit identical token ids) + **benchmark** vs the 6 tok/s CPU baseline. Gate the
-  whole path behind `CAMELID_GEMMA4_GPU` (off by default until proven).
+- **STEP 9 — real runtime + end-to-end parity & benchmark.**
+  - **9a DONE** — `try_gemma4_forward` drives a whole token forward on the GPU in
+    ONE command buffer: h0 → N layers (`encode_gemma4_layer` + optional
+    `encode_gemma4_ple`, ping-pong, cross-KV cache resolution) → `encode_gemma4_head`
+    → logits. Per-token CPU data via `Gemma4TokenLayerInput` (cos/sin, pli,
+    window_start); PLE via `Gemma4ResidentPle`. Validated
+    (`metal_gemma4_forward_matches_composed_pieces`) against the same pipeline built
+    from the individually-validated `try_*` pieces. The GPU forward is complete.
+  - **9b NEXT (real-model wiring + the payoff)** — in `gemma4_runtime.rs`:
+    1. **Weight residency**: load each Q8 tensor as page-aligned
+       `wire_mmap::WirePages` and build `Gemma4ResidentLayer` via a NEW nocopy ctor
+       (`from_wire_pages`, wrapping `q8_wire_nocopy_buffer`) — NOT `from_wire`'s copy
+       (8GB copy won't fit 16GB). token_embd + per_layer_token_embd also as WirePages.
+    2. **Per-token CPU prep** (reuse `step()` math): embedding gather × √hidden → h0;
+       `pli` (per_layer_token_embd Q8 gather + per_layer_model_proj f32 matvec +
+       per_layer_proj_norm); per-layer cos/sin from `rope_freq_base_at` + position;
+       window_start per `layer_plan`.
+    3. **Drive** `try_gemma4_forward` per token (or add `Gemma4ResidentState::
+       forward_token`), readback logits, argmax. Gate on `gemma4_gpu_enabled()`.
+    4. **Validate**: `tests/gemma4_forward.rs` greedy decode emits identical token
+       ids; then decode **benchmark** (target ~13–15 tok/s vs the ~6 CPU baseline).
+    Risk: the WirePages path is memory-critical on the 16GB box (8GB anonymous,
+    single-copy); verify residency before trusting the bench. Off by default.
 
 ## CI / safety notes
 
