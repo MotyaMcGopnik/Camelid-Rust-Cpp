@@ -5272,6 +5272,7 @@ pub fn try_gemma4_attention(
     filled: usize,
     window_start: usize,
     scale: f32,
+    owns_kv: bool,
 ) -> Option<Vec<f32>> {
     const WIRE: usize = 34;
     let hidden = h_in.len();
@@ -5356,6 +5357,7 @@ pub fn try_gemma4_attention(
         filled,
         window_start,
         scale,
+        owns_kv,
     );
     e.end_encoding();
     cb.commit();
@@ -5384,6 +5386,7 @@ pub fn try_gemma4_layer(
     filled: usize,
     window_start: usize,
     scale: f32,
+    owns_kv: bool,
 ) -> Option<Vec<f32>> {
     let hidden = h_in.len();
     let cache_len = layer.n_kv_heads * max_positions * layer.head_dim;
@@ -5423,6 +5426,7 @@ pub fn try_gemma4_layer(
         filled,
         window_start,
         scale,
+        owns_kv,
     );
     e.end_encoding();
     cb.commit();
@@ -6499,6 +6503,7 @@ fn encode_gemma4_attention(
     filled: usize,
     window_start: usize,
     scale: f32,
+    owns_kv: bool,
 ) {
     let hidden = attn_norm.len();
     let q_dim = n_heads * head_dim;
@@ -6604,33 +6609,38 @@ fn encode_gemma4_attention(
 
     encode_rms_norm_f32(e, k, in_buf, &norm_w, &normf, &rms_scalar);
     encode_gemma4_q8_matmul(e, k, &normf, q_w, &query_buf, &q_mm, q_dim);
-    encode_gemma4_q8_matmul(e, k, &normf, k_w, &key_buf, &kv_mm, kv_dim);
-    encode_gemma4_q8_matmul(e, k, &normf, v_w, &val_buf, &kv_mm, kv_dim);
     encode_rms_norm_per_head(e, k, &query_buf, &qnorm_w, &qn_buf, &perhead_q, n_heads);
-    encode_rms_norm_per_head(e, k, &key_buf, &knorm_w, &kn_buf, &perhead_k, n_kv_heads);
-    // Weightless V-norm: qnorm_w is bound as a dummy (use_weight = 0, never read).
-    encode_rms_norm_per_head(e, k, &val_buf, &qnorm_w, &vn_buf, &perhead_v, n_kv_heads);
     encode_rope(
         e, k, &qn_buf, &cos_buf, &sin_buf, &rope_q, n_heads, half_rope,
     );
-    encode_rope(
-        e, k, &kn_buf, &cos_buf, &sin_buf, &rope_k, n_kv_heads, half_rope,
-    );
-    // Scatter the roped K and normed V into the cache at write_position. f32 cache
-    // only: bind the kv16 mirror slots to a placeholder with the write flag at 0.
-    e.set_compute_pipeline_state(&k.kv_scatter_pipeline);
-    e.set_buffer(0, Some(&kn_buf), 0);
-    e.set_buffer(1, Some(&vn_buf), 0);
-    e.set_buffer(2, Some(cache_k_buf), 0);
-    e.set_buffer(3, Some(cache_v_buf), 0);
-    e.set_buffer(4, Some(&scatter_scalar), 0);
-    e.set_buffer(5, Some(&scatter_scalar), 4);
-    e.set_buffer(6, Some(&scatter_scalar), 8);
-    e.set_buffer(7, Some(&scatter_scalar), 12);
-    e.set_buffer(8, Some(&scatter_scalar), 0);
-    e.set_buffer(9, Some(&scatter_scalar), 0);
-    e.set_buffer(10, Some(&kv16_write), 0);
-    dispatch_1d(e, &k.kv_scatter_pipeline, kv_dim);
+    // Owning layers project + cache their own K/V; the trailing cross-shared layers
+    // skip all of that and run attention against the source layer's cache
+    // (`cache_k_buf`/`cache_v_buf` are the source's, already holding this token).
+    if owns_kv {
+        encode_gemma4_q8_matmul(e, k, &normf, k_w, &key_buf, &kv_mm, kv_dim);
+        encode_gemma4_q8_matmul(e, k, &normf, v_w, &val_buf, &kv_mm, kv_dim);
+        encode_rms_norm_per_head(e, k, &key_buf, &knorm_w, &kn_buf, &perhead_k, n_kv_heads);
+        // Weightless V-norm: qnorm_w is bound as a dummy (use_weight = 0, never read).
+        encode_rms_norm_per_head(e, k, &val_buf, &qnorm_w, &vn_buf, &perhead_v, n_kv_heads);
+        encode_rope(
+            e, k, &kn_buf, &cos_buf, &sin_buf, &rope_k, n_kv_heads, half_rope,
+        );
+        // Scatter the roped K and normed V into the cache at write_position. f32 cache
+        // only: bind the kv16 mirror slots to a placeholder with the write flag at 0.
+        e.set_compute_pipeline_state(&k.kv_scatter_pipeline);
+        e.set_buffer(0, Some(&kn_buf), 0);
+        e.set_buffer(1, Some(&vn_buf), 0);
+        e.set_buffer(2, Some(cache_k_buf), 0);
+        e.set_buffer(3, Some(cache_v_buf), 0);
+        e.set_buffer(4, Some(&scatter_scalar), 0);
+        e.set_buffer(5, Some(&scatter_scalar), 4);
+        e.set_buffer(6, Some(&scatter_scalar), 8);
+        e.set_buffer(7, Some(&scatter_scalar), 12);
+        e.set_buffer(8, Some(&scatter_scalar), 0);
+        e.set_buffer(9, Some(&scatter_scalar), 0);
+        e.set_buffer(10, Some(&kv16_write), 0);
+        dispatch_1d(e, &k.kv_scatter_pipeline, kv_dim);
+    }
     encode_attention(
         e,
         k,
@@ -6801,6 +6811,7 @@ fn encode_gemma4_layer(
     filled: usize,
     window_start: usize,
     scale: f32,
+    owns_kv: bool,
 ) {
     encode_gemma4_attention(
         e,
@@ -6829,6 +6840,7 @@ fn encode_gemma4_layer(
         filled,
         window_start,
         scale,
+        owns_kv,
     );
     encode_gemma4_ffn(
         e,
@@ -10372,6 +10384,7 @@ pub fn try_gemma4_layer(
     _filled: usize,
     _window_start: usize,
     _scale: f32,
+    _owns_kv: bool,
 ) -> Option<Vec<f32>> {
     None
 }
@@ -10611,6 +10624,7 @@ pub fn try_gemma4_attention(
     _filled: usize,
     _window_start: usize,
     _scale: f32,
+    _owns_kv: bool,
 ) -> Option<Vec<f32>> {
     None
 }
@@ -11868,8 +11882,171 @@ mod tests {
             filled,
             window_start,
             scale,
+            true, // owning layer
         )
         .expect("gemma4 attention");
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 2.0e-2, "{a} != {b}");
+        }
+    }
+
+    // A cross-shared gemma4 layer (owns_kv = false) must skip K/V projection + scatter
+    // and run q-only attention against the source layer's cache (here a fully-prefilled
+    // cache covering all `filled` positions). Validates the owns_kv=false branch.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_attention_shared_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::quantize_q8_0_blocks;
+        let hidden = 128usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 256usize;
+        let group = n_heads / n_kv_heads;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let half = head_dim / 2;
+        let max_positions = 8usize;
+        let write_position = 3usize;
+        let filled = 4usize;
+        let window_start = 0usize;
+        let eps = 1.0e-6f32;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let make_weight = |rows: usize, in_dim: usize, seed: usize| -> (Vec<u8>, Vec<Vec<f32>>) {
+            let mut wire = Vec::new();
+            let mut deq = Vec::new();
+            for r in 0..rows {
+                let row: Vec<f32> = (0..in_dim)
+                    .map(|i| ((((r * in_dim + i + seed) % 29) as f32) - 14.0) * 0.03)
+                    .collect();
+                let mut drow = vec![0.0f32; in_dim];
+                for (b, blk) in quantize_q8_0_blocks(&row).iter().enumerate() {
+                    wire.extend_from_slice(&f32_to_f16_bits(blk.scale).to_le_bytes());
+                    for (j, &q) in blk.quants.iter().enumerate() {
+                        wire.push(q as u8);
+                        drow[b * 32 + j] = blk.scale * q as f32;
+                    }
+                }
+                deq.push(drow);
+            }
+            (wire, deq)
+        };
+        let (q_wire, q_deq) = make_weight(q_dim, hidden, 1);
+        // K/V weights are required by the wrapper's shape checks but unused when shared.
+        let (k_wire, _) = make_weight(kv_dim, hidden, 5);
+        let (v_wire, _) = make_weight(kv_dim, hidden, 9);
+        let (o_wire, o_deq) = make_weight(hidden, q_dim, 13);
+        let h_in: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let attn_norm: Vec<f32> = (0..hidden).map(|i| 0.8 + (i as f32 % 5.0) * 0.05).collect();
+        let post_norm: Vec<f32> = (0..hidden).map(|i| 0.9 + (i as f32 % 3.0) * 0.03).collect();
+        let q_norm: Vec<f32> = (0..head_dim)
+            .map(|i| 0.7 + (i as f32 % 11.0) * 0.02)
+            .collect();
+        let k_norm: Vec<f32> = (0..head_dim)
+            .map(|i| 0.6 + (i as f32 % 7.0) * 0.03)
+            .collect();
+        let cos_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).cos()).collect();
+        let sin_t: Vec<f32> = (0..half).map(|i| (0.3 + i as f32 * 0.01).sin()).collect();
+        let cache_len = n_kv_heads * max_positions * head_dim;
+        // Fully prefilled: the source layer already wrote every position incl. write_position.
+        let cache_k_init: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.05)
+            .collect();
+        let cache_v_init: Vec<f32> = (0..cache_len)
+            .map(|i| ((i % 23) as f32 - 11.0) * 0.04)
+            .collect();
+
+        // CPU reference: q only, attention over the source cache directly.
+        let rms = |x: &[f32], w: Option<&[f32]>| -> Vec<f32> {
+            let mss = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
+            let inv = (mss + eps).powf(-0.5);
+            (0..x.len())
+                .map(|i| x[i] * inv * w.map_or(1.0, |w| w[i]))
+                .collect()
+        };
+        let matmul = |deq: &[Vec<f32>], x: &[f32]| -> Vec<f32> {
+            deq.iter()
+                .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
+                .collect()
+        };
+        let normf = rms(&h_in, Some(&attn_norm));
+        let mut q = vec![0.0f32; q_dim];
+        for h in 0..n_heads {
+            let qh = rms(
+                &matmul(&q_deq, &normf)[h * head_dim..(h + 1) * head_dim],
+                Some(&q_norm),
+            );
+            q[h * head_dim..(h + 1) * head_dim].copy_from_slice(&qh);
+        }
+        for h in 0..n_heads {
+            let base = h * head_dim;
+            for i in 0..half {
+                let (x0, x1) = (q[base + i], q[base + half + i]);
+                q[base + i] = x0 * cos_t[i] - x1 * sin_t[i];
+                q[base + half + i] = x0 * sin_t[i] + x1 * cos_t[i];
+            }
+        }
+        let cache_at = |c: &[f32], kvh: usize, p: usize| -> Vec<f32> {
+            let base = kvh * max_positions * head_dim + p * head_dim;
+            c[base..base + head_dim].to_vec()
+        };
+        let mut ctx = vec![0.0f32; q_dim];
+        for h in 0..n_heads {
+            let kvh = h / group;
+            let qh = &q[h * head_dim..(h + 1) * head_dim];
+            let mut scores = Vec::new();
+            for p in window_start..filled {
+                let kp = cache_at(&cache_k_init, kvh, p);
+                scores.push(scale * qh.iter().zip(&kp).map(|(a, b)| a * b).sum::<f32>());
+            }
+            let m = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut den = 0.0f32;
+            for s in &mut scores {
+                *s = (*s - m).exp();
+                den += *s;
+            }
+            for (idx, p) in (window_start..filled).enumerate() {
+                let vp = cache_at(&cache_v_init, kvh, p);
+                let w = scores[idx] / den;
+                for d in 0..head_dim {
+                    ctx[h * head_dim + d] += w * vp[d];
+                }
+            }
+        }
+        let on = rms(&matmul(&o_deq, &ctx), Some(&post_norm));
+        let want: Vec<f32> = h_in.iter().zip(&on).map(|(a, b)| a + b).collect();
+
+        let got = try_gemma4_attention(
+            &h_in,
+            &attn_norm,
+            &q_norm,
+            &k_norm,
+            &post_norm,
+            eps,
+            &q_wire,
+            &k_wire,
+            &v_wire,
+            &o_wire,
+            &cos_t,
+            &sin_t,
+            &cache_k_init,
+            &cache_v_init,
+            max_positions,
+            write_position,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            filled,
+            window_start,
+            scale,
+            false, // shared layer: read the source cache, no K/V projection
+        )
+        .expect("gemma4 shared attention");
         for (a, b) in got.iter().zip(&want) {
             assert!((a - b).abs() < 2.0e-2, "{a} != {b}");
         }
@@ -12054,6 +12231,7 @@ mod tests {
             filled,
             window_start,
             scale,
+            true, // owning layer
         )
         .expect("gemma4 layer");
         for (a, b) in got.iter().zip(&want) {
