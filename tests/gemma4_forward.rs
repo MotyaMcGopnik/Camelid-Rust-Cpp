@@ -16,7 +16,15 @@ use camelid::model::{Gemma4Binding, LlamaModelConfig};
 use camelid::tensor::TensorStore;
 
 const ORACLE_FIRST_TOKEN: u32 = 9079; // " Paris"
+// Prompt "The capital of France is" (6 tokens) + llama.cpp's greedy continuation.
+// Teacher-forcing this sequence proves multi-token generation: each position's
+// argmax must predict the next token (positions >= 5, the generated region).
 const PROMPT_TOKENS: &[u32] = &[2, 818, 5279, 529, 7001, 563];
+const FULL_SEQ: &[u32] = &[
+    2, 818, 5279, 529, 7001, 563, // prompt
+    9079, 236761, 108, 1018, 14977, 53121, 2900, 563, 506, 5279, 529, 7001, // continuation
+];
+const PROMPT_LEN: usize = 6;
 
 // --- f32 helpers -----------------------------------------------------------
 
@@ -98,7 +106,7 @@ fn gemma4_prefill_matches_oracle() {
     let kv_heads = config.attention_head_count_kv as usize; // 2
     let ple_dim = g.per_layer_input_dim as usize; // 256
     let eps = config.rms_norm_epsilon;
-    let seq = PROMPT_TOKENS.len();
+    let seq = FULL_SEQ.len();
     let embed_scale = (hidden as f32).sqrt();
     let ple_embed_scale = (ple_dim as f32).sqrt();
 
@@ -115,7 +123,7 @@ fn gemma4_prefill_matches_oracle() {
     // GGUF token_embd is token-major in raw element order (each token's `hidden`
     // values are contiguous), so index by element offset, not dequantize_row.
     let ple_total = n_layers * ple_dim;
-    let mut hs: Vec<Vec<f32>> = PROMPT_TOKENS
+    let mut hs: Vec<Vec<f32>> = FULL_SEQ
         .iter()
         .map(|&t| {
             let row = tok_blocks
@@ -127,7 +135,7 @@ fn gemma4_prefill_matches_oracle() {
 
     // --- per-layer input embeddings (PLE), token-identity component --------
     // per_layer_token_embd[token] is [n_layers * ple_dim], scaled by sqrt(ple_dim).
-    let token_identity: Vec<Vec<f32>> = PROMPT_TOKENS
+    let token_identity: Vec<Vec<f32>> = FULL_SEQ
         .iter()
         .map(|&t| {
             ple_blocks
@@ -373,52 +381,53 @@ fn gemma4_prefill_matches_oracle() {
         }
     }
 
-    // final norm + tied logits + softcap, last position
+    // final norm + tied logits, computed for every position (fast f32 matmul).
     let (out_norm_w, _) = load_f32(&store, &binding.output_norm.name);
-    let result_sum: f32 = (0..seq)
-        .map(|t| rms_norm(&hs[t], Some(&out_norm_w), eps).iter().sum::<f32>())
-        .sum();
-    eprintln!("result_norm sum = {result_sum:.4}  (llama.cpp ref = 85.58)");
-    let last = rms_norm(&hs[seq - 1], Some(&out_norm_w), eps);
-    // logits via tied token_embd rows (dequantize each row, dot with `last`)
     let vocab = config.vocab_size.unwrap() as usize;
     let cap = g.final_logit_softcapping.unwrap_or(0.0);
-    let mut logits: Vec<(usize, f32)> = Vec::with_capacity(vocab);
-    let mut oracle_logit = f32::MIN;
-    for v in 0..vocab {
-        let logit_row = tok_blocks
-            .dequantize_elements(v * hidden, hidden)
-            .expect("vocab row");
-        let mut logit: f32 = logit_row.iter().zip(&last).map(|(a, b)| a * b).sum();
-        if cap > 0.0 {
-            logit = cap * (logit / cap).tanh();
+    // Load the (tied) output embedding once as f32: [hidden, vocab] token-major,
+    // so row v = out_embd[v*hidden .. (v+1)*hidden].
+    let (out_embd, _) = load_f32(&store, &binding.output.name);
+    let argmax_at = |pos: usize| -> usize {
+        let last = rms_norm(&hs[pos], Some(&out_norm_w), eps);
+        let mut best = (0usize, f32::MIN);
+        for v in 0..vocab {
+            let row = &out_embd[v * hidden..(v + 1) * hidden];
+            let mut logit: f32 = row.iter().zip(&last).map(|(a, b)| a * b).sum();
+            if cap > 0.0 {
+                logit = cap * (logit / cap).tanh();
+            }
+            if logit > best.1 {
+                best = (v, logit);
+            }
         }
-        if v as u32 == ORACLE_FIRST_TOKEN {
-            oracle_logit = logit;
-        }
-        logits.push((v, logit));
+        best.0
+    };
+
+    // Teacher-forced greedy check: every position in the generated region must
+    // predict the next token of llama.cpp's greedy continuation.
+    eprintln!("teacher-forced next-token predictions (generated region):");
+    let mut all_match = true;
+    for pos in (PROMPT_LEN - 1)..(seq - 1) {
+        let pred = argmax_at(pos) as u32;
+        let want = FULL_SEQ[pos + 1];
+        let ok = pred == want;
+        all_match &= ok;
+        eprintln!("  pos {pos}: pred {pred} want {want} {}", if ok { "✅" } else { "❌" });
     }
-    logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    eprintln!("top-10 logits:");
-    for (rank, (v, l)) in logits.iter().take(10).enumerate() {
-        eprintln!("  #{rank}: token {v} logit {l:.4}");
-    }
-    let oracle_rank = logits.iter().position(|(v, _)| *v as u32 == ORACLE_FIRST_TOKEN).unwrap();
-    eprintln!("oracle token {ORACLE_FIRST_TOKEN} is at rank {oracle_rank} (logit {oracle_logit:.4})");
-    let best = logits[0];
-    eprintln!("argmax = {} (logit {:.4}); oracle = {ORACLE_FIRST_TOKEN}", best.0, best.1);
-    let matched = best.0 as u32 == ORACLE_FIRST_TOKEN;
-    eprintln!("RESULT: {}", if matched { "MATCH ✅" } else { "MISMATCH ❌" });
-    // Default run (all layers, no env overrides) must reproduce the llama.cpp
-    // greedy token. The env toggles (LAYERS/NO_PLE/NO_VNORM) are debug-only.
+    eprintln!(
+        "RESULT: {}",
+        if all_match { "ALL MATCH ✅ — Gemma 4 greedy generation reproduces llama.cpp" } else { "MISMATCH ❌" }
+    );
     if std::env::var("LAYERS").is_err()
         && std::env::var("NO_PLE").is_err()
         && std::env::var("NO_VNORM").is_err()
     {
         assert_eq!(
-            best.0 as u32, ORACLE_FIRST_TOKEN,
-            "gemma4 prefill argmax ({}) must match the llama.cpp oracle (9079 ' Paris')",
-            best.0
+            argmax_at(PROMPT_LEN - 1) as u32,
+            ORACLE_FIRST_TOKEN,
+            "first generated token must be the oracle 9079 ' Paris'"
         );
+        assert!(all_match, "gemma4 greedy continuation must match llama.cpp");
     }
 }
