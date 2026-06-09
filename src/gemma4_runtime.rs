@@ -14,7 +14,7 @@ use crate::gguf::{read_metadata, GgufTensorType};
 use crate::inference::gemma4::{gelu_tanh, soft_cap_in_place};
 use crate::inference::{q8_0_wire_row_dot, quantize_q8_0_blocks};
 use crate::model::{Gemma4Binding, Gemma4Metadata, LlamaModelConfig};
-use crate::tensor::{f16_bits_to_f32, TensorStore};
+use crate::tensor::{f16_bits_to_f32, Q8_0Block, TensorStore};
 use crate::tokenizer::Tokenizer;
 use crate::wire_mmap::GgufWireMmap;
 use crate::{BackendError, Result};
@@ -95,16 +95,22 @@ impl WireQ8 {
     /// the activation mirrors what llama.cpp does for Q8_0 matmuls, so the
     /// bit-against-llama.cpp parity in `tests/gemma4_forward.rs` is preserved.
     fn matvec(&self, in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
-        const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
         debug_assert_eq!(x.len(), in_dim);
         debug_assert_eq!(in_dim % Q8_VALUES_PER_BLOCK, 0, "matvec assumes block-aligned rows");
-        let blocks_per_row = in_dim / Q8_VALUES_PER_BLOCK;
-        let row_bytes = blocks_per_row * BB;
+        self.matvec_q(out_dim, &quantize_q8_0_blocks(x))
+    }
+
+    /// [`matvec`] against an activation already quantized to Q8 blocks. Lets a
+    /// caller that runs several projections off one activation (q/k/v share the
+    /// pre-attention norm; gate/up share the pre-FFN norm) quantize it a single
+    /// time instead of once per projection.
+    fn matvec_q(&self, out_dim: usize, xq: &[Q8_0Block]) -> Vec<f32> {
+        const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
+        let row_bytes = xq.len() * BB;
         let bytes = self.bytes();
-        let xq = quantize_q8_0_blocks(x);
         (0..out_dim)
             .into_par_iter()
-            .map(|o| q8_0_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], &xq))
+            .map(|o| q8_0_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq))
             .collect()
     }
 
@@ -339,7 +345,9 @@ impl Gemma4Runtime {
             let kv_dim = kv_heads * head_dim;
 
             let xn = rms_norm(&h, Some(&lw.attn_norm), eps);
-            let mut q = lw.attn_q.matvec(hidden, q_dim, &xn);
+            // q/k/v all project the same normed input — quantize it once.
+            let xnq = quantize_q8_0_blocks(&xn);
+            let mut q = lw.attn_q.matvec_q(q_dim, &xnq);
             for hh in 0..heads {
                 let s = &mut q[hh * head_dim..(hh + 1) * head_dim];
                 s.copy_from_slice(&rms_norm(s, Some(&lw.q_norm), eps));
@@ -347,8 +355,8 @@ impl Gemma4Runtime {
             apply_rope(&mut q, heads, head_dim, pos, theta);
 
             if l < self.first_kv_shared {
-                let mut k = lw.attn_k.matvec(hidden, kv_dim, &xn);
-                let mut v = lw.attn_v.matvec(hidden, kv_dim, &xn);
+                let mut k = lw.attn_k.matvec_q(kv_dim, &xnq);
+                let mut v = lw.attn_v.matvec_q(kv_dim, &xnq);
                 for hh in 0..kv_heads {
                     let s = &mut k[hh * head_dim..(hh + 1) * head_dim];
                     s.copy_from_slice(&rms_norm(s, Some(&lw.k_norm), eps));
@@ -398,8 +406,10 @@ impl Gemma4Runtime {
                 *a += b;
             }
             let xn = rms_norm(&h, Some(&lw.ffn_norm), eps);
-            let gate = lw.ffn_gate.matvec(hidden, ffn_dim, &xn);
-            let up = lw.ffn_up.matvec(hidden, ffn_dim, &xn);
+            // gate and up both project the same normed input — quantize it once.
+            let xnq = quantize_q8_0_blocks(&xn);
+            let gate = lw.ffn_gate.matvec_q(ffn_dim, &xnq);
+            let up = lw.ffn_up.matvec_q(ffn_dim, &xnq);
             let act: Vec<f32> = gate.iter().zip(&up).map(|(g, u)| gelu_tanh(*g) * u).collect();
             let down = lw.ffn_down.matvec(ffn_dim, hidden, &act);
             let dn = rms_norm(&down, Some(&lw.post_ffw_norm), eps);
