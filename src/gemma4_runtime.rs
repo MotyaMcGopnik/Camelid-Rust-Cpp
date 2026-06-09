@@ -589,15 +589,18 @@ pub struct Gemma4GpuRuntime {
     model: crate::metal::Gemma4ResidentModel,
     tokenizer: Tokenizer,
     g: Gemma4Metadata,
+    /// token_embd + per_layer_token_embd stay in the FILE-BACKED mmap (not owned RAM).
+    /// The 8GB layer weights are anonymous GPU WirePages; if these embeddings were also
+    /// owned/anonymous, the OS would swap the WirePages under 16GB pressure (no file
+    /// cache to evict) and the GPU forward would thrash. File-backed pages are evicted
+    /// (and cheaply re-read) instead — robust, at the cost of a cold-fault on the
+    /// per-token row gather.
     token_embd: WireQ8,
     per_layer_token_embd: Option<WireQ8>,
-    per_layer_model_proj: Option<Vec<f32>>,
-    per_layer_proj_norm: Option<Vec<f32>>,
     _mmap: Arc<GgufWireMmap>,
     hidden: usize,
     ple_dim: usize,
     n_layers: usize,
-    eps: f32,
 }
 
 #[cfg(target_os = "macos")]
@@ -613,8 +616,9 @@ impl Gemma4GpuRuntime {
         let binding = Gemma4Binding::bind(&gguf, &config)?;
         let store = TensorStore::open(path, &gguf);
         let tokenizer = Tokenizer::from_gguf(&gguf)?;
-        // The mmap backs token_embd + per_layer_token_embd (CPU gathers); the GPU layer
-        // weights are loaded separately as page-aligned WirePages for nocopy residency.
+        // The mmap backs token_embd + per_layer_token_embd (file-backed = evictable, so
+        // it never forces the anonymous GPU WirePages to swap). GPU layer weights load
+        // separately as page-aligned WirePages.
         let mmap = GgufWireMmap::map(path)?;
         let q8 = |name: &str| WireQ8::new(&store, &mmap, name);
         let f32t = |name: &str| -> Result<Vec<f32>> { Ok(store.load_cpu_f32(name)?.data) };
@@ -710,6 +714,23 @@ impl Gemma4GpuRuntime {
         )
         .ok_or_else(|| BackendError::UnsupportedModelArchitecture("Metal unavailable".into()))?;
 
+        let mut model = model;
+        let per_layer_model_proj = binding
+            .per_layer_model_proj
+            .as_ref()
+            .map(|d| f32t(&d.name))
+            .transpose()?;
+        let per_layer_proj_norm = binding
+            .per_layer_proj_norm
+            .as_ref()
+            .map(|d| f32t(&d.name))
+            .transpose()?;
+        // Move the per-token pli computation onto the GPU (folded-constant matvec +
+        // per-head norm + residual-add), eliminating the ~12ms/token CPU prep.
+        if let (Some(proj), Some(pn)) = (&per_layer_model_proj, &per_layer_proj_norm) {
+            model.set_pli(proj, pn, ple_dim);
+        }
+
         Ok(Self {
             model,
             tokenizer,
@@ -718,23 +739,12 @@ impl Gemma4GpuRuntime {
                 .as_ref()
                 .map(|d| q8(&d.name))
                 .transpose()?,
-            per_layer_model_proj: binding
-                .per_layer_model_proj
-                .as_ref()
-                .map(|d| f32t(&d.name))
-                .transpose()?,
-            per_layer_proj_norm: binding
-                .per_layer_proj_norm
-                .as_ref()
-                .map(|d| f32t(&d.name))
-                .transpose()?,
             token_embd,
             g,
             _mmap: mmap,
             hidden,
             ple_dim,
             n_layers,
-            eps,
         })
     }
 
@@ -756,32 +766,17 @@ impl Gemma4GpuRuntime {
             .iter()
             .map(|v| v * (hidden as f32).sqrt())
             .collect();
-        // Per-layer PLE input `pli` (same math as Gemma4Runtime::step).
-        let pli: Vec<Vec<f32>> = if let (Some(te), Some(proj), Some(pn)) = (
-            self.per_layer_token_embd.as_ref(),
-            self.per_layer_model_proj.as_ref(),
-            self.per_layer_proj_norm.as_ref(),
-        ) {
-            let ti = te.dequantize_elements(token as usize * ple_total, ple_total)?;
-            let ctx = f32_matvec(proj, hidden, ple_total, &h0);
-            let proj_scale = (hidden as f32).powf(-0.5);
-            let ple_embed_scale = (ple_dim as f32).sqrt();
-            (0..self.n_layers)
-                .map(|l| {
-                    let ctx_l: Vec<f32> = (0..ple_dim)
-                        .map(|d| ctx[l * ple_dim + d] * proj_scale)
-                        .collect();
-                    let ctx_n = rms_norm(&ctx_l, Some(pn), self.eps);
-                    (0..ple_dim)
-                        .map(|d| {
-                            (ctx_n[d] + ti[l * ple_dim + d] * ple_embed_scale)
-                                * std::f32::consts::FRAC_1_SQRT_2
-                        })
-                        .collect()
-                })
+        // PLE `pli` is computed ON the GPU (Gemma4ResidentModel::set_pli) — the CPU
+        // only gathers this token's per_layer_token_embd row, with the gemma constants
+        // (ple_dim^0.5 * FRAC_1_SQRT_2) folded in so the GPU just residual-adds it.
+        let ti: Vec<f32> = if let Some(te) = self.per_layer_token_embd.as_ref() {
+            let scale = (ple_dim as f32).sqrt() * std::f32::consts::FRAC_1_SQRT_2;
+            te.dequantize_elements(token as usize * ple_total, ple_total)?
+                .iter()
+                .map(|v| v * scale)
                 .collect()
         } else {
-            vec![Vec::new(); self.n_layers]
+            Vec::new()
         };
         // Per-layer RoPE tables (dual θ, per-type head_dim) + sliding window start.
         let win = self.g.sliding_window as usize;
@@ -805,7 +800,7 @@ impl Gemma4GpuRuntime {
                 crate::metal::Gemma4TokenLayerInput {
                     cos_t,
                     sin_t,
-                    pli: pli[l].clone(),
+                    pli: Vec::new(), // pli now computed on the GPU; not passed per-layer
                     window_start,
                 }
             })
@@ -814,7 +809,7 @@ impl Gemma4GpuRuntime {
         let t_gpu = std::time::Instant::now();
         let logits = self
             .model
-            .forward_token(&h0, &inputs, position)
+            .forward_token(&h0, &inputs, &ti, position)
             .ok_or_else(|| {
                 BackendError::UnsupportedModelArchitecture("gpu forward failed".into())
             })?;
@@ -867,7 +862,7 @@ impl Gemma4GpuRuntime {
                 GPU_US.load(Relaxed),
             );
             eprintln!(
-                "[gpu-timing] {n} forwards: prep avg {}us, gpu avg {}us (total {}us/fwd)",
+                "[gpu-timing] {n} forwards: cpu prep avg {}us, gpu avg {}us (total {}us/fwd)",
                 prep / n,
                 gpu / n,
                 (prep + gpu) / n

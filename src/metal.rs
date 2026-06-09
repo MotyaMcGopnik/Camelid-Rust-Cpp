@@ -5429,6 +5429,7 @@ pub fn try_gemma4_ple(
         b
     };
     let h_buf = mkf(h_in);
+    let pli_buf = mkf(pli_l);
     let ig = mkf(ple_inp_gate);
     let pj = mkf(ple_proj);
     let pn = mkf(post_norm);
@@ -5440,7 +5441,8 @@ pub fn try_gemma4_ple(
         k,
         &mut keep,
         &h_buf,
-        pli_l,
+        &pli_buf,
+        0,
         &ig,
         &pj,
         &pn,
@@ -5454,6 +5456,83 @@ pub fn try_gemma4_ple(
     cb.wait_until_completed();
     let mut out = vec![0.0f32; hidden];
     read_buffer_f32(&h_buf, &mut out);
+    drop(keep);
+    Some(out)
+}
+
+/// Standalone gemma4 per-token `pli` on the GPU (the folded
+/// [`encode_gemma4_pli`] path). Takes the RAW gemma tensors and folds the constants
+/// internally. `proj` is `[ple_total][hidden]` (per_layer_model_proj), `proj_norm`
+/// is `[ple_dim]`, `ti` is the `[ple_total]` per_layer_token_embd row for the token.
+/// Returns `pli` `[ple_total]`. For validating the GPU pli vs the CPU prep.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_pli(
+    h0: &[f32],
+    proj: &[f32],
+    proj_norm: &[f32],
+    ti: &[f32],
+    hidden: usize,
+    ple_dim: usize,
+    n_layers: usize,
+    eps: f32,
+) -> Option<Vec<f32>> {
+    let ple_total = n_layers * ple_dim;
+    if h0.len() != hidden
+        || proj.len() != ple_total * hidden
+        || proj_norm.len() != ple_dim
+        || ti.len() != ple_total
+    {
+        return None;
+    }
+    let frac = std::f32::consts::FRAC_1_SQRT_2;
+    let proj_scale = (hidden as f32).powf(-0.5);
+    let embed_scale = (ple_dim as f32).sqrt();
+    // Fold the constants into the resident inputs.
+    let proj_folded: Vec<f32> = proj.iter().map(|v| v * proj_scale).collect();
+    let projnorm_folded: Vec<f32> = proj_norm.iter().map(|v| v * frac).collect();
+    let ti_folded: Vec<f32> = ti.iter().map(|v| v * embed_scale * frac).collect();
+    let k = metal_linear_kernel()?;
+    let mkf = |v: &[f32]| {
+        let b = k
+            .device
+            .new_buffer((v.len() * 4) as u64, MTLResourceOptions::StorageModeShared);
+        write_buffer_f32(&b, v);
+        b
+    };
+    let h0_buf = mkf(h0);
+    let proj_buf = mkf(&proj_folded);
+    let projnorm_buf = mkf(&projnorm_folded);
+    let ti_buf = mkf(&ti_folded);
+    let z = vec![0.0f32; ple_total];
+    let ctx_buf = mkf(&z);
+    let ctx_n_buf = mkf(&z);
+    let pli_buf = mkf(&z);
+    let mut keep = Vec::new();
+    let cb = k.queue.new_command_buffer();
+    let e = cb.new_compute_command_encoder();
+    encode_gemma4_pli(
+        e,
+        k,
+        &mut keep,
+        &h0_buf,
+        &proj_buf,
+        &projnorm_buf,
+        &ti_buf,
+        &ctx_buf,
+        &ctx_n_buf,
+        &pli_buf,
+        hidden,
+        ple_total,
+        ple_dim,
+        n_layers,
+        eps,
+    );
+    e.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let mut out = vec![0.0f32; ple_total];
+    read_buffer_f32(&pli_buf, &mut out);
     drop(keep);
     Some(out)
 }
@@ -5523,6 +5602,22 @@ pub fn try_gemma4_head(
 /// [`Gemma4ResidentModel::forward_token`] runs the whole token graph in ONE command
 /// buffer with no per-token weight copy — unlike [`try_gemma4_forward`] (a stateless
 /// test helper that rebuilds the cache and re-copies the 0.7GB embedding every call).
+/// Resident state for computing the per-token PLE input `pli` ON the GPU (replacing
+/// the ~12ms/token CPU prep — a 110MB f32 matvec). `proj`/`projnorm` have the gemma
+/// constants folded in (proj * hidden^-0.5, proj_norm * FRAC_1_SQRT_2); `ti` is
+/// written per token (the per_layer_token_embd row * ple_dim^0.5 * FRAC_1_SQRT_2).
+#[cfg(target_os = "macos")]
+struct Gemma4PliResident {
+    proj: Buffer,
+    projnorm: Buffer,
+    ti: Buffer,
+    ctx: Buffer,
+    ctx_n: Buffer,
+    pli: Buffer,
+    ple_total: usize,
+    ple_dim: usize,
+}
+
 #[cfg(target_os = "macos")]
 pub struct Gemma4ResidentModel {
     layers: Vec<Gemma4ResidentLayer>,
@@ -5530,6 +5625,9 @@ pub struct Gemma4ResidentModel {
     /// Per-layer resident PLE matrix buffers (inp_gate, proj, post_norm), uploaded
     /// once so forward_token doesn't re-copy ~220MB of f32 matrices every token.
     ple_bufs: Vec<Option<(Buffer, Buffer, Buffer)>>,
+    /// Resident PLE `pli` computation (set via `set_pli`); when present, forward_token
+    /// computes `pli` on the GPU from the input embedding instead of on the CPU.
+    pli_res: Option<Gemma4PliResident>,
     owns_kv: Vec<bool>,
     kv_source: Vec<usize>,
     caches: Vec<Option<(Buffer, Buffer)>>,
@@ -5612,6 +5710,7 @@ impl Gemma4ResidentModel {
             layers,
             ple,
             ple_bufs,
+            pli_res: None,
             owns_kv,
             kv_source,
             caches,
@@ -5630,6 +5729,47 @@ impl Gemma4ResidentModel {
         })
     }
 
+    /// Enable on-GPU `pli` computation: uploads the (constant-folded) PLE projection
+    /// matrices once. After this, `forward_token` computes `pli` from the input
+    /// embedding on the GPU (passing `ti` per token) instead of relying on CPU prep.
+    /// `proj` = per_layer_model_proj `[ple_total][hidden]`, `proj_norm` = `[ple_dim]`.
+    pub fn set_pli(&mut self, proj: &[f32], proj_norm: &[f32], ple_dim: usize) -> bool {
+        let n_layers = self.layers.len();
+        let ple_total = n_layers * ple_dim;
+        if proj.len() != ple_total * self.hidden || proj_norm.len() != ple_dim {
+            return false;
+        }
+        let Some(k) = metal_linear_kernel() else {
+            return false;
+        };
+        let frac = std::f32::consts::FRAC_1_SQRT_2;
+        let proj_scale = (self.hidden as f32).powf(-0.5);
+        let proj_folded: Vec<f32> = proj.iter().map(|v| v * proj_scale).collect();
+        let projnorm_folded: Vec<f32> = proj_norm.iter().map(|v| v * frac).collect();
+        let up = |v: &[f32]| {
+            let b = k
+                .device
+                .new_buffer((v.len() * 4) as u64, MTLResourceOptions::StorageModeShared);
+            write_buffer_f32(&b, v);
+            b
+        };
+        let alloc = |n: usize| {
+            k.device
+                .new_buffer((n * 4) as u64, MTLResourceOptions::StorageModeShared)
+        };
+        self.pli_res = Some(Gemma4PliResident {
+            proj: up(&proj_folded),
+            projnorm: up(&projnorm_folded),
+            ti: alloc(ple_total),
+            ctx: alloc(ple_total),
+            ctx_n: alloc(ple_total),
+            pli: alloc(ple_total),
+            ple_total,
+            ple_dim,
+        });
+        true
+    }
+
     /// Decode one token at absolute `position`: writes `h0` (the position's scaled
     /// input embedding) into the resident hidden buffer, runs all layers (each scatters
     /// its K/V into the PERSISTENT cache at `position`) + PLE + head in ONE command
@@ -5639,6 +5779,7 @@ impl Gemma4ResidentModel {
         &self,
         h0: &[f32],
         inputs: &[Gemma4TokenLayerInput],
+        ti: &[f32],
         position: usize,
     ) -> Option<Vec<f32>> {
         let n = self.layers.len();
@@ -5651,6 +5792,30 @@ impl Gemma4ResidentModel {
         let mut keep = Vec::new();
         let cb = k.queue.new_command_buffer();
         let e = cb.new_compute_command_encoder();
+        // Compute this token's pli on the GPU (folded constants) before the layers.
+        if let Some(p) = &self.pli_res {
+            if ti.len() != p.ple_total {
+                return None;
+            }
+            write_buffer_f32(&p.ti, ti);
+            encode_gemma4_pli(
+                e,
+                k,
+                &mut keep,
+                &self.buf_a,
+                &p.proj,
+                &p.projnorm,
+                &p.ti,
+                &p.ctx,
+                &p.ctx_n,
+                &p.pli,
+                self.hidden,
+                p.ple_total,
+                p.ple_dim,
+                n,
+                self.eps,
+            );
+        }
         let mut from_a = true;
         for l in 0..n {
             let (in_buf, out_buf) = if from_a {
@@ -5684,20 +5849,23 @@ impl Gemma4ResidentModel {
                 self.scale,
                 self.owns_kv[l],
             );
-            if let (Some(p), Some((ig, pj, pn))) = (&self.ple[l], &self.ple_bufs[l]) {
+            if let (Some(p), Some((ig, pj, pn)), Some(pr)) =
+                (&self.ple[l], &self.ple_bufs[l], &self.pli_res)
+            {
                 encode_gemma4_ple(
                     e,
                     k,
                     &mut keep,
                     out_buf,
-                    &inp.pli,
+                    &pr.pli,
+                    l * pr.ple_dim,
                     ig,
                     pj,
                     pn,
                     p.output_scale,
                     self.eps,
                     self.hidden,
-                    inp.pli.len(),
+                    pr.ple_dim,
                 );
             }
             from_a = !from_a;
@@ -5724,83 +5892,6 @@ impl Gemma4ResidentModel {
         // of allocating ~hundreds of fresh Metal buffers (safe: the command buffer has
         // completed). Persistent weights/caches/token_embd are NOT in `keep`.
         pool_recycle(k, keep);
-        Some(out)
-    }
-
-    /// Debug: run only layers `[0..stop_after)` (+ their PLE) and read back the hidden
-    /// state. Used to binary-search a non-finite layer on the real model.
-    pub fn forward_hidden(
-        &self,
-        h0: &[f32],
-        inputs: &[Gemma4TokenLayerInput],
-        position: usize,
-        stop_after: usize,
-    ) -> Option<Vec<f32>> {
-        let n = stop_after.min(self.layers.len());
-        let k = metal_linear_kernel()?;
-        let filled = position + 1;
-        write_buffer_f32(&self.buf_a, h0);
-        let mut keep = Vec::new();
-        let cb = k.queue.new_command_buffer();
-        let e = cb.new_compute_command_encoder();
-        let mut from_a = true;
-        for l in 0..n {
-            let (in_buf, out_buf) = if from_a {
-                (&self.buf_a, &self.buf_b)
-            } else {
-                (&self.buf_b, &self.buf_a)
-            };
-            let src = if self.owns_kv[l] {
-                l
-            } else {
-                self.kv_source[l]
-            };
-            let (ck, cv) = self.caches[src].as_ref()?;
-            let inp = &inputs[l];
-            encode_gemma4_layer(
-                e,
-                k,
-                &mut keep,
-                &self.layers[l],
-                in_buf,
-                &self.mid,
-                out_buf,
-                &inp.cos_t,
-                &inp.sin_t,
-                ck,
-                cv,
-                self.max_positions,
-                position,
-                filled,
-                inp.window_start,
-                self.scale,
-                self.owns_kv[l],
-            );
-            if let (Some(p), Some((ig, pj, pn))) = (&self.ple[l], &self.ple_bufs[l]) {
-                encode_gemma4_ple(
-                    e,
-                    k,
-                    &mut keep,
-                    out_buf,
-                    &inp.pli,
-                    ig,
-                    pj,
-                    pn,
-                    p.output_scale,
-                    self.eps,
-                    self.hidden,
-                    inp.pli.len(),
-                );
-            }
-            from_a = !from_a;
-        }
-        let final_buf = if from_a { &self.buf_a } else { &self.buf_b };
-        e.end_encoding();
-        cb.commit();
-        cb.wait_until_completed();
-        let mut out = vec![0.0f32; self.hidden];
-        read_buffer_f32(final_buf, &mut out);
-        drop(keep);
         Some(out)
     }
 }
@@ -5941,12 +6032,14 @@ pub fn try_gemma4_forward(
                 b
             };
             let (ig, pj, pn) = (mkf(&p.inp_gate), mkf(&p.proj), mkf(&p.post_norm));
+            let pli_buf = mkf(&inp.pli);
             encode_gemma4_ple(
                 e,
                 k,
                 &mut keep,
                 out_buf,
-                &inp.pli,
+                &pli_buf,
+                0,
                 &ig,
                 &pj,
                 &pn,
@@ -5955,6 +6048,7 @@ pub fn try_gemma4_forward(
                 hidden,
                 inp.pli.len(),
             );
+            keep.push(pli_buf);
             keep.extend([ig, pj, pn]);
         }
         from_a = !from_a;
@@ -7578,7 +7672,8 @@ fn encode_gemma4_ple(
     k: &MetalLinearKernel,
     keep: &mut Vec<Buffer>,
     h_buf: &Buffer,
-    pli_l: &[f32],
+    pli_buf: &Buffer,
+    pli_offset: usize,
     inp_gate_w: &Buffer,
     proj_w: &Buffer,
     postnorm_w: &Buffer,
@@ -7589,9 +7684,8 @@ fn encode_gemma4_ple(
 ) {
     let nb = |bytes: u64| pool_get(k, bytes);
     let f32b = |n: usize| nb((n * 4) as u64);
-    // inp_gate_w / proj_w / postnorm_w are RESIDENT (uploaded once); only pli changes
-    // per token. Re-uploading the ~2.6MB PLE matrices every token was ~220MB/token.
-    let pli_buf = f32b(ple_dim);
+    // inp_gate_w / proj_w / postnorm_w are RESIDENT; `pli_buf` holds this token's pli
+    // (computed on the GPU by encode_gemma4_pli), read at `pli_offset` for this layer.
     let gate_buf = f32b(ple_dim);
     let gated_buf = f32b(ple_dim);
     let proj_out = f32b(hidden);
@@ -7604,7 +7698,6 @@ fn encode_gemma4_ple(
     let resid_n = nb(4);
     let scale_scalar = nb(8);
 
-    write_buffer_f32(&pli_buf, pli_l);
     unsafe {
         let set2 = |buf: &Buffer, a: u32, b: u32| {
             let p = buf.contents() as *mut u32;
@@ -7624,15 +7717,13 @@ fn encode_gemma4_ple(
     }
 
     encode_linear_transposed_f32(e, k, h_buf, inp_gate_w, &gate_buf, &ig_scalar, ple_dim);
-    encode_binary(
-        e,
-        &k.gelu_mul_pipeline,
-        &gate_buf,
-        &pli_buf,
-        &gated_buf,
-        &geglu_n,
-        ple_dim,
-    );
+    // gelu(gate) * pli — pli read from the resident pli_buf at this layer's offset.
+    e.set_compute_pipeline_state(&k.gelu_mul_pipeline);
+    e.set_buffer(0, Some(&gate_buf), 0);
+    e.set_buffer(1, Some(pli_buf), (pli_offset * 4) as u64);
+    e.set_buffer(2, Some(&gated_buf), 0);
+    e.set_buffer(3, Some(&geglu_n), 0);
+    dispatch_1d(e, &k.gelu_mul_pipeline, ple_dim);
     encode_linear_transposed_f32(e, k, &gated_buf, proj_w, &proj_out, &pj_scalar, hidden);
     encode_rms_norm_f32(e, k, &proj_out, postnorm_w, &pnv_buf, &rms_scalar);
     encode_binary(
@@ -7647,7 +7738,6 @@ fn encode_gemma4_ple(
     encode_scale_f32(e, k, &summed_buf, h_buf, &scale_scalar, hidden);
 
     keep.extend([
-        pli_buf,
         gate_buf,
         gated_buf,
         proj_out,
@@ -7660,6 +7750,62 @@ fn encode_gemma4_ple(
         resid_n,
         scale_scalar,
     ]);
+}
+
+/// Encode the per-token Per-Layer-Embedding input `pli` ([n_layers][ple_dim],
+/// flattened to `pli_buf`) into the encoder — the GPU version of the CPU pli prep,
+/// which is the single biggest per-token CPU cost (a 110MB f32 matvec). The gemma
+/// constants are folded into the resident inputs so no new kernel is needed:
+///   `proj_buf`  = per_layer_model_proj * hidden^-0.5   (resident)
+///   `projnorm_buf` = per_layer_proj_norm * FRAC_1_SQRT_2 (resident)
+///   `ti_buf`    = per_layer_token_embd[token] * (ple_dim^0.5 * FRAC_1_SQRT_2) (per token)
+/// then `pli = residual_add( rms_norm_per_head(proj_buf · h0, projnorm_buf), ti )`.
+/// `ctx_buf`/`ctx_n_buf` are `ple_total`-sized scratch (reused across tokens).
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn encode_gemma4_pli(
+    e: &metal::ComputeCommandEncoderRef,
+    k: &MetalLinearKernel,
+    keep: &mut Vec<Buffer>,
+    h0_buf: &Buffer,
+    proj_buf: &Buffer,
+    projnorm_buf: &Buffer,
+    ti_buf: &Buffer,
+    ctx_buf: &Buffer,
+    ctx_n_buf: &Buffer,
+    pli_buf: &Buffer,
+    hidden: usize,
+    ple_total: usize,
+    ple_dim: usize,
+    n_layers: usize,
+    eps: f32,
+) {
+    let nb = |bytes: u64| pool_get(k, bytes);
+    let ctx_scalar = nb(8); // [rows=hidden, cols=ple_total] for the transposed GEMV
+    let perhead = nb(12); // [head_dim=ple_dim, eps, use_weight=1]
+    let resid_n = nb(4);
+    unsafe {
+        let p = ctx_scalar.contents() as *mut u32;
+        *p = hidden as u32;
+        *p.add(1) = ple_total as u32;
+        let h = perhead.contents() as *mut u8;
+        *(h as *mut u32) = ple_dim as u32;
+        *(h.add(4) as *mut f32) = eps;
+        *(h.add(8) as *mut u32) = 1;
+        *(resid_n.contents() as *mut u32) = ple_total as u32;
+    }
+    encode_linear_transposed_f32(e, k, h0_buf, proj_buf, ctx_buf, &ctx_scalar, ple_total);
+    encode_rms_norm_per_head(e, k, ctx_buf, projnorm_buf, ctx_n_buf, &perhead, n_layers);
+    encode_binary(
+        e,
+        &k.residual_add_pipeline,
+        ctx_n_buf,
+        ti_buf,
+        pli_buf,
+        &resid_n,
+        ple_total,
+    );
+    keep.extend([ctx_scalar, perhead, resid_n]);
 }
 
 /// `output = cap * tanh(input / cap)` into the encoder (in-place safe). `scalar` =
@@ -11299,6 +11445,21 @@ pub fn try_gemma4_ple(
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
+pub fn try_gemma4_pli(
+    _h0: &[f32],
+    _proj: &[f32],
+    _proj_norm: &[f32],
+    _ti: &[f32],
+    _hidden: usize,
+    _ple_dim: usize,
+    _n_layers: usize,
+    _eps: f32,
+) -> Option<Vec<f32>> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn try_gemma4_head(
     _h_in: &[f32],
     _output_norm: &[f32],
@@ -11357,21 +11518,16 @@ impl Gemma4ResidentModel {
         None
     }
 
+    pub fn set_pli(&mut self, _proj: &[f32], _proj_norm: &[f32], _ple_dim: usize) -> bool {
+        false
+    }
+
     pub fn forward_token(
         &self,
         _h0: &[f32],
         _inputs: &[Gemma4TokenLayerInput],
+        _ti: &[f32],
         _position: usize,
-    ) -> Option<Vec<f32>> {
-        None
-    }
-
-    pub fn forward_hidden(
-        &self,
-        _h0: &[f32],
-        _inputs: &[Gemma4TokenLayerInput],
-        _position: usize,
-        _stop_after: usize,
     ) -> Option<Vec<f32>> {
         None
     }
@@ -13611,6 +13767,62 @@ mod tests {
         }
     }
 
+    // GPU pli (the folded encode_gemma4_pli) must match the CPU pli prep
+    // (Gemma4Runtime::step / Gemma4GpuRuntime::forward).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_pli_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        let hidden = 128usize;
+        let ple_dim = 64usize;
+        let n_layers = 3usize;
+        let ple_total = n_layers * ple_dim;
+        let eps = 1.0e-6f32;
+        let h0: Vec<f32> = (0..hidden)
+            .map(|i| ((i as f32 % 13.0) - 6.0) * 0.1)
+            .collect();
+        let proj: Vec<f32> = (0..ple_total * hidden)
+            .map(|n| (((n % 29) as f32) - 14.0) * 0.01)
+            .collect();
+        let proj_norm: Vec<f32> = (0..ple_dim)
+            .map(|i| 0.8 + (i as f32 % 5.0) * 0.05)
+            .collect();
+        let ti: Vec<f32> = (0..ple_total)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.07)
+            .collect();
+
+        // CPU reference (step() math).
+        let proj_scale = (hidden as f32).powf(-0.5);
+        let embed_scale = (ple_dim as f32).sqrt();
+        let frac = std::f32::consts::FRAC_1_SQRT_2;
+        let mut want = vec![0.0f32; ple_total];
+        let ctx: Vec<f32> = (0..ple_total)
+            .map(|o| {
+                (0..hidden)
+                    .map(|i| proj[o * hidden + i] * h0[i])
+                    .sum::<f32>()
+            })
+            .collect();
+        for l in 0..n_layers {
+            let ctx_l: Vec<f32> = (0..ple_dim)
+                .map(|d| ctx[l * ple_dim + d] * proj_scale)
+                .collect();
+            let mss = ctx_l.iter().map(|v| v * v).sum::<f32>() / ple_dim as f32;
+            let inv = (mss + eps).powf(-0.5);
+            for d in 0..ple_dim {
+                want[l * ple_dim + d] =
+                    (ctx_l[d] * inv * proj_norm[d] + ti[l * ple_dim + d] * embed_scale) * frac;
+            }
+        }
+        let got = try_gemma4_pli(&h0, &proj, &proj_norm, &ti, hidden, ple_dim, n_layers, eps)
+            .expect("gemma4 pli");
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 1.0e-3, "{a} != {b}");
+        }
+    }
+
     // Gemma's logits head on GPU (rms_norm(output_norm) -> tied token_embd GEMV ->
     // soft_cap) must match the CPU reference, and the argmax (greedy next token) must
     // agree.
@@ -14166,9 +14378,12 @@ mod tests {
         let zeros = vec![0.0f32; cache_len];
 
         // Stateless oracle (validated): position 0, filled 1, fresh cache.
+        // PLE is exercised separately (metal_gemma4_ple/_pli); here both paths run
+        // PLE-free so forward_token (GPU pli) and try_gemma4_forward stay comparable.
+        let _ = mk_ple(0);
         let want = try_gemma4_forward(
             &[build_layer(0), build_layer(50)],
-            &[Some(mk_ple(2)), Some(mk_ple(7))],
+            &[None, None],
             &[true, true],
             &[0, 1],
             &[mk_input(0), mk_input(4)],
@@ -14190,7 +14405,7 @@ mod tests {
         // Stateful model (fresh layers from the same bytes), token at position 0.
         let model = Gemma4ResidentModel::new(
             vec![build_layer(0), build_layer(50)],
-            vec![Some(mk_ple(2)), Some(mk_ple(7))],
+            vec![None, None],
             vec![true, true],
             vec![0, 1],
             &embd_wire,
@@ -14204,7 +14419,7 @@ mod tests {
         )
         .expect("model");
         let got = model
-            .forward_token(&h0, &[mk_input(0), mk_input(4)], 0)
+            .forward_token(&h0, &[mk_input(0), mk_input(4)], &[], 0)
             .expect("forward_token");
 
         for (a, b) in got.iter().zip(&want) {
