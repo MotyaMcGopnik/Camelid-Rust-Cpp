@@ -12,7 +12,10 @@
 
 use crate::gguf::{read_metadata, GgufTensorType};
 use crate::inference::gemma4::{gelu_tanh, soft_cap_in_place};
-use crate::inference::{q8_0_wire_row_dot, quantize_q8_0_blocks};
+use crate::inference::{
+    q4_0_wire_block_dequant, q4_0_wire_row_dot, q6_k_wire_block_dequant, q6_k_wire_row_dot,
+    q8_0_wire_row_dot, quantize_q8_0_blocks, quantize_q8_k_blocks,
+};
 use crate::model::{Gemma4Binding, Gemma4Metadata, LlamaModelConfig};
 use crate::tensor::{f16_bits_to_f32, Q8_0Block, TensorStore};
 use crate::tokenizer::Tokenizer;
@@ -27,38 +30,72 @@ use std::sync::Arc;
 const Q8_VALUES_PER_BLOCK: usize = 32;
 const Q8_WIRE_BYTES_PER_BLOCK: usize = 34;
 
-/// A Q8_0 weight read straight from the memory-mapped GGUF — no eager decode and
-/// no second resident copy. The mmap pages fault in on first touch (during the
-/// first generation) and stay in the OS page cache after, so `load()` is ~instant
-/// instead of spending ~240s materializing 8GB of `Q8_0Block` structs up front.
-/// Dequant happens inline in the matmul, exactly where it happened before — only
-/// the f16 scale is now decoded per block per pass (negligible next to the 32
-/// mul-adds it scales).
-struct WireQ8 {
+/// The wire quant formats the gemma4 CPU runtime reads in place. Q8_0 is the
+/// proven baseline lane; Q4_0 and Q6_K are the QAT-row formats (all the QAT
+/// linear weights are Q4_0; the tied token/per-layer embeddings are Q6_K).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WireFormat {
+    Q8_0,
+    Q4_0,
+    Q6K,
+}
+
+impl WireFormat {
+    #[inline]
+    fn values_per_block(self) -> usize {
+        match self {
+            WireFormat::Q8_0 | WireFormat::Q4_0 => 32,
+            WireFormat::Q6K => crate::inference::Q6_K_VALUES_PER_BLOCK,
+        }
+    }
+
+    #[inline]
+    fn bytes_per_block(self) -> usize {
+        match self {
+            WireFormat::Q8_0 => Q8_WIRE_BYTES_PER_BLOCK,
+            WireFormat::Q4_0 => crate::inference::Q4_0_WIRE_BYTES_PER_BLOCK,
+            WireFormat::Q6K => crate::inference::Q6_K_WIRE_BYTES_PER_BLOCK,
+        }
+    }
+}
+
+/// A quantized weight read straight from the memory-mapped GGUF — no eager
+/// decode and no second resident copy. The mmap pages fault in on first touch
+/// (during the first generation) and stay in the OS page cache after, so
+/// `load()` is ~instant instead of spending ~240s materializing 8GB of decoded
+/// blocks up front. Dequant happens inline in the matmul — only the block
+/// scale is decoded per block per pass (negligible next to the mul-adds it
+/// scales). Any tensor type outside [`WireFormat`] fails closed at load.
+struct WireQuant {
     mmap: Arc<GgufWireMmap>,
     offset: u64,
     element_count: usize,
+    format: WireFormat,
 }
 
-impl WireQ8 {
+impl WireQuant {
     fn new(store: &TensorStore, mmap: &Arc<GgufWireMmap>, name: &str) -> Result<Self> {
         let desc = store.descriptor(name)?;
-        if desc.tensor_type != GgufTensorType::Q8_0 {
-            return Err(BackendError::UnsupportedTensorType(format!(
-                "tensor {name} is {:?}; gemma4 wire load requires Q8_0",
-                desc.tensor_type
-            )));
-        }
+        let format = match desc.tensor_type {
+            GgufTensorType::Q8_0 => WireFormat::Q8_0,
+            GgufTensorType::Q4_0 => WireFormat::Q4_0,
+            GgufTensorType::Q6K => WireFormat::Q6K,
+            other => {
+                return Err(BackendError::UnsupportedTensorType(format!(
+                    "tensor {name} is {other:?}; gemma4 wire load supports Q8_0, Q4_0, and Q6_K"
+                )))
+            }
+        };
         let element_count = desc.dimensions.iter().product::<u64>() as usize;
-        if !element_count.is_multiple_of(Q8_VALUES_PER_BLOCK) {
+        if !element_count.is_multiple_of(format.values_per_block()) {
             return Err(BackendError::InvalidTensorData(format!(
                 "tensor {name} element count {element_count} is not block-aligned"
             )));
         }
-        let byte_len = element_count / Q8_VALUES_PER_BLOCK * Q8_WIRE_BYTES_PER_BLOCK;
+        let byte_len = element_count / format.values_per_block() * format.bytes_per_block();
         if desc.n_bytes as usize != byte_len {
             return Err(BackendError::InvalidTensorData(format!(
-                "tensor {name} q8_0 byte size {} != expected {byte_len}",
+                "tensor {name} {format:?} byte size {} != expected {byte_len}",
                 desc.n_bytes
             )));
         }
@@ -69,16 +106,18 @@ impl WireQ8 {
             mmap: mmap.clone(),
             offset: desc.absolute_offset,
             element_count,
+            format,
         })
     }
 
     /// The tensor's full wire-byte slice. Bounds were validated in `new`.
     #[inline]
     fn bytes(&self) -> &[u8] {
-        let byte_len = self.element_count / Q8_VALUES_PER_BLOCK * Q8_WIRE_BYTES_PER_BLOCK;
+        let byte_len =
+            self.element_count / self.format.values_per_block() * self.format.bytes_per_block();
         self.mmap
             .bytes(self.offset, byte_len)
-            .expect("wire q8 range validated at load")
+            .expect("wire quant range validated at load")
     }
 
     #[inline]
@@ -97,11 +136,16 @@ impl WireQ8 {
     fn matvec(&self, in_dim: usize, out_dim: usize, x: &[f32]) -> Vec<f32> {
         debug_assert_eq!(x.len(), in_dim);
         debug_assert_eq!(
-            in_dim % Q8_VALUES_PER_BLOCK,
+            in_dim % self.format.values_per_block(),
             0,
             "matvec assumes block-aligned rows"
         );
-        self.matvec_q(out_dim, &quantize_q8_0_blocks(x))
+        match self.format {
+            WireFormat::Q8_0 | WireFormat::Q4_0 => self.matvec_q(out_dim, &quantize_q8_0_blocks(x)),
+            // Q6_K rows dot against Q8_K activations (the reference's K-quant
+            // activation format) — used by the QAT tied embedding head.
+            WireFormat::Q6K => self.matvec_q8k(out_dim, &quantize_q8_k_blocks(x)),
+        }
     }
 
     /// [`matvec`] against an activation already quantized to Q8 blocks. Lets a
@@ -115,9 +159,32 @@ impl WireQ8 {
     /// itself. Each row's dot is unchanged and rows land at fixed indices, so
     /// the result is bit-identical to the per-row version (greedy parity safe).
     fn matvec_q(&self, out_dim: usize, xq: &[Q8_0Block]) -> Vec<f32> {
-        const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
         const ROW_CHUNK: usize = 64;
-        let row_bytes = xq.len() * BB;
+        let row_bytes = xq.len() * self.format.bytes_per_block();
+        let bytes = self.bytes();
+        let row_dot: fn(&[u8], &[Q8_0Block]) -> f32 = match self.format {
+            WireFormat::Q8_0 => q8_0_wire_row_dot,
+            WireFormat::Q4_0 => q4_0_wire_row_dot,
+            WireFormat::Q6K => unreachable!("Q6_K matvec routes through matvec_q8k"),
+        };
+        let mut out = vec![0f32; out_dim];
+        out.par_chunks_mut(ROW_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, dst)| {
+                let base = chunk_idx * ROW_CHUNK;
+                for (i, d) in dst.iter_mut().enumerate() {
+                    let o = base + i;
+                    *d = row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq);
+                }
+            });
+        out
+    }
+
+    /// [`matvec`] for Q6_K rows against a Q8_K-quantized activation. Same fixed
+    /// row chunking as [`Self::matvec_q`] (greedy-parity-safe ordering).
+    fn matvec_q8k(&self, out_dim: usize, xq: &[crate::inference::Q8KBlock]) -> Vec<f32> {
+        const ROW_CHUNK: usize = 64;
+        let row_bytes = xq.len() * self.format.bytes_per_block();
         let bytes = self.bytes();
         let mut out = vec![0f32; out_dim];
         out.par_chunks_mut(ROW_CHUNK)
@@ -126,7 +193,7 @@ impl WireQ8 {
                 let base = chunk_idx * ROW_CHUNK;
                 for (i, d) in dst.iter_mut().enumerate() {
                     let o = base + i;
-                    *d = q8_0_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq);
+                    *d = q6_k_wire_row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq);
                 }
             });
         out
@@ -135,25 +202,54 @@ impl WireQ8 {
     /// Dequantize a contiguous element range [start, start+len) — used for
     /// row-major embedding lookups into vocab-major Q8 tables.
     fn dequantize_elements(&self, start: usize, len: usize) -> Result<Vec<f32>> {
-        const BV: usize = Q8_VALUES_PER_BLOCK;
-        const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
         let end = start.checked_add(len).ok_or_else(|| {
-            BackendError::InvalidTensorData("q8_0 dequant range overflows usize".into())
+            BackendError::InvalidTensorData("wire dequant range overflows usize".into())
         })?;
         if end > self.element_count {
             return Err(BackendError::RuntimeShapeMismatch(format!(
-                "q8_0 dequant range {start}..{end} exceeds element count {}",
+                "wire dequant range {start}..{end} exceeds element count {}",
                 self.element_count
             )));
         }
         let bytes = self.bytes();
         let mut out = Vec::with_capacity(len);
-        for e in start..end {
-            let block = e / BV;
-            let within = e % BV;
-            let scale = Self::block_scale(bytes, block);
-            let q = bytes[block * BB + 2 + within] as i8;
-            out.push(scale * q as f32);
+        match self.format {
+            WireFormat::Q8_0 => {
+                const BV: usize = Q8_VALUES_PER_BLOCK;
+                const BB: usize = Q8_WIRE_BYTES_PER_BLOCK;
+                for e in start..end {
+                    let block = e / BV;
+                    let within = e % BV;
+                    let scale = Self::block_scale(bytes, block);
+                    let q = bytes[block * BB + 2 + within] as i8;
+                    out.push(scale * q as f32);
+                }
+            }
+            WireFormat::Q4_0 => {
+                const BB: usize = crate::inference::Q4_0_WIRE_BYTES_PER_BLOCK;
+                let mut block = usize::MAX;
+                let mut decoded = [0f32; 32];
+                for e in start..end {
+                    if e / 32 != block {
+                        block = e / 32;
+                        decoded = q4_0_wire_block_dequant(&bytes[block * BB..(block + 1) * BB]);
+                    }
+                    out.push(decoded[e % 32]);
+                }
+            }
+            WireFormat::Q6K => {
+                const BV: usize = crate::inference::Q6_K_VALUES_PER_BLOCK;
+                const BB: usize = crate::inference::Q6_K_WIRE_BYTES_PER_BLOCK;
+                let mut block = usize::MAX;
+                let mut decoded = [0f32; BV];
+                for e in start..end {
+                    if e / BV != block {
+                        block = e / BV;
+                        decoded = q6_k_wire_block_dequant(&bytes[block * BB..(block + 1) * BB]);
+                    }
+                    out.push(decoded[e % BV]);
+                }
+            }
         }
         Ok(out)
     }
@@ -245,17 +341,17 @@ fn apply_rope(
 
 struct LayerWeights {
     attn_norm: Vec<f32>,
-    attn_q: WireQ8,
-    attn_k: WireQ8,
-    attn_v: Option<WireQ8>, // None on V-less layers (V = K projection)
-    attn_output: WireQ8,
+    attn_q: WireQuant,
+    attn_k: WireQuant,
+    attn_v: Option<WireQuant>, // None on V-less layers (V = K projection)
+    attn_output: WireQuant,
     q_norm: Vec<f32>,
     k_norm: Vec<f32>,
     post_attn_norm: Vec<f32>,
     ffn_norm: Vec<f32>,
-    ffn_gate: WireQ8,
-    ffn_up: WireQ8,
-    ffn_down: WireQ8,
+    ffn_gate: WireQuant,
+    ffn_up: WireQuant,
+    ffn_down: WireQuant,
     post_ffw_norm: Vec<f32>,
     // PLE (E-series); inp_gate/proj are small F32 matrices in the GGUF.
     post_norm: Option<Vec<f32>>,
@@ -305,8 +401,8 @@ pub struct Gemma4Runtime {
     /// Global index of the first locally-loaded layer (0 on a full runtime).
     first_layer: usize,
     layers: Vec<LayerWeights>,
-    token_embd: WireQ8,
-    per_layer_token_embd: Option<WireQ8>,
+    token_embd: WireQuant,
+    per_layer_token_embd: Option<WireQuant>,
     per_layer_model_proj: Option<Vec<f32>>, // BF16 -> f32
     per_layer_proj_norm: Option<Vec<f32>>,
     output_norm: Vec<f32>,
@@ -375,7 +471,7 @@ impl Gemma4Runtime {
         // pay the whole cold-fault cost serially.
         let mmap = GgufWireMmap::map(path)?;
         mmap.advise_willneed();
-        let q8 = |name: &str| WireQ8::new(&store, &mmap, name);
+        let q8 = |name: &str| WireQuant::new(&store, &mmap, name);
         let f32t = |name: &str| -> Result<Vec<f32>> { Ok(store.load_cpu_f32(name)?.data) };
 
         let mut layers = Vec::with_capacity(range.len());
@@ -893,8 +989,8 @@ pub struct Gemma4GpuRuntime {
     /// cache to evict) and the GPU forward would thrash. File-backed pages are evicted
     /// (and cheaply re-read) instead — robust, at the cost of a cold-fault on the
     /// per-token row gather.
-    token_embd: WireQ8,
-    per_layer_token_embd: Option<WireQ8>,
+    token_embd: WireQuant,
+    per_layer_token_embd: Option<WireQuant>,
     /// GGUF `rope_freqs.weight` factors — applied on FULL attention layers'
     /// cos/sin tables only (the reference's proportional rope).
     rope_factors: Option<Vec<f32>>,
@@ -916,12 +1012,27 @@ impl Gemma4GpuRuntime {
         })?;
         let binding = Gemma4Binding::bind(&gguf, &config)?;
         let store = TensorStore::open(path, &gguf);
+        // The GPU-resident kernels read 34-byte Q8_0 wire blocks in place; QAT
+        // rows (Q4_0 weights, Q6_K embeddings) fail closed here until GPU
+        // Q4_0/Q6_K kernels exist. CPU is the supported lane for those rows.
+        for name in [
+            &binding.token_embedding.name,
+            &binding.layers[0].attn_q.name,
+        ] {
+            let t = store.descriptor(name)?.tensor_type;
+            if t != GgufTensorType::Q8_0 {
+                return Err(BackendError::UnsupportedTensorType(format!(
+                    "gemma4 GPU runtime requires Q8_0 weights; tensor {name} is {t:?} \
+                     (QAT Q4_0/Q6_K rows are CPU-only until GPU kernels land)"
+                )));
+            }
+        }
         let tokenizer = Tokenizer::from_gguf(&gguf)?;
         // The mmap backs token_embd + per_layer_token_embd (file-backed = evictable, so
         // it never forces the anonymous GPU WirePages to swap). GPU layer weights load
         // separately as page-aligned WirePages.
         let mmap = GgufWireMmap::map(path)?;
-        let q8 = |name: &str| WireQ8::new(&store, &mmap, name);
+        let q8 = |name: &str| WireQuant::new(&store, &mmap, name);
         let f32t = |name: &str| -> Result<Vec<f32>> { Ok(store.load_cpu_f32(name)?.data) };
 
         let hidden = config.embedding_length as usize;
