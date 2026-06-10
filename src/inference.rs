@@ -13090,7 +13090,6 @@ unsafe fn q8_0_wire_row_dot_neon_dotprod(weight_wire: &[u8], input: &[Q8_0Block]
 /// Bytes per Q4_0 wire block: little-endian f16 scale + 16 nibble bytes
 /// packing 32 weights (byte j holds weight j in its low nibble and weight
 /// j+16 in its high nibble; both nibbles are unsigned with a -8 bias).
-#[allow(dead_code)]
 pub(crate) const Q4_0_WIRE_BYTES_PER_BLOCK: usize = 18;
 
 /// Q4_0×Q8_0 dot of one weight row read straight from the GGUF wire bytes
@@ -13099,7 +13098,6 @@ pub(crate) const Q4_0_WIRE_BYTES_PER_BLOCK: usize = 18;
 /// sequential `int_sum * w_scale * x_scale` f32 accumulate — the gemma4 QAT
 /// (Q4_0) lane shares the comparator-pinning doctrine of the Q8 lane rather
 /// than mimicking any particular reference SIMD reduction shape.
-#[allow(dead_code)]
 pub(crate) fn q4_0_wire_row_dot(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
@@ -13114,7 +13112,6 @@ pub(crate) fn q4_0_wire_row_dot(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 
 
 /// Portable scalar reference for [`q4_0_wire_row_dot`] (non-aarch64, or when
 /// dotprod is disabled via `CAMELID_AARCH64_DOTPROD=0`).
-#[allow(dead_code)]
 pub(crate) fn q4_0_wire_row_dot_scalar(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 {
     const WIRE: usize = Q4_0_WIRE_BYTES_PER_BLOCK;
     let mut total = 0.0_f32;
@@ -13139,7 +13136,6 @@ pub(crate) fn q4_0_wire_row_dot_scalar(weight_wire: &[u8], input: &[Q8_0Block]) 
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[target_feature(enable = "dotprod")]
-#[allow(dead_code)]
 unsafe fn q4_0_wire_row_dot_neon_dotprod(weight_wire: &[u8], input: &[Q8_0Block]) -> f32 {
     use std::arch::aarch64::{
         vandq_u8, vdupq_n_s32, vdupq_n_s8, vdupq_n_u8, vld1q_s8, vld1q_u8, vreinterpretq_s8_u8,
@@ -13194,15 +13190,12 @@ unsafe fn q4_0_wire_row_dot_neon_dotprod(weight_wire: &[u8], input: &[Q8_0Block]
 }
 
 /// Values per Q6_K superblock.
-#[allow(dead_code)]
 pub(crate) const Q6_K_VALUES_PER_BLOCK: usize = 256;
 /// Bytes per Q6_K wire superblock: ql[128] + qh[64] + scales(i8)[16] + d(f16).
-#[allow(dead_code)]
 pub(crate) const Q6_K_WIRE_BYTES_PER_BLOCK: usize = 210;
 
 /// A 256-value Q8_K activation superblock (the reference's activation format
 /// for K-quant dots). `bsums` are omitted — the q6_K dot does not read them.
-#[allow(dead_code)]
 pub(crate) struct Q8KBlock {
     pub d: f32,
     pub qs: [i8; Q6_K_VALUES_PER_BLOCK],
@@ -13213,7 +13206,6 @@ pub(crate) struct Q8KBlock {
 /// matching its quantizer bit-for-bit (plain `round()` half-away-from-zero
 /// would differ on exact .5 ties).
 #[inline]
-#[allow(dead_code)]
 fn nearest_int_reference(fval: f32) -> i32 {
     debug_assert!(fval.abs() <= 4_194_303.0);
     let val = fval + 12_582_912.0;
@@ -13223,7 +13215,6 @@ fn nearest_int_reference(fval: f32) -> i32 {
 /// Quantize an activation row to Q8_K superblocks, mirroring the reference
 /// `quantize_row_q8_K_ref`: iscale = -127/max (signed max, not amax), values
 /// rounded with [`nearest_int_reference`] and clamped to 127, d = 1/iscale.
-#[allow(dead_code)]
 pub(crate) fn quantize_q8_k_blocks(input: &[f32]) -> Vec<Q8KBlock> {
     const BV: usize = Q6_K_VALUES_PER_BLOCK;
     debug_assert!(input.len().is_multiple_of(BV));
@@ -13260,7 +13251,6 @@ pub(crate) fn quantize_q8_k_blocks(input: &[f32]) -> Vec<Q8KBlock> {
 /// Dequantize a single Q6_K wire superblock (210 bytes) into 256 f32 values,
 /// mirroring the reference `dequantize_row_q6_K` exactly (nibble/2-bit
 /// recombination order, per-16 i8 scales, f16 super-scale).
-#[allow(dead_code)]
 pub(crate) fn q6_k_wire_block_dequant(block_bytes: &[u8]) -> [f32; Q6_K_VALUES_PER_BLOCK] {
     debug_assert_eq!(block_bytes.len(), Q6_K_WIRE_BYTES_PER_BLOCK);
     let d = f16_bits_to_f32(u16::from_le_bytes([block_bytes[208], block_bytes[209]]));
@@ -13300,7 +13290,6 @@ pub(crate) fn q6_k_wire_block_dequant(block_bytes: &[u8]) -> [f32; Q6_K_VALUES_P
 /// products accumulate into 8 integer lanes, the superblock's `d_w · d_act`
 /// scales those lanes into 8 f32 accumulators, and the 8 lanes reduce
 /// sequentially at the end.
-#[allow(dead_code)]
 pub(crate) fn q6_k_wire_row_dot(weight_wire: &[u8], input: &[Q8KBlock]) -> f32 {
     const WIRE: usize = Q6_K_WIRE_BYTES_PER_BLOCK;
     let mut sums = [0f32; 8];
@@ -13314,8 +13303,7 @@ pub(crate) fn q6_k_wire_row_dot(weight_wire: &[u8], input: &[Q8KBlock]) -> f32 {
         let (mut ql, mut qh, mut w) = (0usize, 128usize, 0usize);
         for _ in 0..2 {
             for l in 0..32 {
-                a[w + l] = (((block[ql + l] & 0xF) as i32
-                    | (((block[qh + l] & 3) as i32) << 4))
+                a[w + l] = (((block[ql + l] & 0xF) as i32 | (((block[qh + l] & 3) as i32) << 4))
                     - 32) as i8;
                 a[w + l + 32] = (((block[ql + l + 32] & 0xF) as i32
                     | ((((block[qh + l] >> 2) & 3) as i32) << 4))
@@ -13353,7 +13341,6 @@ pub(crate) fn q6_k_wire_row_dot(weight_wire: &[u8], input: &[Q8KBlock]) -> f32 {
 /// Dequantize a single Q4_0 wire block (18 bytes) into 32 f32 values —
 /// the row-gather counterpart of [`q4_0_wire_row_dot`] for embedding-style
 /// lookups into Q4_0 tables.
-#[allow(dead_code)]
 pub(crate) fn q4_0_wire_block_dequant(block_bytes: &[u8]) -> [f32; 32] {
     debug_assert_eq!(block_bytes.len(), Q4_0_WIRE_BYTES_PER_BLOCK);
     let scale = f16_bits_to_f32(u16::from_le_bytes([block_bytes[0], block_bytes[1]]));

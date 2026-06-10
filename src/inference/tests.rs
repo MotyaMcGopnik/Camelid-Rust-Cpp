@@ -10836,11 +10836,11 @@ fn q4_0_wire_row_dot_scalar_matches_dequant_reference() {
             *nib = (hi << 4) | lo;
         }
         wire.extend_from_slice(&nibbles);
-        for j in 0..16 {
-            expected_weights.push(((nibbles[j] & 0x0F) as i32 - 8) as f32 * scale_back);
+        for nib in &nibbles {
+            expected_weights.push(((nib & 0x0F) as i32 - 8) as f32 * scale_back);
         }
-        for j in 0..16 {
-            expected_weights.push(((nibbles[j] >> 4) as i32 - 8) as f32 * scale_back);
+        for nib in &nibbles {
+            expected_weights.push(((nib >> 4) as i32 - 8) as f32 * scale_back);
         }
     }
 
@@ -10961,10 +10961,8 @@ fn q8_k_quantizer_mirrors_reference_semantics() {
     let q = super::quantize_q8_k_blocks(&row);
     // iscale = -127 / -10 = 12.7; d = 1/iscale
     assert!((q[0].d - (1.0 / 12.7)).abs() < 1e-6);
-    assert_eq!(
-        q[0].qs[0],
-        127i8.min(super::quantize_q8_k_blocks(&row)[0].qs[0])
-    );
+    // qs[0] = nearest_int(12.7 * -10.0) = -127 (the signed-max element).
+    assert_eq!(q[0].qs[0], -127);
     assert_eq!(q[0].qs[1], 51); // nearest_int(12.7*4.0) = nearest_int(50.8) = 51
 
     // All-zero block short-circuits.
