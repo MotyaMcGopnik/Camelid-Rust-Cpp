@@ -11,6 +11,9 @@
 //! Run: `CAMELID_GEMMA4_GGUF=/path/gemma-4-12b-it-Q8_0.gguf \
 //!       cargo test --release --test gemma4_vless_gpu -- --nocapture`
 
+// The whole file is macOS-only: the imports feed a Metal-gated test, and on
+// other targets they would trip -D unused-imports.
+#![cfg(target_os = "macos")]
 #![allow(clippy::needless_range_loop)]
 
 use std::path::PathBuf;
@@ -19,7 +22,6 @@ use camelid::gguf::read_metadata;
 use camelid::model::{Gemma4Binding, LlamaModelConfig};
 use camelid::tensor::TensorStore;
 
-#[cfg(target_os = "macos")]
 #[test]
 fn vless_gpu_layer_matches_cpu_on_real_12b_weights() {
     let Some(path) = std::env::var_os("CAMELID_GEMMA4_GGUF").map(PathBuf::from) else {
