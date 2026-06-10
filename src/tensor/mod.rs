@@ -3473,6 +3473,10 @@ fn decode_q8_0_blocks(
 
 /// f32 -> IEEE f16 bits with round-to-nearest-even — the same conversion the
 /// reference runtime's f16 KV cache applies on store (ARM `vcvt` semantics).
+/// Kept for cache-precision experiments (the gemma4 KV cache is f32; parity
+/// oracles pin the comparator to the plain-f32 path instead — see
+/// `gemma4_runtime`).
+#[allow(dead_code)]
 pub(crate) fn f32_to_f16_bits(value: f32) -> u16 {
     let bits = value.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
@@ -4502,7 +4506,7 @@ mod tests {
         let cases = [
             (-0.2714f32, -0.27148438f32),
             (-0.6571, -0.65722656),
-            (0.0809, 0.080871582),
+            (0.0809, 0.08087158),
         ];
         for (input, expect) in cases {
             let got = f16_bits_to_f32(f32_to_f16_bits(input));

@@ -629,6 +629,14 @@ impl Gemma4Runtime {
                 s.copy_from_slice(&rms_norm(s, Some(&lw.q_norm), eps));
             }
             apply_rope(&mut q, heads, head_dim, pos, theta, rope_factors);
+            // Diagnostics: dump head-0 Q (post-norm/post-rope) for one layer for
+            // cross-runtime attention bisection (CAMELID_GEMMA4_DUMP_ATTN=<layer>).
+            if std::env::var("CAMELID_GEMMA4_DUMP_ATTN").ok().as_deref() == Some(&l.to_string()) {
+                eprintln!(
+                    "[attn] pos {pos} layer {l} q0..2 [{:.6}, {:.6}, {:.6}] q64..65 [{:.6}, {:.6}] q128..129 [{:.6}, {:.6}]",
+                    q[0], q[1], q[2], q[64], q[65], q[128], q[129]
+                );
+            }
 
             if l < self.first_kv_shared {
                 let mut k = lw.attn_k.matvec_q(kv_dim, &xnq);

@@ -1,9 +1,22 @@
 # Gemma 4 two-Mac clustered inference (distributed layer sharding)
 
-Status: protocol + parity proven over real TCP (same-host worker; see
-`tests/gemma4_distributed_parity.rs`). Two-Mac numbers are recorded in the
-evidence bundle when both machines are available — nothing in this document is
-a performance claim until that bundle exists.
+Status: proven on real hardware. Two M4 Mac minis (16 GB each) ran
+gemma-4-12b-it-Q8_0 (12.67 GB — memory-infeasible single-node on the primary
+host) split master 0..24 / worker 24..48: **all five basic_v1 prompts produced
+distributed greedy output token-identical to single-node Camelid**, decode
+6.17–6.75 tok/s across the pair, activation payload 15,384 B/step, wire
+79.8–119.7 ms/step, TTFT 157–161 s (one-time cold mmap faults on the USB-SSD
+master shard), master RSS 6.4–6.8 GB / worker RSS 6.7–8.0 GB. Raw logs:
+`qa/evidence-bundles/gemma4-12b-it-q8-0-two-mac-20260610T103711Z-head-96a75007b156`.
+Same-host TCP parity for E2B/E4B is locked by `tests/gemma4_distributed_parity.rs`.
+
+Operational notes from the real run: the link-local (Thunderbolt-class) route
+measured 0.78 ms vs 17 ms LAN but flapped under sustained load — two prompts
+were re-run over LAN with connect retries; link-local self-assigned addresses
+can also renegotiate after a link drop (resolve the peer via
+`dns-sd -G v4 <peer-hostname>.local` instead of hardcoding). The honest verdict
+on the second Mac: it did not make 12B faster than a hypothetical fitting host —
+it made 12B POSSIBLE, with both nodes inside their memory budgets.
 
 ## What this is — and is not
 

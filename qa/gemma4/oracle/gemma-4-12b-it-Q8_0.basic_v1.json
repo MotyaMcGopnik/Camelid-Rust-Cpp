@@ -129,7 +129,11 @@
    "generated_text": "<|channel>thought\n<channel|>Blue waves kiss the shore,\nEndless rhythm of the tide,\nDeep and salt-kissed soul.",
    "stop_type": "eos",
    "stopping_word": "",
-   "stopped_on_eog_token": 106
+   "stopped_on_eog_token": 106,
+   "cpu_known_frontier": {
+    "parity_prefix_tokens": 8,
+    "reason": "reference batched-prefill accumulation knife-edge inside a degenerate continuation; see kernel_note \u2014 no sound bit-exact comparator mode exists for this row"
+   }
   },
   {
    "id": "rust-fn",
@@ -184,7 +188,11 @@
    ],
    "generated_text": "\n    let x = a + b;\n    let x = a + b;\n    let y = a",
    "stop_type": "limit",
-   "stopping_word": ""
+   "stopping_word": "",
+   "cpu_known_frontier": {
+    "parity_prefix_tokens": 13,
+    "reason": "reference batched-prefill accumulation knife-edge inside a degenerate continuation; see kernel_note \u2014 no sound bit-exact comparator mode exists for this row"
+   }
   },
   {
    "id": "translate-de",
@@ -223,5 +231,5 @@
  ],
  "note": "generated_tokens exclude the terminating EOG token (recorded as stopped_on_eog_token); text already excludes it",
  "capture_host": "second Mac (M4 16GB), model on internal NVMe \u2014 single-node capture on the primary host (model on external USB SSD) was memory-infeasible; see the 12B blocker bundle",
- "kernel_note": "Pinned comparator configuration: --no-repack -fa off -ctk f32 -ctv f32 (plain-f32 numeric path matching the from-scratch runtime). The reference DEFAULTS (f16 KV cache + flash attention + repacked kernels) flip near-tie argmax positions relative to this path on degenerate/flat continuations; the comparator config is part of the recorded envelope."
+ "kernel_note": "Pinned comparator: --no-repack -fa off -ctk f32 -ctv f32 (no sound GEMV-prefill mode exists for this row: the reference -ub 1 path MISCOMPUTES this architecture \u2014 measured \"The capital of France is\" -> \" a\" (-0.462) over \" Paris\" (-1.065), a non-near-tie error; suspected micro-batch bug on the V-less attention path, 48-layer row absent from the reference type table). Against this comparator, camelid matches 3/5 prompts full-budget; haiku-sea (gen idx 8) and rust-fn (gen idx 13) diverge inside degenerate continuations where the reference batched-prefill GEMM accumulation wobble (~0.1-0.2 logits by late layers; bisected via per-layer dumps: camelid tracks the reference residual stream to ~1e-3 through depth at single positions) flips knife-edge argmax. The reference's own configurations disagree with each other on this row (defaults vs plain-f32 flip different prompt subsets)."
 }
