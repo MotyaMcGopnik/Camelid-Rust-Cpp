@@ -30,6 +30,7 @@ struct Pack {
     /// Context packs carry their target window; used to size the GPU runtime's
     /// KV capacity. Absent on the short packs.
     #[serde(default)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     target_context_window: Option<usize>,
 }
 
