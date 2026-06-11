@@ -21,7 +21,7 @@
 //! mismatched master/worker pair fails closed instead of silently diverging.
 
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::ops::Range;
 use std::path::Path;
 
@@ -297,8 +297,50 @@ pub struct Gemma4WorkerClient {
 }
 
 impl Gemma4WorkerClient {
+    /// Connect with bounded retries and IO timeouts. The two-Mac hosts are
+    /// dual-homed (ethernet + wifi) and outbound sessions can flap mid-
+    /// handshake — a blocked read on a black-holed connection would otherwise
+    /// hang a serve request forever. 30s covers worker shard-load pauses and
+    /// the slowest observed wire step by two orders of magnitude.
     pub fn connect(addr: &str, handshake: &Gemma4Handshake) -> Result<Self> {
-        let stream = TcpStream::connect(addr).map_err(|e| io_err("connect", e))?;
+        // The recorded flap windows last seconds, not milliseconds — spread
+        // the attempts over ~30s so one bad window cannot fail a model load.
+        const ATTEMPTS: usize = 10;
+        let mut last_err = None;
+        for attempt in 0..ATTEMPTS {
+            match Self::connect_once(addr, handshake) {
+                Ok(client) => return Ok(client),
+                Err(e) => {
+                    eprintln!(
+                        "[gemma4-master] worker connect attempt {}/{ATTEMPTS} failed: {e}",
+                        attempt + 1
+                    );
+                    last_err = Some(e);
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
+            }
+        }
+        Err(last_err.expect("at least one attempt"))
+    }
+
+    fn connect_once(addr: &str, handshake: &Gemma4Handshake) -> Result<Self> {
+        let sock_addr = addr
+            .to_socket_addrs()
+            .map_err(|e| io_err("resolve", e))?
+            .next()
+            .ok_or_else(|| {
+                BackendError::InvalidModelMetadata(format!(
+                    "gemma4 distributed: worker address {addr} resolved to nothing"
+                ))
+            })?;
+        let stream = TcpStream::connect_timeout(&sock_addr, std::time::Duration::from_secs(10))
+            .map_err(|e| io_err("connect", e))?;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+            .ok();
+        stream
+            .set_write_timeout(Some(std::time::Duration::from_secs(30)))
+            .ok();
         stream.set_nodelay(true).ok();
         let mut reader = BufReader::new(stream.try_clone().map_err(|e| io_err("clone", e))?);
         let mut writer = BufWriter::new(stream);
