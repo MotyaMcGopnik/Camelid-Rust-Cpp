@@ -200,3 +200,13 @@ Camelid's tokenizer, reference compatibility layouts, and validation benchmarks 
 
 [ci-badge]: https://github.com/timtoole02/Camelid/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/timtoole02/Camelid/actions/workflows/ci.yml
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=timtoole02%2FCamelid&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=timtoole02/Camelid&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=timtoole02/Camelid&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=timtoole02/Camelid&type=date&legend=top-left" />
+ </picture>
+</a>
