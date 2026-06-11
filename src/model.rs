@@ -916,10 +916,24 @@ impl Gemma4Binding {
                     .into(),
             ));
         }
-        if config.moe.is_some() && find_tensor(gguf, "blk.0.ffn_gate_up_exps.weight").is_none() {
+        if let Some(moe) = config.moe.as_ref() {
+            if find_tensor(gguf, "blk.0.ffn_gate_up_exps.weight").is_none() {
+                return Err(BackendError::UnsupportedModelArchitecture(format!(
+                    "gemma4 MoE row (expert_count={}, expert_used_count={}): blocked — \
+                     gemma4.expert_count is set but no fused ffn_gate_up_exps tensor is present",
+                    moe.expert_count, moe.expert_used_count
+                )));
+            }
+        }
+        // A router (`ffn_gate_inp`) with no fused expert tensors is a malformed /
+        // unmodeled MoE row — fail closed by name rather than surfacing a generic
+        // missing-tensor error from the per-layer binding below.
+        if find_tensor(gguf, "blk.0.ffn_gate_inp.weight").is_some()
+            && find_tensor(gguf, "blk.0.ffn_gate_up_exps.weight").is_none()
+        {
             return Err(BackendError::UnsupportedModelArchitecture(
-                "gemma4 MoE row: blocked — gemma4.expert_count is set but no fused \
-                 ffn_gate_up_exps tensor is present"
+                "gemma4 MoE row: blocked — blk.0.ffn_gate_inp router is present but no \
+                 fused ffn_gate_up_exps experts; only the fused MoE layout is modeled"
                     .into(),
             ));
         }
