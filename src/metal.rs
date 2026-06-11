@@ -37,6 +37,7 @@ struct MetalLinearKernel {
     q8_0_block_ksplit_pipeline: ComputePipelineState,
     q8_0_block_ksplit_f32y_pipeline: ComputePipelineState,
     q8_0_block_ksplit_f32y_wire_pipeline: ComputePipelineState,
+    q4_0_block_ksplit_f32y_wire_pipeline: ComputePipelineState,
     q8_0_block_ksplit_f32y_wire_nsg8_pipeline: ComputePipelineState,
     q8_0_block_ksplit_f32y_wire_gemm_pipeline: ComputePipelineState,
     q8_0_block_wire_mm_pipeline: ComputePipelineState,
@@ -906,6 +907,85 @@ kernel void q8_0_block_linear_row_ksplit_f32y_wire(
 // blocks — ~5.9% fewer weight bytes per token, which is the whole cost of a
 // bandwidth-bound decode. Block offsets are multiples of 34, so the f16 scale is always
 // 2-byte aligned.
+
+// Q4_0 wire-format GEMV (f32 activation x inline-dequantized Q4_0 weights), the
+// QAT-row counterpart of the Q8 wire kernel above. Q4_0 blocks are 18 bytes:
+// an f16 scale + 16 nibble bytes packing 32 weights — byte j holds weight j in
+// its low nibble and weight j+16 in its high nibble, both unsigned with a -8
+// bias. So the 32 dequantized weights split into a low half (weights 0..16, low
+// nibbles) and a high half (weights 16..32, high nibbles); each lane handles 4
+// of the 16 nibble bytes (4 lanes x 4 = the full block), accumulating the low
+// term against y[j] and the high term against y[j+16]. Same NSG=4/NR0=2 simd
+// reduction as the Q8 kernel. Numerics: f32 activation x f32-dequantized weight
+// (matches the CPU dequant reference to f32 rounding).
+kernel void q4_0_block_linear_row_ksplit_f32y_wire(
+    device const float* y [[buffer(0)]],
+    device const char* weight_blocks [[buffer(2)]],
+    device float* output [[buffer(3)]],
+    constant uint& blocks_per_row [[buffer(4)]],
+    constant uint& rows [[buffer(5)]],
+    threadgroup float* shmem [[threadgroup(0)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    constexpr uint NSG = 4;
+    constexpr uint NR0 = 2;
+    constexpr uint NQ = 8;            // block slots in flight per simdgroup (matches Q8)
+    constexpr uint NB = 4;            // nibble-bytes per lane (4 lanes * 4 = 16 bytes)
+    constexpr uint q4_block_bytes = 18;
+    const uint r0 = tg * NR0;
+    const uint row_stride = blocks_per_row * q4_block_bytes;
+
+    const uint ix = lane / 4;
+    const uint ilb = (lane % 4) * NB; // 0,4,8,12 byte offset within the 16 nibble bytes
+
+    float sumf[NR0] = {0.0f, 0.0f};
+    for (uint ib = sg * NQ + ix; ib < blocks_per_row; ib += NSG * NQ) {
+        float ylo[NB], yhi[NB];
+        device const float* yb = y + ib * 32;
+        for (uint i = 0; i < NB; ++i) {
+            ylo[i] = yb[ilb + i];
+            yhi[i] = yb[16 + ilb + i];
+        }
+        for (uint row = 0; row < NR0; ++row) {
+            const uint rr = r0 + row;
+            if (rr >= rows) {
+                break;
+            }
+            device const char* wb = weight_blocks + rr * row_stride + ib * q4_block_bytes;
+            const float w_scale = float(*reinterpret_cast<device const half*>(wb));
+            device const uchar* wq = reinterpret_cast<device const uchar*>(wb + 2) + ilb;
+            float sumq = 0.0f;
+            for (uint i = 0; i < NB; ++i) {
+                const uint b = uint(wq[i]);
+                const float lo = float(int(b & 0x0F) - 8);
+                const float hi = float(int(b >> 4) - 8);
+                sumq += lo * ylo[i] + hi * yhi[i];
+            }
+            sumf[row] += sumq * w_scale;
+        }
+    }
+    for (uint row = 0; row < NR0; ++row) {
+        if (sg == 0) {
+            shmem[row * 32 + lane] = 0.0f;
+        }
+        sumf[row] = simd_sum(sumf[row]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint row = 0; row < NR0; ++row) {
+        if (lane == 0) {
+            shmem[row * 32 + sg] = sumf[row];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint row = 0; row < NR0 && r0 + row < rows; ++row) {
+        const float tot = simd_sum(shmem[row * 32 + lane]);
+        if (lane == 0 && sg == 0) {
+            output[r0 + row] = tot;
+        }
+    }
+}
 kernel void q8_0_block_linear_row_ksplit_f32y_wire_nsg8(
     device const float* y [[buffer(0)]],
     device const char* weight_blocks [[buffer(2)]],
@@ -4019,6 +4099,12 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
             let q8_0_block_ksplit_f32y_wire_pipeline = device
                 .new_compute_pipeline_state_with_function(&q8_0_block_ksplit_f32y_wire_function)
                 .ok()?;
+            let q4_0_block_ksplit_f32y_wire_function = library
+                .get_function("q4_0_block_linear_row_ksplit_f32y_wire", None)
+                .ok()?;
+            let q4_0_block_ksplit_f32y_wire_pipeline = device
+                .new_compute_pipeline_state_with_function(&q4_0_block_ksplit_f32y_wire_function)
+                .ok()?;
             let q8_0_block_ksplit_f32y_wire_nsg8_function = library
                 .get_function("q8_0_block_linear_row_ksplit_f32y_wire_nsg8", None)
                 .ok()?;
@@ -4060,6 +4146,7 @@ fn metal_linear_kernel() -> Option<&'static MetalLinearKernel> {
                 q8_0_block_ksplit_pipeline,
                 q8_0_block_ksplit_f32y_pipeline,
                 q8_0_block_ksplit_f32y_wire_pipeline,
+                q4_0_block_ksplit_f32y_wire_pipeline,
                 q8_0_block_ksplit_f32y_wire_nsg8_pipeline,
                 q8_0_block_ksplit_f32y_wire_gemm_pipeline,
                 q8_0_block_wire_mm_pipeline,
@@ -5181,6 +5268,59 @@ pub fn try_gemma4_q8_matmul_f32y(
     let cb = k.queue.new_command_buffer();
     let e = cb.new_compute_command_encoder();
     encode_gemma4_q8_matmul(e, k, &y_buf, &w_buf, &out_buf, &scalar_buf, rows);
+    e.end_encoding();
+    cb.commit();
+    cb.wait_until_completed();
+    let mut out = vec![0.0f32; rows];
+    read_buffer_f32(&out_buf, &mut out);
+    Some(out)
+}
+
+/// Q4_0 wire GEMV on the GPU — the QAT-row counterpart of
+/// [`try_gemma4_q8_matmul_f32y`]. `weight_wire` is `rows * blocks_per_row`
+/// 18-byte Q4_0 blocks; `y` is `blocks_per_row * 32` f32 activations. Returns
+/// `rows` f32 outputs (f32 activation x inline-dequantized Q4_0 weight). For
+/// validating the Q4_0 GPU kernel against the CPU dequant reference.
+#[cfg(target_os = "macos")]
+pub fn try_gemma4_q4_0_matmul_f32y(
+    y: &[f32],
+    weight_wire: &[u8],
+    rows: usize,
+    blocks_per_row: usize,
+) -> Option<Vec<f32>> {
+    const WIRE: usize = 18;
+    if rows == 0
+        || blocks_per_row == 0
+        || y.len() != blocks_per_row * 32
+        || weight_wire.len() != rows * blocks_per_row * WIRE
+    {
+        return None;
+    }
+    let k = metal_linear_kernel()?;
+    let y_buf = k.device.new_buffer(
+        std::mem::size_of_val(y) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let w_buf = k.device.new_buffer(
+        weight_wire.len() as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let out_buf = k
+        .device
+        .new_buffer((rows * 4) as u64, MTLResourceOptions::StorageModeShared);
+    let scalar_buf = k
+        .device
+        .new_buffer(8, MTLResourceOptions::StorageModeShared);
+    write_buffer_f32(&y_buf, y);
+    write_buffer_u8(&w_buf, weight_wire);
+    unsafe {
+        let p = scalar_buf.contents() as *mut u32;
+        *p = blocks_per_row as u32;
+        *p.add(1) = rows as u32;
+    }
+    let cb = k.queue.new_command_buffer();
+    let e = cb.new_compute_command_encoder();
+    encode_gemma4_q4_0_matmul(e, k, &y_buf, &w_buf, &out_buf, &scalar_buf, rows);
     e.end_encoding();
     cb.commit();
     cb.wait_until_completed();
@@ -7032,6 +7172,41 @@ fn encode_gemma4_q8_matmul(
     rows: usize,
 ) {
     e.set_compute_pipeline_state(&k.q8_0_block_ksplit_f32y_wire_pipeline);
+    e.set_buffer(0, Some(y), 0);
+    e.set_buffer(2, Some(weight), 0);
+    e.set_buffer(3, Some(out), 0);
+    e.set_buffer(4, Some(scalar), 0);
+    e.set_buffer(5, Some(scalar), 4);
+    e.set_threadgroup_memory_length(0, 2 * 32 * 4);
+    e.dispatch_thread_groups(
+        metal::MTLSize {
+            width: (rows as u64).div_ceil(2),
+            height: 1,
+            depth: 1,
+        },
+        metal::MTLSize {
+            width: 128,
+            height: 1,
+            depth: 1,
+        },
+    );
+}
+
+/// Q4_0 wire GEMV — the QAT-row counterpart of [`encode_gemma4_q8_matmul`].
+/// Identical dispatch (128 threads/TG, NR0=2 rows/TG, 2*32*4 threadgroup mem);
+/// only the bound pipeline differs (it reads 18-byte Q4_0 wire blocks and
+/// unpacks nibbles inline). `scalar` holds blocks_per_row at offset 0 and rows
+/// at offset 4, exactly as the Q8 path.
+fn encode_gemma4_q4_0_matmul(
+    e: &metal::ComputeCommandEncoderRef,
+    k: &MetalLinearKernel,
+    y: &Buffer,
+    weight: &Buffer,
+    out: &Buffer,
+    scalar: &Buffer,
+    rows: usize,
+) {
+    e.set_compute_pipeline_state(&k.q4_0_block_ksplit_f32y_wire_pipeline);
     e.set_buffer(0, Some(y), 0);
     e.set_buffer(2, Some(weight), 0);
     e.set_buffer(3, Some(out), 0);
@@ -11765,6 +11940,16 @@ pub fn try_gemma4_q8_matmul_f32y(
 }
 
 #[cfg(not(target_os = "macos"))]
+pub fn try_gemma4_q4_0_matmul_f32y(
+    _y: &[f32],
+    _weight_wire: &[u8],
+    _rows: usize,
+    _blocks_per_row: usize,
+) -> Option<Vec<f32>> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
 #[allow(clippy::too_many_arguments)]
 pub fn try_gemma4_ffn(
     _h_in: &[f32],
@@ -12979,6 +13164,62 @@ mod tests {
         assert!(try_gemma4_q8_matmul_f32y(&y, &wire, 0, blocks_per_row).is_none());
         assert!(
             try_gemma4_q8_matmul_f32y(&y, &wire[..wire.len() - 1], rows, blocks_per_row).is_none()
+        );
+    }
+
+    // The QAT-row GPU GEMV workhorse (f32 activation × 18-byte wire Q4_0, nibbles
+    // unpacked inline) must match the CPU f32×dequant reference — the foundation
+    // for running the Q4_0 attention/dense/expert matmuls on the GPU.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_gemma4_q4_0_matmul_f32y_matches_cpu() {
+        if !detect_metal_device().available {
+            return;
+        }
+        use crate::inference::q4_0_wire_block_dequant;
+        for blocks_per_row in [5usize, 80, 320] {
+            let in_dim = blocks_per_row * 32;
+            let rows = 7usize;
+            let y: Vec<f32> = (0..in_dim)
+                .map(|i| ((i as f32 % 11.0) - 5.0) * 0.1)
+                .collect();
+            let mut wire = Vec::with_capacity(rows * blocks_per_row * 18);
+            let mut want = vec![0.0f32; rows];
+            for (r, w) in want.iter_mut().enumerate() {
+                let mut acc = 0.0f32;
+                for b in 0..blocks_per_row {
+                    let scale = (((r + b) as f32 % 7.0) + 1.0) * 0.02;
+                    let mut blk = [0u8; 18];
+                    blk[0..2].copy_from_slice(&f32_to_f16_bits(scale).to_le_bytes());
+                    for (j, slot) in blk[2..].iter_mut().enumerate() {
+                        *slot = ((r * 31 + b * 17 + j * 3) % 256) as u8;
+                    }
+                    let deq = q4_0_wire_block_dequant(&blk);
+                    for (i, &d) in deq.iter().enumerate() {
+                        acc += d * y[b * 32 + i];
+                    }
+                    wire.extend_from_slice(&blk);
+                }
+                *w = acc;
+            }
+            let got = try_gemma4_q4_0_matmul_f32y(&y, &wire, rows, blocks_per_row)
+                .expect("gemma4 q4_0 matmul");
+            for (a, b) in got.iter().zip(&want) {
+                assert!((a - b).abs() < 2.0e-2, "bpr={blocks_per_row} {a} != {b}");
+            }
+        }
+        // Shape guards.
+        let blocks_per_row = 5usize;
+        let in_dim = blocks_per_row * 32;
+        let y: Vec<f32> = (0..in_dim)
+            .map(|i| ((i as f32 % 11.0) - 5.0) * 0.1)
+            .collect();
+        let wire = vec![0u8; 7 * blocks_per_row * 18];
+        let rows = 7usize;
+        assert!(try_gemma4_q4_0_matmul_f32y(&y, &wire, 0, blocks_per_row).is_none());
+        assert!(
+            try_gemma4_q4_0_matmul_f32y(&y, &wire[..wire.len() - 1], rows, blocks_per_row)
+                .is_none()
         );
     }
 
