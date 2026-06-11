@@ -5799,8 +5799,10 @@ pub struct Gemma4ResidentModel {
 #[cfg(target_os = "macos")]
 impl Gemma4ResidentModel {
     /// Build the resident model. `token_embd_wire` is the vocab-major Q8 table in
-    /// 34-byte wire blocks (copied once into a resident buffer; in the production
-    /// runtime pass a nocopy WirePages buffer instead). KV caches are allocated for
+    /// 34-byte wire blocks for the GPU logits head (copied once into a resident buffer;
+    /// in the production runtime pass a nocopy WirePages buffer instead). Pass an EMPTY
+    /// slice on the QAT hybrid lane (Q6_K head runs on the CPU) — no head buffer is
+    /// allocated and only `forward_token_hidden` is valid. KV caches are allocated for
     /// owning layers (`owns_kv[l]`) sized to that layer's head_dim. None on bad shapes.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -5844,8 +5846,13 @@ impl Gemma4ResidentModel {
                 caches.push(None);
             }
         }
-        let token_embd = mkbuf(token_embd_wire.len());
-        write_buffer_u8(&token_embd, token_embd_wire);
+        // Empty wire = QAT hybrid lane: the Q6_K head runs on the CPU, so don't upload
+        // the (large) tied table to the GPU. A 1-byte placeholder keeps the field valid;
+        // forward_inner only reads it on the want_head path, which the hybrid never takes.
+        let token_embd = mkbuf(token_embd_wire.len().max(1));
+        if !token_embd_wire.is_empty() {
+            write_buffer_u8(&token_embd, token_embd_wire);
+        }
         // Upload each layer's PLE matrices once into resident buffers.
         let upload = |v: &[f32]| {
             let b = mkbuf(v.len() * 4);

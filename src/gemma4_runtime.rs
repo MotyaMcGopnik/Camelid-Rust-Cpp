@@ -1345,13 +1345,17 @@ impl Gemma4GpuRuntime {
 
         let token_embd = q8(&binding.token_embedding.name)?;
         let output_norm = f32t(&binding.output_norm.name)?;
+        // QAT hybrid (Q6_K head on CPU): don't hand the tied table to the GPU head — pass
+        // an empty slice so no ~0.5 GB head buffer is uploaded. The all-Q8 lane passes the
+        // wire bytes for the GPU head as before.
+        let head_wire: &[u8] = if head_on_cpu { &[] } else { token_embd.bytes() };
         let model = crate::metal::Gemma4ResidentModel::new(
             layers,
             ple,
             layer_scales,
             owns_kv,
             kv_source,
-            token_embd.bytes(),
+            head_wire,
             output_norm.clone(),
             hidden,
             vocab,
