@@ -101,3 +101,105 @@ scales, rope factors).
 Performance note (motivation, not a claim): ~4B active parameters/token means
 decode reads ~2–3 GB/token instead of the full file — on the ~120 GB/s wall
 this row's ceiling is well above the 12B dense pair's 6.2–6.75 tok/s.
+
+## Derived MoE forward contract (from llama.cpp `gemma4-iswa.cpp` + `build_moe_ffn`)
+
+Every 26B A4B layer's FFN is TWO parallel branches off the post-attention
+residual `attn_out`, summed, then a final `post_ffw_norm`, then residual.
+(Single-token decode; `n_embd = 2816`, `n_expert = 128`, `n_expert_used = 8`,
+expert ffn `n_ff = 704`, dense ffn `2112`.)
+
+**Branch A — dense "shared expert" MLP** (the existing gemma4 dense FFN op):
+```
+cur_mlp = rms_norm(attn_out, ffn_norm)
+cur_mlp = down( gelu_tanh(gate(cur_mlp)) * up(cur_mlp) )    # parallel GeGLU, width 2112
+cur_mlp = rms_norm(cur_mlp, ffn_post_norm_1)
+```
+
+**Branch B — sparse 128-expert MoE**:
+```
+cur_moe = rms_norm(attn_out, ffn_pre_norm_2)
+
+# Router runs on attn_out, NOT cur_moe, with its OWN weightless norm:
+r   = rms_norm(attn_out)                 # weightless, over n_embd
+r   = r * (1/sqrt(n_embd))               # 1/sqrt(2816)
+r   = r ⊙ ffn_gate_inp_s                 # elementwise [2816] (the .scale companion)
+logits = ffn_gate_inp @ r                # [128]   (F32 router matrix)
+
+probs   = softmax(logits)                # over all 128
+top8    = argsort_top_k(probs, 8)        # the 8 selected expert ids
+w       = probs[top8]                     # [8]
+w       = w / clamp(sum(w), 6.1e-5, inf) # norm_w=true; w_scale=1.0 (no extra scale)
+
+for each selected expert e in top8:
+    gate_up = gate_up_exps[e] @ cur_moe   # fused [1408] = [gate(704) ‖ up(704)]
+    g, u    = gate_up[:704], gate_up[704:]
+    h       = gelu_tanh(g) * u            # geglu_split, GELU(tanh approx)
+    y_e     = down_exps[e] @ h            # [2816]
+    y_e     = y_e * down_exps_s[e]        # per-expert down .scale (scalar [128])
+    y_e     = y_e * w[e]                  # routing weight
+cur_moe = sum_e y_e                       # [2816]
+cur_moe = rms_norm(cur_moe, ffn_post_norm_2)
+```
+
+**Combine + finish**:
+```
+cur = cur_mlp + cur_moe
+cur = rms_norm(cur, ffn_post_norm)       # the same post_ffw_norm the dense rows use
+cur = cur + attn_out                      # residual
+# then per-layer-embedding (PLE) if present — 26B has no PLE
+```
+
+Key gotchas locked here:
+- Router input is `attn_out` (pre-branch residual), re-normed weightlessly and
+  scaled by `1/sqrt(n_embd)` BEFORE the elementwise `ffn_gate_inp_s` — easy to
+  wire to the wrong tensor or skip the sqrt.
+- `gate_up_exps` is FUSED gate‖up in one [n_embd, 2*n_ff, n_expert] tensor;
+  gate = first n_ff rows, up = second n_ff. There is NO `.scale` on it.
+- The only per-expert `.scale` is `ffn_down_exps_s` ([128]); applied to the
+  down output before the routing-weight multiply.
+- GELU is the tanh approximation (`ggml_geglu` → same `gelu_tanh` the dense
+  gemma4 FFN already uses and is bit-parity for).
+- top-8 weights are sum-normalized (clamped), then NOT extra-scaled (w_scale=1).
+- Expert e's matrix is the e-th slice along the last GGUF dim; byte offset =
+  e * (per-expert row bytes) into the Q4_0 wire tensor.
+
+## Implementation status (WIP — branch `feature/gemma4-26b-moe-wip`, NOT merged)
+
+The MoE forward is IMPLEMENTED and runs end-to-end, but does NOT yet reproduce
+the reference — it is not merged and 26B stays **blocked** in the public ledger.
+
+Done and verified correct against the reference / E4B QAT:
+- Binding: `Gemma4MoeLayerTensors` binds router + fused experts + down experts +
+  the 3 extra norms + both `.scale` companions (GGUF names `pre_ffw_norm_2`,
+  `post_ffw_norm_1`, `post_ffw_norm_2`). The fail-closed guard now only rejects
+  the unmodeled split-expert (`ffn_gate_exps`) layout.
+- Q4_0/Q6_K wire kernels (shipped earlier) + `matvec_q_rows` for per-expert
+  3D-tensor row slices (layout `(e*rows_per_expert + o)` verified against the
+  GGUF dim order `[in, out, n_expert]`).
+- CPU forward: the two-branch block exactly as the contract above.
+
+Confirmed NOT the bug (each checked against the reference source / runtime):
+- norm tensor names & roles; the two-branch composition; shared `post_ffw_norm`.
+- router: input = `attn_out`, weightless rms_norm, `×1/√n_embd`, `⊙ gate_inp_scale`
+  (uniform 31.25), softmax-over-all, top-8, sum-normalized weights (w_scale=1).
+  Router selection is input-dependent (different prompts → different experts).
+- fused gate‖up split (gate first), gelu = tanh approx (same `ggml_geglu_split`
+  the dense `build_ffn` uses and E4B QAT is bit-parity for).
+- `.scale` companions: only `ffn_down_exps.scale` (≈1.0) and `ffn_gate_inp.scale`
+  (31.25); applied at the reference's points. No other per-weight scales exist
+  (E4B QAT has zero `.scale` tensors — that is why it already works).
+- attention scale = 1.0 (gemma4); per-layer sliding/global schedule and
+  `head_count_kv` arrays parse correctly (binding shape-validation passes).
+- prompt tokenization: `add_bos=False` respected → `[818,5279,529,7001,563]`,
+  identical to the reference.
+
+Symptom: `The capital of France is` → reference ` Paris.` (tokens
+`[9079, 236761, ...]`); camelid WIP → token `506` ("the"), then degenerate
+repetition. First-token probe recorded at
+`qa/gemma4/oracle/gemma-4-26B_q4_0-it.first-token-probe.json`.
+
+Next step (the only thing static inspection cannot resolve): build llama.cpp
+from source with the eval-callback and dump per-layer activations for this
+prompt, then diff camelid's per-layer hidden state (`CAMELID_GEMMA4_DUMP_LAYERS`)
+to find the first diverging layer/op — the same technique used to land 12B.

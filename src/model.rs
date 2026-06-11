@@ -850,6 +850,32 @@ pub struct Gemma4LayerTensors {
     pub ple_inp_gate: Option<GgufTensorDescriptor>,
     pub ple_proj: Option<GgufTensorDescriptor>,
     pub ple_output_scale: Option<GgufTensorDescriptor>,
+    /// Gemma 4 A4B (26B) MoE tensors. Present together on every MoE layer
+    /// (`ffn_gate_inp` is the presence marker); `None` on dense rows (E2B/E4B/12B).
+    /// The dense `ffn_gate/up/down` above are the "shared expert" MLP branch;
+    /// these are the sparse 128-expert branch that runs in parallel.
+    pub moe: Option<Gemma4MoeLayerTensors>,
+}
+
+/// The sparse-expert tensors of one Gemma 4 A4B MoE layer.
+#[derive(Debug, Clone)]
+pub struct Gemma4MoeLayerTensors {
+    /// Router projection `ffn_gate_inp` [n_embd, n_expert] (F32).
+    pub gate_inp: GgufTensorDescriptor,
+    /// Router input scale `ffn_gate_inp.scale` [n_embd] (F32, elementwise).
+    pub gate_inp_scale: GgufTensorDescriptor,
+    /// Fused per-expert gate‖up `ffn_gate_up_exps` [n_embd, 2*n_ff_exp, n_expert].
+    pub gate_up_exps: GgufTensorDescriptor,
+    /// Per-expert down `ffn_down_exps` [n_ff_exp, n_embd, n_expert].
+    pub down_exps: GgufTensorDescriptor,
+    /// Per-expert down scale `ffn_down_exps.scale` [n_expert] (F32, scalar/expert).
+    pub down_exps_scale: GgufTensorDescriptor,
+    /// `ffn_pre_norm_2` [n_embd]: pre-norm for the expert branch.
+    pub pre_norm_2: GgufTensorDescriptor,
+    /// `ffn_post_norm_1` [n_embd]: post-norm for the dense (shared-expert) branch.
+    pub post_norm_1: GgufTensorDescriptor,
+    /// `ffn_post_norm_2` [n_embd]: post-norm for the expert branch.
+    pub post_norm_2: GgufTensorDescriptor,
 }
 
 /// Full Gemma 4 weight binding (the gemma4 counterpart to [`LlamaTensorBinding`]).
@@ -876,28 +902,24 @@ impl Gemma4Binding {
             )
         })?;
 
-        // Fail closed on the Gemma 4 MoE rows (26B A4B): this binding models the
-        // dense FFN only. A MoE GGUF advertises `gemma4.expert_count` and carries
-        // router/expert tensors (`ffn_gate_inp`, `ffn_*_exps`) that have no
-        // binding or decode runtime here — and the Mixtral MoE path cannot be
-        // reused blindly (gemma4 layers add QK-norm, per-layer-type attention,
-        // and post-FFN norms around the expert block). Name the blocker exactly
-        // instead of surfacing a generic missing-tensor error.
-        if let Some(moe) = config.moe.as_ref() {
-            return Err(BackendError::UnsupportedModelArchitecture(format!(
-                "gemma4 MoE row (expert_count={}, expert_used_count={}): blocked — \
-                 router/expert FFN binding and a gemma4 MoE decode runtime are not \
-                 implemented; dense gemma4 rows remain the only bindable rows",
-                moe.expert_count, moe.expert_used_count
-            )));
-        }
-        if find_tensor(gguf, "blk.0.ffn_gate_inp.weight").is_some()
-            || find_tensor(gguf, "blk.0.ffn_gate_exps.weight").is_some()
+        // Gemma 4 A4B (26B) MoE rows carry a router (`ffn_gate_inp`) and fused
+        // expert tensors (`ffn_gate_up_exps`/`ffn_down_exps`) ALONGSIDE the dense
+        // `ffn_gate/up/down` shared-expert MLP. We bind both branches below. The
+        // legacy split-expert layout (`ffn_gate_exps`/`ffn_up_exps`) is a
+        // different (Mixtral-style) packing we do not model — fail closed on it.
+        if find_tensor(gguf, "blk.0.ffn_gate_exps.weight").is_some()
+            && find_tensor(gguf, "blk.0.ffn_gate_up_exps.weight").is_none()
         {
             return Err(BackendError::UnsupportedModelArchitecture(
-                "gemma4 MoE row: blocked — the tensor map carries router/expert FFN \
-                 tensors (ffn_gate_inp/ffn_*_exps) but no gemma4.expert_count \
-                 metadata; no MoE binding or decode runtime exists for gemma4"
+                "gemma4 MoE row: blocked — split-expert (ffn_gate_exps/ffn_up_exps) \
+                 packing is not modeled; only the fused ffn_gate_up_exps layout is"
+                    .into(),
+            ));
+        }
+        if config.moe.is_some() && find_tensor(gguf, "blk.0.ffn_gate_up_exps.weight").is_none() {
+            return Err(BackendError::UnsupportedModelArchitecture(
+                "gemma4 MoE row: blocked — gemma4.expert_count is set but no fused \
+                 ffn_gate_up_exps tensor is present"
                     .into(),
             ));
         }
@@ -934,6 +956,27 @@ impl Gemma4Binding {
                 ple_inp_gate: opt("inp_gate"),
                 ple_proj: opt("proj"),
                 ple_output_scale: opt("layer_output_scale"),
+                moe: match find_tensor(gguf, &format!("blk.{layer_idx}.ffn_gate_inp.weight")) {
+                    Some(_) => Some(Gemma4MoeLayerTensors {
+                        gate_inp: req("ffn_gate_inp")?,
+                        gate_inp_scale: required_tensor(
+                            gguf,
+                            &format!("blk.{layer_idx}.ffn_gate_inp.scale"),
+                        )?,
+                        gate_up_exps: req("ffn_gate_up_exps")?,
+                        down_exps: req("ffn_down_exps")?,
+                        down_exps_scale: required_tensor(
+                            gguf,
+                            &format!("blk.{layer_idx}.ffn_down_exps.scale"),
+                        )?,
+                        // GGUF tensor names (not llama.cpp's logical names):
+                        // pre_ffw_norm_2 / post_ffw_norm_1 / post_ffw_norm_2.
+                        pre_norm_2: req("pre_ffw_norm_2")?,
+                        post_norm_1: req("post_ffw_norm_1")?,
+                        post_norm_2: req("post_ffw_norm_2")?,
+                    }),
+                    None => None,
+                },
             });
         }
 

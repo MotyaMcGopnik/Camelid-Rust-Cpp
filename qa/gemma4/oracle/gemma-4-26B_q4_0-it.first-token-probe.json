@@ -1,0 +1,11 @@
+{
+  "row": "gemma-4-26B_q4_0-it",
+  "note": "First-token probe ONLY (not a parity pack). Captured to bisect the WIP MoE forward; the camelid MoE forward does not yet reproduce these tokens.",
+  "oracle": "llama.cpp 5d56eff llama-server (CPU, -ngl 0, --no-repack -fa off -ctk f32 -ctv f32 -ub 1)",
+  "prompt": "The capital of France is",
+  "prompt_tokens": [818, 5279, 529, 7001, 563],
+  "reference_generated_tokens": [9079, 236761, 107, 100, 236800, 236786],
+  "reference_text": " Paris.\n<|channel>3/",
+  "camelid_wip_first_token": 506,
+  "status": "WIP_DIVERGES"
+}

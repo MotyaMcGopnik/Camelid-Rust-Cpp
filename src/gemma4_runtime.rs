@@ -180,6 +180,33 @@ impl WireQuant {
         out
     }
 
+    /// Dot a contiguous range of `out_count` output rows starting at
+    /// `row_start`, against a pre-quantized activation — used to project a
+    /// single MoE expert's matrix out of a 3D `[in_dim, rows, n_expert]` tensor
+    /// (expert e occupies rows `e*rows_per_expert ..`). `in_dim` is implied by
+    /// `xq.len() * values_per_block`; each row is `xq.len()` blocks wide.
+    fn matvec_q_rows(&self, row_start: usize, out_count: usize, xq: &[Q8_0Block]) -> Vec<f32> {
+        const ROW_CHUNK: usize = 64;
+        let row_bytes = xq.len() * self.format.bytes_per_block();
+        let bytes = self.bytes();
+        let row_dot: fn(&[u8], &[Q8_0Block]) -> f32 = match self.format {
+            WireFormat::Q8_0 => q8_0_wire_row_dot,
+            WireFormat::Q4_0 => q4_0_wire_row_dot,
+            WireFormat::Q6K => unreachable!("Q6_K rows route through matvec_q8k"),
+        };
+        let mut out = vec![0f32; out_count];
+        out.par_chunks_mut(ROW_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, dst)| {
+                let base = row_start + chunk_idx * ROW_CHUNK;
+                for (i, d) in dst.iter_mut().enumerate() {
+                    let o = base + i;
+                    *d = row_dot(&bytes[o * row_bytes..(o + 1) * row_bytes], xq);
+                }
+            });
+        out
+    }
+
     /// [`matvec`] for Q6_K rows against a Q8_K-quantized activation. Same fixed
     /// row chunking as [`Self::matvec_q`] (greedy-parity-safe ordering).
     fn matvec_q8k(&self, out_dim: usize, xq: &[crate::inference::Q8KBlock]) -> Vec<f32> {
@@ -359,6 +386,32 @@ struct LayerWeights {
     ple_inp_gate: Option<Vec<f32>>,
     ple_proj: Option<Vec<f32>>,
     ple_output_scale: f32,
+    /// Gemma 4 A4B (26B) sparse-expert branch; `None` on dense rows. When
+    /// present, the FFN runs the two-branch MoE block (see `MoeWeights`).
+    moe: Option<MoeWeights>,
+}
+
+/// Sparse 128-expert branch weights for one Gemma 4 A4B MoE layer. The dense
+/// `ffn_gate/up/down` on [`LayerWeights`] are the parallel shared-expert MLP.
+struct MoeWeights {
+    /// Router matrix [n_embd, n_expert], F32, row-major (out=expert).
+    gate_inp: Vec<f32>,
+    /// Router input scale [n_embd], F32, elementwise.
+    gate_inp_scale: Vec<f32>,
+    /// Fused per-expert gate‖up, Q4_0 wire; row `e*2*n_ff_exp + o` is expert e
+    /// output o (gate for o<n_ff_exp, up for o>=n_ff_exp), in_dim = n_embd.
+    gate_up_exps: WireQuant,
+    /// Per-expert down, Q4_0 wire; row `e*n_embd + o` is expert e output o,
+    /// in_dim = n_ff_exp.
+    down_exps: WireQuant,
+    /// Per-expert down scale [n_expert], F32, scalar per expert.
+    down_exps_scale: Vec<f32>,
+    pre_norm_2: Vec<f32>,
+    post_norm_1: Vec<f32>,
+    post_norm_2: Vec<f32>,
+    n_expert: usize,
+    n_expert_used: usize,
+    n_ff_exp: usize,
 }
 
 /// Per-phase CPU decode counters (µs), populated only when
@@ -508,6 +561,35 @@ impl Gemma4Runtime {
                     .transpose()?
                     .and_then(|v| v.first().copied())
                     .unwrap_or(1.0),
+                moe: l
+                    .moe
+                    .as_ref()
+                    .map(|m| -> Result<MoeWeights> {
+                        let moe_meta = config.moe.as_ref().ok_or_else(|| {
+                            BackendError::InvalidModelMetadata(
+                                "gemma4 MoE layer present but no expert metadata".into(),
+                            )
+                        })?;
+                        let n_expert = moe_meta.expert_count as usize;
+                        // 2*n_ff_exp = gate_up rows / n_expert; n_ff_exp halves it.
+                        let gate_up = q8(&m.gate_up_exps.name)?;
+                        let two_nff =
+                            gate_up.element_count / (n_expert * config.embedding_length as usize);
+                        Ok(MoeWeights {
+                            gate_inp: f32t(&m.gate_inp.name)?,
+                            gate_inp_scale: f32t(&m.gate_inp_scale.name)?,
+                            gate_up_exps: gate_up,
+                            down_exps: q8(&m.down_exps.name)?,
+                            down_exps_scale: f32t(&m.down_exps_scale.name)?,
+                            pre_norm_2: f32t(&m.pre_norm_2.name)?,
+                            post_norm_1: f32t(&m.post_norm_1.name)?,
+                            post_norm_2: f32t(&m.post_norm_2.name)?,
+                            n_expert,
+                            n_expert_used: moe_meta.expert_used_count as usize,
+                            n_ff_exp: two_nff / 2,
+                        })
+                    })
+                    .transpose()?,
             });
         }
 
@@ -823,8 +905,11 @@ impl Gemma4Runtime {
             }
             attn_us += t_layer.elapsed().as_micros() as u64;
             let t_ffn = std::time::Instant::now();
+            // Dense "shared expert" MLP branch (also the whole FFN on dense rows):
+            // ffn_norm -> parallel GeGLU -> down. On dense rows this is followed
+            // directly by post_ffw_norm + residual; on MoE rows it gets its own
+            // post_norm_1 and is summed with the expert branch first.
             let xn = rms_norm(&h, Some(&lw.ffn_norm), eps);
-            // gate and up both project the same normed input — quantize it once.
             let xnq = quantize_q8_0_blocks(&xn);
             let gate = lw.ffn_gate.matvec_q(ffn_dim, &xnq);
             let up = lw.ffn_up.matvec_q(ffn_dim, &xnq);
@@ -833,9 +918,72 @@ impl Gemma4Runtime {
                 .zip(&up)
                 .map(|(g, u)| gelu_tanh(*g) * u)
                 .collect();
-            let down = lw.ffn_down.matvec(ffn_dim, hidden, &act);
-            let dn = rms_norm(&down, Some(&lw.post_ffw_norm), eps);
-            for (a, b) in h.iter_mut().zip(&dn) {
+            let mut mlp = lw.ffn_down.matvec(ffn_dim, hidden, &act);
+
+            let ffn_out = if let Some(moe) = lw.moe.as_ref() {
+                // attn_out is the current `h` (post-attention residual) — every
+                // branch reads it, so snapshot before any write.
+                let attn_out = &h;
+                // Dense branch keeps its own post-norm (post_norm_1).
+                mlp = rms_norm(&mlp, Some(&moe.post_norm_1), eps);
+
+                // Router runs on attn_out with its OWN weightless norm, scaled by
+                // 1/sqrt(n_embd), then the elementwise gate_inp_scale.
+                let mut r = rms_norm(attn_out, None, eps);
+                let inv = 1.0f32 / (hidden as f32).sqrt();
+                for (rv, sv) in r.iter_mut().zip(&moe.gate_inp_scale) {
+                    *rv = *rv * inv * sv;
+                }
+                let logits = f32_matvec(&moe.gate_inp, hidden, moe.n_expert, &r);
+                // softmax over all experts, then top-k by probability.
+                let maxl = logits.iter().cloned().fold(f32::MIN, f32::max);
+                let mut probs: Vec<f32> = logits.iter().map(|&v| (v - maxl).exp()).collect();
+                let sum: f32 = probs.iter().sum();
+                for p in probs.iter_mut() {
+                    *p /= sum;
+                }
+                let mut idx: Vec<usize> = (0..moe.n_expert).collect();
+                idx.sort_unstable_by(|&a, &b| {
+                    probs[b].partial_cmp(&probs[a]).unwrap().then(a.cmp(&b))
+                });
+                idx.truncate(moe.n_expert_used);
+                // sum-normalize the selected weights (clamped), w_scale=1.
+                let mut wsum: f32 = idx.iter().map(|&e| probs[e]).sum();
+                wsum = wsum.max(6.103_515e-5);
+
+                let cur_moe = rms_norm(attn_out, Some(&moe.pre_norm_2), eps);
+                let cur_moe_q = quantize_q8_0_blocks(&cur_moe);
+                let two_nff = 2 * moe.n_ff_exp;
+                let mut moe_acc = vec![0f32; hidden];
+                for &e in &idx {
+                    let w = probs[e] / wsum;
+                    // fused gate‖up for expert e: rows e*2nff .. +2nff, in_dim=n_embd.
+                    let gate_up = moe
+                        .gate_up_exps
+                        .matvec_q_rows(e * two_nff, two_nff, &cur_moe_q);
+                    let hexp: Vec<f32> = (0..moe.n_ff_exp)
+                        .map(|o| gelu_tanh(gate_up[o]) * gate_up[o + moe.n_ff_exp])
+                        .collect();
+                    let hexp_q = quantize_q8_0_blocks(&hexp);
+                    // down for expert e: rows e*n_embd .. +n_embd, in_dim=n_ff_exp.
+                    let y = moe.down_exps.matvec_q_rows(e * hidden, hidden, &hexp_q);
+                    let scale = moe.down_exps_scale[e] * w;
+                    for (a, yv) in moe_acc.iter_mut().zip(&y) {
+                        *a += yv * scale;
+                    }
+                }
+                let cur_moe = rms_norm(&moe_acc, Some(&moe.post_norm_2), eps);
+
+                // combine the two branches, then the shared post_ffw_norm.
+                let mut combined = mlp;
+                for (c, m) in combined.iter_mut().zip(&cur_moe) {
+                    *c += m;
+                }
+                rms_norm(&combined, Some(&lw.post_ffw_norm), eps)
+            } else {
+                rms_norm(&mlp, Some(&lw.post_ffw_norm), eps)
+            };
+            for (a, b) in h.iter_mut().zip(&ffn_out) {
                 *a += b;
             }
             if let (Some(ig), Some(pj), Some(pnn)) = (
@@ -912,6 +1060,9 @@ impl Gemma4Runtime {
         let mut kc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let mut vc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let prompt_tokens = self.tokenizer.encode(prompt, true, true)?;
+        if std::env::var("CAMELID_GEMMA4_DUMP_PROMPT_TOKENS").is_ok() {
+            eprintln!("[prompt tokens] {prompt_tokens:?}");
+        }
         let eot = gemma4_stop_token_ids(&self.tokenizer);
 
         let mut logits = Vec::new();
@@ -957,6 +1108,9 @@ impl Gemma4Runtime {
         let mut kc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let mut vc: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_layers];
         let prompt_tokens = self.tokenizer.encode(prompt, true, true)?;
+        if std::env::var("CAMELID_GEMMA4_DUMP_PROMPT_TOKENS").is_ok() {
+            eprintln!("[prompt tokens] {prompt_tokens:?}");
+        }
         let eot = gemma4_stop_token_ids(&self.tokenizer);
 
         let mut logits = Vec::new();
